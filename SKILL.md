@@ -1,7 +1,32 @@
 ---
 name: wyckoff-stock-analysis
 description: This skill should be used when the user asks to "analyze stock using Wyckoff", "Wyckoff analysis", "Wyckoff theory", "apply Wyckoff method", mentions "accumulation/distribution", "Wyckoff cycle", or discusses technical analysis using the Wyckoff method. Provides comprehensive stock market analysis based on Richard D. Wyckoff's proven methodology.
-version: 1.0.0
+version: 2.0.0
+---
+
+## Data Sources
+
+### Dual Data Source Strategy
+
+| Market | Data Source | Reason |
+|--------|------------|--------|
+| A-Shares (China) | **Baostock** | Stable, no registration, designed for A-shares |
+| US/HK/Other | **yfinance** | Wide coverage, global markets |
+
+### Supported Input Formats
+
+| Input | Example | Market |
+|-------|---------|--------|
+| Chinese name | `贵州茅台`, `比亚迪` | A-Shares |
+| A-share code | `600519`, `002575` | A-Shares |
+| A-share with suffix | `600519.SH`, `002575.SZ` | A-Shares |
+| US stock | `AAPL`, `NVDA` | US |
+| HK stock | `0700.HK` | HK |
+
+### Cache Mechanism
+
+Chinese stock names are cached locally (`stock_cache.json`) for faster subsequent lookups.
+
 ---
 
 ## Quick Reference

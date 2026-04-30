@@ -12,8 +12,11 @@ Wyckoff Pattern Automatic Detector
 """
 
 import yfinance as yf
+import baostock as bs
 import pandas as pd
 import numpy as np
+import json
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 import warnings
@@ -28,30 +31,185 @@ class WyckoffPatternDetector:
         初始化检测器
 
         Args:
-            symbol: 股票代码
+            symbol: 股票代码或中文名称
             period: 数据周期 (1y, 2y, 3y, 5y)
         """
         self.symbol = symbol
         self.period = period
         self.data = None
         self.signals = {}
+        self.cache_file = os.path.join(os.path.dirname(__file__), "stock_cache.json")
+
+    def _is_a_stock(self, symbol: str) -> bool:
+        """判断是否为A股"""
+        if symbol.isdigit():
+            return True
+        if symbol.endswith(('.SH', '.SZ')):
+            return True
+        return False
+
+    def _resolve_stock_name(self, name: str) -> str:
+        """中文名称 → 股票代码"""
+        # 1. 查本地缓存
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r', encoding='utf-8') as f:
+                    cache = json.load(f)
+                if name in cache:
+                    return cache[name]
+            except Exception:
+                pass
+        
+        # 2. baostock 实时查询
+        code = self._search_from_baostock(name)
+        
+        if code:
+            self._update_cache(name, code)
+            return code
+        
+        return None
+
+    def _search_from_baostock(self, keyword: str) -> str:
+        """从 baostock 搜索股票"""
+        try:
+            lg = bs.login()
+            if lg.error_code != '0':
+                return None
+            
+            rs = bs.query_stock_basic()
+            data_list = []
+            while (rs.error_code == '0') & rs.next():
+                data_list.append(rs.get_row_data())
+            
+            bs.logout()
+            
+            if data_list:
+                df = pd.DataFrame(data_list, columns=rs.fields)
+                match = df[df['code_name'].str.contains(keyword, na=False)]
+                if not match.empty:
+                    return match.iloc[0]['code']
+        except Exception as e:
+            print(f"baostock query failed: {e}")
+            return None
+        
+        return None
+
+    def _update_cache(self, name: str, code: str):
+        """更新本地缓存"""
+        cache = {}
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r', encoding='utf-8') as f:
+                    cache = json.load(f)
+            except Exception:
+                pass
+        
+        cache[name] = code
+        
+        try:
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Cache update failed: {e}")
 
     def fetch_data(self) -> bool:
-        """获取股票数据"""
+        """获取股票数据（自动识别市场）"""
         try:
-            stock = yf.Ticker(self.symbol)
+            # 1. 中文名称解析为代码
+            symbol = self.symbol
+            if not symbol.replace('.', '').isdigit() and not symbol.isalpha():
+                resolved = self._resolve_stock_name(symbol)
+                if resolved:
+                    symbol = resolved
+                    self.symbol = symbol
+                else:
+                    print(f"❌ {self.symbol}: 无法识别股票名称")
+                    return False
+            
+            # 2. 判断市场并获取数据
+            if self._is_a_stock(symbol):
+                return self._fetch_a_stock_data(symbol)
+            else:
+                return self._fetch_global_stock_data(symbol)
+
+        except Exception as e:
+            print(f"❌ {self.symbol}: 获取数据失败 - {str(e)}")
+            return False
+
+    def _fetch_a_stock_data(self, symbol: str) -> bool:
+        """baostock 获取A股数据"""
+        try:
+            # 转换代码格式
+            if '.' in symbol:
+                parts = symbol.split('.')
+                code = f"{parts[1].lower()}.{parts[0]}"
+            else:
+                prefix = 'sh' if symbol.startswith('6') else 'sz'
+                code = f"{prefix}.{symbol}"
+            
+            # 计算日期范围
+            end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
+            period_days = {
+                "1y": 365, "2y": 730, "3y": 1095, "5y": 1825
+            }
+            days = period_days.get(self.period, 365)
+            start_date = (pd.Timestamp.now() - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
+            
+            # 登录获取数据
+            lg = bs.login()
+            if lg.error_code != '0':
+                print(f"❌ {symbol}: baostock 登录失败")
+                return False
+            
+            rs = bs.query_history_k_data_plus(
+                code,
+                "date,open,high,low,close,volume,amount",
+                start_date=start_date,
+                end_date=end_date,
+                frequency="d",
+                adjustflag="3"
+            )
+            
+            data_list = []
+            while (rs.error_code == '0') & rs.next():
+                data_list.append(rs.get_row_data())
+            
+            bs.logout()
+            
+            if not data_list or len(data_list) < 60:
+                print(f"❌ {symbol}: 数据不足")
+                return False
+            
+            df = pd.DataFrame(data_list, columns=rs.fields)
+            df = df.rename(columns={'date': 'Date', 'open': 'Open', 'high': 'High', 
+                                   'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.set_index('Date')
+            df = df.astype(float)
+            
+            self.data = df
+            self._calculate_indicators()
+            return True
+            
+        except Exception as e:
+            print(f"❌ {symbol}: 获取A股数据失败 - {str(e)}")
+            return False
+
+    def _fetch_global_stock_data(self, symbol: str) -> bool:
+        """yfinance 获取其他市场数据"""
+        try:
+            stock = yf.Ticker(symbol)
             self.data = stock.history(period=self.period)
 
             if self.data.empty or len(self.data) < 60:
-                print(f"❌ {self.symbol}: 数据不足")
+                print(f"❌ {symbol}: 数据不足")
                 return False
 
-            # 计算技术指标
             self._calculate_indicators()
             return True
 
         except Exception as e:
-            print(f"❌ {self.symbol}: 获取数据失败 - {str(e)}")
+            print(f"❌ {symbol}: 获取数据失败 - {str(e)}")
             return False
 
     def _calculate_indicators(self):

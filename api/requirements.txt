@@ -1,4 +1,6 @@
 openai>=1.0.0
 anthropic>=0.18.0
 yfinance>=0.2.32
+baostock>=0.8.8
+pandas>=1.5.0
 requests>=2.31.0

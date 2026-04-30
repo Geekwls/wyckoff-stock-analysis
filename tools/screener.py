@@ -327,6 +327,8 @@ STOCK_POOLS = {
     'china_adrs': ['BABA', 'JD', 'PDD', 'BIDU', 'NTES', 'TCEHY', 'LI', 'NIO'],
     'ev': ['TSLA', 'RIVN', 'LCID', 'NIO', 'XPEV', 'LI'],
     'semiconductors': ['NVDA', 'AMD', 'INTC', 'MU', 'ASML', 'TSM', 'SOXX'],
+    'a_share_blue': ['贵州茅台', '比亚迪', '宁德时代', '中国平安', '招商银行', '五粮液', '美的集团'],
+    'a_share_tech': ['立讯精密', '海康威视', '中芯国际', '韦尔股份', '北方华创'],
 }
 
 
