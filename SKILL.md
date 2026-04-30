@@ -4,6 +4,49 @@ description: This skill should be used when the user asks to "analyze stock usin
 version: 1.0.0
 ---
 
+## Quick Reference
+
+### Market Cycle Quick Guide
+| Phase | Key Events | Volume Pattern | Trade Direction |
+|-------|------------|----------------|-----------------|
+| Accumulation | PS→CL→AR→ST→Spring→SOS→LPS | High→Low→High | Long |
+| Distribution | PSY→CL→AR→ST→Upthrust→SOW→LPSY | High→Low→High | Short |
+
+### Key Events Quick Guide
+| Event | Full Name | Meaning | Trading Signal |
+|-------|-----------|---------|----------------|
+| PS | Preliminary Support | First buying after decline | Potential bottom |
+| CL | Climax | Extreme price movement | Trend exhaustion |
+| AR | Automatic Rally/Reaction | Quick rebound from CL | Counter-move |
+| ST | Secondary Test | Re-test of CL | Supply/demand test |
+| Spring | Spring | False breakdown below support | Buy signal (accumulation) |
+| Upthrust | Upthrust | False breakout above resistance | Sell signal (distribution) |
+| SOS | Sign of Strength | Strong breakout upward | Accumulation confirmed |
+| SOW | Sign of Weakness | Strong breakdown downward | Distribution confirmed |
+| LPS | Last Point of Support | Final pullback before markup | Best long entry |
+| LPSY | Last Point of Supply | Final rally before markdown | Best short entry |
+
+### Volume Standards Quick Guide
+| Event | Volume Requirement | Duration | Confirmation |
+|-------|-------------------|----------|--------------|
+| CL | 3-5x average | - | Wide spread |
+| Spring reversal | 1.5-2x breakdown | 1-3 days | Close above support |
+| SOS/SOW | 1.5-2.5x average | 1-3 days | Close near high/low |
+| LPS/LPSY | 40-60% of SOS/SOW | 1-5 days | Holds above/below key level |
+
+### Trading Decision Quick Guide
+```
+1. Identify Phase → Accumulation/Distribution?
+2. Wait for Spring/Upthrust → Confirmation
+3. Wait for SOS/SOW → Breakout confirmation
+4. Wait for LPS/LPSY → Pullback entry
+5. Set Stop → Below Spring / Above Upthrust
+6. Calculate R:R → Minimum 1.5:1
+7. Execute Trade → With proper position sizing
+```
+
+---
+
 # Wyckoff Stock Analysis
 
 This skill applies Richard D. Wyckoff's proven technical analysis methodology to analyze stocks, identify market cycles, and make informed trading decisions based on supply and demand dynamics.
@@ -173,11 +216,46 @@ When analyzing any stock, systematically answer:
 ## Key Wyckoff Concepts
 
 ### Springs and Upthrusts
+
+**Spring (Accumulation)**:
+```
+     Price
+      │
+Resistance ──────────────────────────────
+      │
+      │         ╭─╮
+      │        ╱   ╲
+      │       ╱     ╲
+Support  ────╱───────╲─────────
+      │    ╱          ╲
+      │   ╱            ╲
+      │  ╱              ╲
+      │ ╱                ╲____
+      │                      ↑ Reversal
+      └──────────────────────────→ Time
+           Spring
+```
 - **Spring**: Price briefly breaks below support then quickly reverses upward
   - Shakes out weak holders before markup
   - Often marks the beginning of Phase D
   - Should be accompanied by strong reversal volume
 
+**Upthrust (Distribution)**:
+```
+     Price
+      │
+      │                      ╭─╮
+      │                     ╱   ╲
+      │                    ╱     ╲
+Resistance ───────────────╱───────╲────
+      │                  ╱         ╲
+      │                 ╱           ╲
+      │                ╱             ╲
+Support  ───────────────────────────────
+      │
+      └──────────────────────────→ Time
+                        Upthrust
+```
 - **Upthrust**: Price briefly breaks above resistance then quickly reverses downward
   - Draws in buyers before markdown
   - Often marks the beginning of Phase D in distribution
@@ -205,172 +283,22 @@ When analyzing any stock, systematically answer:
   - Volume declines compared to SOW
   - Excellent entry point for short positions
 
-## Advanced Wyckoff Concepts
-
-### Wyckoff Wave
-The Wyckoff Wave is a market index created by Wyckoff to represent the overall market structure.
-- **Purpose**: Provides a baseline for individual stock comparison
-- **Modern equivalent**: Use broad market indices (S&P 500, NASDAQ, Shanghai Composite)
-- **Application**:
-  - Compare individual stock performance to the index
-  - Gauge overall market health (bullish or bearish)
-  - Identify market-wide accumulation or distribution phases
-- **Key insight**: Strong stocks should outperform during accumulation/markup; weak stocks underperform during distribution/markdown
-
-### Trading Range Sub-Structures
-
-**Within any trading range (accumulation or distribution), identify these zones**:
-
-1. **Trading Range (TR)**
-   - The horizontal price zone between support and resistance
-   - Where accumulation or distribution occurs
-   - Can last weeks to months
-
-2. **The Creek (Support Line)**
-   - In accumulation: The lower boundary (support)
-   - In distribution: The upper boundary (resistance)
-   - Price often returns to test this level
-
-3. **The Ice Line (Resistance Line in Accumulation)**
-   - The upper boundary of an accumulation trading range
-   - Strong resistance until broken by SOS
-   - Often becomes support after breakout (role reversal)
-
-### Optimism Position vs Danger Position
-
-**Optimism Position**:
-- **In Accumulation**: Near the top of the range, before the final markup
-- **Characteristics**: Bulls become optimistic, but smart money is still cautious
-- **Trading implication**: Be careful entering longs here; wait for LPS
-
-**Danger Position**:
-- **In Distribution**: Near the bottom of the range, before markdown
-- **Characteristics**: Bears are confident, bulls are trapped
-- **Trading implication**: Avoid longs entirely; consider shorts on LPSY
-
-### Creeping Trends
-A "creeping" trend is a gradual, almost imperceptible movement in price:
-- **Creeping Up**: Slow, steady rise within a trading range
-  - Often indicates accumulation before markup
-  - Smart money is quietly buying
-
-- **Creeping Down**: Slow, steady decline within a trading range
-  - Often indicates distribution before markdown
-  - Smart money is quietly exiting
-
-**Key insight**: Creeping trends are hard to spot in real-time but reveal themselves on longer timeframes. They confirm Phase B activity.
-
-### Stop Volume
-- **Definition**: Extremely high volume that stops the price movement
-- **In accumulation**: Stops the decline, often marks the climax (CL)
-- **In distribution**: Stops the advance, often marks the climax
-- **Characteristics**:
-  - Volume spike 2-3x normal levels
-  - Wide price spread
-  - Followed by a trading range
-
-### Spring Variations
-
-**Classic Spring**:
-- Price breaks support, quickly reverses
-- Volume increases on breakdown, expands further on reversal
-- Confirms smart money has absorbed all supply
-
-**Failed Spring (Spring Failure)**:
-- Price breaks support and does NOT quickly recover
-- Indicates distribution is still active or accumulation failed
-- Do NOT enter long positions
-- Often leads to further decline
-
-**Spring Test (Back-up to Spring)**:
-- After a successful spring and SOS, price returns to test the spring lows
-- Volume should be significantly lower
-- Provides a second chance entry (another LPS)
-
-### Upthrust Variations
-
-**Classic Upthrust**:
-- Price breaks above resistance, quickly reverses downward
-- Smart money uses this to distribute remaining shares
-- Confirms the start of markdown
-
-**Failed Upthrust**:
-- Price breaks resistance and keeps going
-- Indicates strong demand; distribution may have failed
-- Can lead to continued markup (re-accumulation)
-- Be flexible and reassess
-
-**Upthrust After Distribution**:
-- Most common upthrust pattern
-- Occurs after a clear distribution phase
-- High volume on the breakout attempt
-- Quick and decisive rejection
-
-### Absorption Patterns
-
-**Supply Absorption** (in accumulation):
-- Repeated tests of support with decreasing volume
-- Spring eliminates remaining weak holders
-- Smart money buys all available supply
-- Leads to markup
-
-**Demand Absorption** (in distribution):
-- Repeated tests of resistance with decreasing volume
-- Upthrust absorbs remaining buying interest
-- Smart money sells into all demand
-- Leads to markdown
-
-### Secondary Test (ST) Variations
-
-**ST #1, ST #2, ST #3...**:
-- A trading range can have multiple secondary tests
-- Each subsequent test typically shows lower volume
-- Final ST shows minimal volume = absorption complete
-- Spring/upthrust usually follows the final ST
-
-### Re-Accumulation vs Re-Distribution
-
-**Re-Accumulation**:
-- Occurs during an ongoing uptrend (Phase E of larger cycle)
-- Shorter duration than major accumulation (3-6 weeks)
-- Shallow trading range relative to the uptrend
-- Pattern: LPS after SOS → continuation of uptrend
-- Trading approach: Enter longs on LPS, tight stops below range
-
-**Re-Distribution**:
-- Occurs during an ongoing downtrend (Phase E of larger cycle)
-- Shorter duration than major distribution (3-6 weeks)
-- Shallow trading range relative to the downtrend
-- Pattern: LPSY after SOW → continuation of downtrend
-- Trading approach: Enter shorts on LPSY, tight stops above range
-
-### Composite Man Psychology
-
-**Understanding the "Smart Money" Mindset**:
-- **In accumulation**: Quiet accumulation, avoiding attention
-- **At climax**: Letting emotions run, creating the final flush
-- **In distribution**: Hype and optimism, selling into strength
-- **After spring/upthrust**: Ruthless exploitation of weak hands
-
-**Your goal**: Align with the Composite Man, not fight against him. Ask: "What would the smartest, best-informed trader do right now?"
-
 ## Volume Analysis Guidelines
 
-1. **Volume confirms price action**
-   - Rising price + rising volume = Strong uptrend
-   - Falling price + rising volume = Strong downtrend
-   - Rising price + falling volume = Weak uptrend (divergence)
-   - Falling price + falling volume = Weak downtrend (divergence)
+### Volume-Price Relationship Matrix
+| Price | Volume | Interpretation | Market Implication |
+|-------|--------|----------------|-------------------|
+| Rising | Rising | Strong demand | Bullish continuation |
+| Falling | Rising | Strong supply | Bearish continuation |
+| Rising | Falling | Weak demand | Potential reversal (bearish) |
+| Falling | Falling | Weak supply | Potential support (bullish) |
 
-2. **Climactic volume**
-   - Often marks the end of a trend (Phase A)
-   - Indicates exhaustion of the dominant force
-   - Followed by a reversal or consolidation
-
-3. **Diminishing volume**
-   - During consolidation phases (Phase B)
-   - Indicates absorption of supply/demand
-   - Precedes the next directional move
+### Volume Patterns
+| Pattern | Description | Significance |
+|---------|-------------|--------------|
+| Climactic Volume | Extremely high volume, often 3-5x average | Marks end of trend (Phase A), exhaustion of dominant force |
+| Diminishing Volume | Declining volume during consolidation | Indicates absorption of supply/demand, precedes next move |
+| Normal Volume | Average volume levels | Market in equilibrium, trend likely to continue |
 
 ## Support and Resistance Analysis
 
@@ -566,6 +494,155 @@ Example (Accumulation):
 - Entry timing: Hourly chart (precise LPS/LPSY)
 - **Conflict rule**: If timeframes conflict, wait or skip the trade
 
+## Advanced Wyckoff Concepts
+
+### Wyckoff Wave
+The Wyckoff Wave is a market index created by Wyckoff to represent the overall market structure.
+- **Purpose**: Provides a baseline for individual stock comparison
+- **Modern equivalent**: Use broad market indices (S&P 500, NASDAQ, Shanghai Composite)
+- **Application**:
+  - Compare individual stock performance to the index
+  - Gauge overall market health (bullish or bearish)
+  - Identify market-wide accumulation or distribution phases
+- **Key insight**: Strong stocks should outperform during accumulation/markup; weak stocks underperform during distribution/markdown
+
+### Trading Range Sub-Structures
+
+**Within any trading range (accumulation or distribution), identify these zones**:
+
+1. **Trading Range (TR)**
+   - The horizontal price zone between support and resistance
+   - Where accumulation or distribution occurs
+   - Can last weeks to months
+
+2. **The Creek (Support Line)**
+   - In accumulation: The lower boundary (support)
+   - In distribution: The upper boundary (resistance)
+   - Price often returns to test this level
+
+3. **The Ice Line (Resistance Line in Accumulation)**
+   - The upper boundary of an accumulation trading range
+   - Strong resistance until broken by SOS
+   - Often becomes support after breakout (role reversal)
+
+### Optimism Position vs Danger Position
+
+**Optimism Position**:
+- **In Accumulation**: Near the top of the range, before the final markup
+- **Characteristics**: Bulls become optimistic, but smart money is still cautious
+- **Trading implication**: Be careful entering longs here; wait for LPS
+
+**Danger Position**:
+- **In Distribution**: Near the bottom of the range, before markdown
+- **Characteristics**: Bears are confident, bulls are trapped
+- **Trading implication**: Avoid longs entirely; consider shorts on LPSY
+
+### Creeping Trends
+A "creeping" trend is a gradual, almost imperceptible movement in price:
+- **Creeping Up**: Slow, steady rise within a trading range
+  - Often indicates accumulation before markup
+  - Smart money is quietly buying
+
+- **Creeping Down**: Slow, steady decline within a trading range
+  - Often indicates distribution before markdown
+  - Smart money is quietly exiting
+
+**Key insight**: Creeping trends are hard to spot in real-time but reveal themselves on longer timeframes. They confirm Phase B activity.
+
+### Stop Volume
+- **Definition**: Extremely high volume that stops the price movement
+- **In accumulation**: Stops the decline, often marks the climax (CL)
+- **In distribution**: Stops the advance, often marks the climax
+- **Characteristics**:
+  - Volume spike 2-3x normal levels
+  - Wide price spread
+  - Followed by a trading range
+
+### Spring Variations
+
+**Classic Spring**:
+- Price breaks support, quickly reverses
+- Volume increases on breakdown, expands further on reversal
+- Confirms smart money has absorbed all supply
+
+**Failed Spring (Spring Failure)**:
+- Price breaks support and does NOT quickly recover
+- Indicates distribution is still active or accumulation failed
+- Do NOT enter long positions
+- Often leads to further decline
+
+**Spring Test (Back-up to Spring)**:
+- After a successful spring and SOS, price returns to test the spring lows
+- Volume should be significantly lower
+- Provides a second chance entry (another LPS)
+
+### Upthrust Variations
+
+**Classic Upthrust**:
+- Price breaks above resistance, quickly reverses downward
+- Smart money uses this to distribute remaining shares
+- Confirms the start of markdown
+
+**Failed Upthrust**:
+- Price breaks resistance and keeps going
+- Indicates strong demand; distribution may have failed
+- Can lead to continued markup (re-accumulation)
+- Be flexible and reassess
+
+**Upthrust After Distribution**:
+- Most common upthrust pattern
+- Occurs after a clear distribution phase
+- High volume on the breakout attempt
+- Quick and decisive rejection
+
+### Absorption Patterns
+
+**Supply Absorption** (in accumulation):
+- Repeated tests of support with decreasing volume
+- Spring eliminates remaining weak holders
+- Smart money buys all available supply
+- Leads to markup
+
+**Demand Absorption** (in distribution):
+- Repeated tests of resistance with decreasing volume
+- Upthrust absorbs remaining buying interest
+- Smart money sells into all demand
+- Leads to markdown
+
+### Secondary Test (ST) Variations
+
+**ST #1, ST #2, ST #3...**:
+- A trading range can have multiple secondary tests
+- Each subsequent test typically shows lower volume
+- Final ST shows minimal volume = absorption complete
+- Spring/upthrust usually follows the final ST
+
+### Re-Accumulation vs Re-Distribution
+
+**Re-Accumulation**:
+- Occurs during an ongoing uptrend (Phase E of larger cycle)
+- Shorter duration than major accumulation (3-6 weeks)
+- Shallow trading range relative to the uptrend
+- Pattern: LPS after SOS → continuation of uptrend
+- Trading approach: Enter longs on LPS, tight stops below range
+
+**Re-Distribution**:
+- Occurs during an ongoing downtrend (Phase E of larger cycle)
+- Shorter duration than major distribution (3-6 weeks)
+- Shallow trading range relative to the downtrend
+- Pattern: LPSY after SOW → continuation of downtrend
+- Trading approach: Enter shorts on LPSY, tight stops above range
+
+### Composite Man Psychology
+
+**Understanding the "Smart Money" Mindset**:
+- **In accumulation**: Quiet accumulation, avoiding attention
+- **At climax**: Letting emotions run, creating the final flush
+- **In distribution**: Hype and optimism, selling into strength
+- **After spring/upthrust**: Ruthless exploitation of weak hands
+
+**Your goal**: Align with the Composite Man, not fight against him. Ask: "What would the smartest, best-informed trader do right now?"
+
 ## Trend Analysis
 
 1. **Identify the current phase**: Accumulation, Markup, Distribution, or Markdown
@@ -597,8 +674,66 @@ Example (Accumulation):
 
 ### Risk Management
 - Place stops below Spring (for longs) or above Upthrust (for shorts)
-- Risk-reward ratio should favor the potential move based on cause size
+- Risk-reward ratio should favor the potential move based cause size
 - Exit if volume-price relationships don't confirm expectations
+
+## Decision Flowcharts
+
+### Phase Identification Decision Tree
+```
+Start
+  ↓
+Is there sideways movement after a decline?
+  ├─ Yes → Possible Accumulation
+  │     ↓
+  │   Is there PS→CL→AR→ST sequence?
+  │     ├─ Yes → Confirm Accumulation
+  │     └─ No → Wait for more signals
+  └─ No → Check if sideways after rally
+        ├─ Yes → Possible Distribution
+        └─ No → Check current trend
+              ├─ Strong uptrend → Markup (wait for distribution signs)
+              └─ Strong downtrend → Markdown (wait for accumulation signs)
+```
+
+### Trading Decision Flowchart
+```
+Identify Spring/Upthrust
+  ↓
+Wait for SOS/SOW confirmation
+  ↓
+Wait for LPS/LPSY pullback
+  ↓
+Is volume declining on pullback?
+  ├─ Yes → Entry signal
+  └─ No → Wait or skip
+  ↓
+Set stop loss (below Spring / above Upthrust)
+  ↓
+Calculate Risk:Reward ratio
+  ├─ >1.5:1 → Execute trade
+  └─ <1.5:1 → Skip or wait for better entry
+```
+
+### Risk Management Flowchart
+```
+Before Trade:
+  ├─ Is pattern clear? → No → Skip trade
+  ├─ Is R:R > 1.5:1? → No → Skip trade
+  ├─ Is position size < 2% risk? → No → Reduce size
+  └─ Is stop loss logical? → No → Recalculate
+
+During Trade:
+  ├─ Price hits stop → Exit immediately
+  ├─ Volume diverges → Tighten stop
+  ├─ Target reached → Take profit
+  └─ Phase completes → Exit
+
+After Trade:
+  ├─ Win → Record lessons learned
+  ├─ Loss → Analyze what went wrong
+  └─ Breakeven → Review entry timing
+```
 
 ## Analysis Checklist
 
