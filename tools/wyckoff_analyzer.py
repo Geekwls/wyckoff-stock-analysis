@@ -833,6 +833,8 @@ class WyckoffAnalyzer:
 
     def detect_lps(self, days_since_sos: int = 20, sos_result: Dict = None) -> Dict:
         """检测 LPS（Last Point of Support - 最后支撑点） - 修复版
+        修复: sos_raw_vol == 0 的短路逻辑会绕过所有量能校验
+               改为: 有 SOS 量就与之对比，没有就 fallback 到 Volume_MA20 均量
         sos_result: 可传入预先计算的 detect_sos() 结果，避免重复计算
         """
         if sos_result is None:
@@ -853,9 +855,18 @@ class WyckoffAnalyzer:
         lps_idx = df_after_sos['Low'].idxmin()
         lps_price = df_after_sos['Low'].min()
         lps_vol = df_after_sos.loc[lps_idx, 'Volume']
+        vol_ma = df_after_sos.loc[lps_idx, 'Volume_MA20'] if 'Volume_MA20' in df_after_sos.columns else 0
+
+        # 量能校验（修复：消除 sos_raw_vol==0 短路）：
+        #   主条件：有 SOS 原始量时，LPS量 < SOS量 * 0.7（回踩缩量 = 多头吸笹完毕）
+        #   兜底条件：无 SOS 原始量时，改为 LPS量 < 均量 * 0.8（避免无条件通过）
+        if sos_raw_vol > 0:
+            vol_ok = lps_vol < sos_raw_vol * 0.7
+        else:
+            vol_ok = (vol_ma > 0 and lps_vol < vol_ma * 0.8)
 
         is_lps = (
-            (sos_raw_vol == 0 or lps_vol < sos_raw_vol * 0.7) and
+            vol_ok and
             lps_price > latest_sos['breakthrough_level'] * 0.95
         )
 
@@ -866,12 +877,15 @@ class WyckoffAnalyzer:
                 'price': lps_price,
                 'volume': lps_vol,
                 'sos_volume': sos_raw_vol,
+                'vol_ma': vol_ma,
                 'pullback_pct': (latest_sos['price'] - lps_price) / latest_sos['price']
             }
         return {'detected': False}
 
     def detect_lpsy(self, days_since_sow: int = 20, sow_result: Dict = None) -> Dict:
         """检测 LPSY（Last Point of Supply - 最后供应点） - 修复版
+        修复: sow_raw_vol == 0 的短路逻辑会绕过所有量能校验
+               改为: 有 SOW 量就与之对比，没有就 fallback 到 Volume_MA20 均量
         sow_result: 可传入预先计算的 detect_sow() 结果，避免重复计算
         """
         if sow_result is None:
@@ -892,9 +906,18 @@ class WyckoffAnalyzer:
         lpsy_idx = df_after_sow['High'].idxmax()
         lpsy_price = df_after_sow['High'].max()
         lpsy_vol = df_after_sow.loc[lpsy_idx, 'Volume']
+        vol_ma = df_after_sow.loc[lpsy_idx, 'Volume_MA20'] if 'Volume_MA20' in df_after_sow.columns else 0
+
+        # 量能校验（修复：消除 sow_raw_vol==0 短路）：
+        #   主条件：有 SOW 原始量时，LPSY量 < SOW量 * 0.7（反弹缩量 = 空头尉来未散）
+        #   兜底条件：无 SOW 原始量时，改为 LPSY量 < 均量 * 0.8（避免无条件通过）
+        if sow_raw_vol > 0:
+            vol_ok = lpsy_vol < sow_raw_vol * 0.7
+        else:
+            vol_ok = (vol_ma > 0 and lpsy_vol < vol_ma * 0.8)
 
         is_lpsy = (
-            (sow_raw_vol == 0 or lpsy_vol < sow_raw_vol * 0.7) and
+            vol_ok and
             lpsy_price < latest_sow['breakdown_level'] * 1.05
         )
 
@@ -905,6 +928,7 @@ class WyckoffAnalyzer:
                 'price': lpsy_price,
                 'volume': lpsy_vol,
                 'sow_volume': sow_raw_vol,
+                'vol_ma': vol_ma,
                 'rally_pct': (lpsy_price - latest_sow['price']) / latest_sow['price']
             }
         return {'detected': False}
