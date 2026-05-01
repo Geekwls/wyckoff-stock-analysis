@@ -451,15 +451,18 @@ class WyckoffAnalyzer:
                 if not recovery_found:
                     continue
                     
-                # 收盘位置验证 (需在日内高位 70% 以上，加入除零保护)
+                # 收盘位置验证（威科夫原著：收盘回到支撑位上方是核心，70%过严）
+                # 主判断：收盘价是否在支撑位上方
+                # 辅助判断：收盘位置 >= 0.5（当天收盘在日内中位以上即视为有效反弹）
                 daily_range = recovery_high - recovery_low
                 if daily_range > 0:
                     close_position = (recovery_close - recovery_low) / daily_range
                 else:
                     close_position = 1.0 if recovery_close >= support_level else 0.0
-                    
-                if close_position < 0.7:
-                    continue  # 动能不足，不视为有效 Spring
+
+                # 主要条件：收盘在支撑位上方；辅助条件：日内位置 >= 50%
+                if not (recovery_close >= support_level or close_position >= 0.5):
+                    continue  # 两个条件都不满足才跳过，尽量减少漏报
                 
                 # 步骤6：验证成交量模式
                 breakdown_vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1
@@ -473,16 +476,21 @@ class WyckoffAnalyzer:
                 elif breakdown_vol_ratio > 1.5:
                     vol_pattern = 'bearish'
                 
-                # 步骤7：综合判断是否为真Spring
+                # 步骤7：综合判断是否为真Spring（修复：close_position 阈值降至 0.5）
                 is_spring = False
                 confidence = 0
-                
-                if close_above_support:
+
+                if close_above_support and close_position >= 0.7:
+                    # 当天直接收回且在高位 = 最强 Spring
                     is_spring = True
-                    confidence = 0.8
+                    confidence = 0.85
+                elif close_above_support:
+                    # 当天收回但位置一般
+                    is_spring = True
+                    confidence = 0.75
                 elif recovery_found and vol_pattern in ['bullish', 'mildly_bullish']:
                     is_spring = True
-                    confidence = 0.6
+                    confidence = 0.65
                 elif recovery_found and recovery_day <= 2:
                     is_spring = True
                     confidence = 0.5
@@ -678,11 +686,16 @@ class WyckoffAnalyzer:
                 else:
                     close_from_high = 1.0 if current_close <= resistance_level else 0.0
 
+                # 威科夫 Upthrust 成交量逻辑（修复：原逻辑完全相反）
+                # 正确逻辑：
+                #   突破日（诱多日）：主力放量引诱散户追高
+                #   拒绝日（回落日）：买盘枯竭，量能萎缩
+                # 所以应该是：breakout_vol（大）> rejection_vol（小）
                 is_upthrust = (
                     future_low < resistance_level and
                     rejection_days <= 3 and
                     close_from_high > 0.7 and
-                    rejection_vol > breakout_vol * 1.2
+                    breakout_vol > rejection_vol * 1.2   # 突破日放量，拒绝日缩量
                 )
 
                 if is_upthrust:
