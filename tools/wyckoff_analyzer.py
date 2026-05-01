@@ -874,6 +874,113 @@ class WyckoffAnalyzer:
             return [self._round_floats(x) for x in obj]
         return obj
 
+    def calculate_signal_quality(self, market_phase: str) -> dict:
+        """计算信号质量评分"""
+        score = 0
+        reasons = []
+
+        if self.data is not None:
+            vol_ratio = self.data['Volume'].iloc[-1] / self.data['Volume_MA20'].iloc[-1]
+            phase = self.identify_phase()
+            
+            # 1. 技术确认度
+            if "Accumulation" in phase or "Markup" in phase:
+                if vol_ratio > 1.5:
+                    score += 3
+                    reasons.append("成交量强力确认 (放量上涨)")
+                elif vol_ratio > 1.0:
+                    score += 1
+                    reasons.append("成交量温和配合")
+                else:
+                    reasons.append("上涨缩量，动能不足")
+            else:
+                if vol_ratio > 1.5:
+                    score += 3
+                    reasons.append("成交量强力确认 (放量下跌)")
+                else:
+                    reasons.append("下跌缩量，趋势可能随时反转")
+        
+            # 2. 趋势一致性
+            current_price = self.data['Close'].iloc[-1]
+            ma50 = self.data['MA50'].iloc[-1]
+            ma200 = self.data['MA200'].iloc[-1]
+            
+            if current_price > ma50 and ma50 > ma200:
+                score += 3
+                reasons.append("多时间框架一致 (长期多头排列)")
+            elif current_price < ma50 and ma50 < ma200:
+                score += 3
+                reasons.append("多时间框架一致 (长期空头排列)")
+
+        # 3. 市场环境配合
+        if "Accumulation" in market_phase or "Markup" in market_phase:
+            if "Accumulation" in phase or "Markup" in phase:
+                score += 4
+                reasons.append("市场环境有利 (顺应大盘多头)")
+            else:
+                reasons.append("逆势操作 (大盘看多，个股看空)")
+        else:
+            if "Distribution" in phase or "Markdown" in phase:
+                score += 4
+                reasons.append("市场环境有利 (顺应大盘空头)")
+            else:
+                reasons.append("逆势操作 (大盘看空，个股看多)")
+
+        return {
+            "score": score,
+            "max_score": 10,
+            "confidence": "高" if score >= 7 else "中" if score >= 4 else "低",
+            "reasons": reasons
+        }
+
+    def generate_trading_plan(self) -> dict:
+        """生成实战交易计算器数据"""
+        if self.data is None:
+            return {}
+            
+        current_price = self.data['Close'].iloc[-1]
+        atr = self.data['ATR'].iloc[-1]
+        
+        tr = self.detect_trading_range()
+        high = tr.get("high", current_price * 1.1)
+        low = tr.get("low", current_price * 0.9)
+        
+        phase = self.identify_phase()
+        is_bullish = "Accumulation" in phase or "Markup" in phase
+        
+        if is_bullish:
+            entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
+            stop_conservative = round(low, 2)
+            stop_aggressive = round(low - atr, 2)
+            target_1 = round(high, 2) if current_price < high else round(current_price + atr * 2, 2)
+            target_2 = round(high + atr * 3, 2)
+        else:
+            entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
+            stop_conservative = round(high, 2)
+            stop_aggressive = round(high + atr, 2)
+            target_1 = round(low, 2) if current_price > low else round(current_price - atr * 2, 2)
+            target_2 = round(low - atr * 3, 2)
+
+        return {
+            "direction": "做多" if is_bullish else "做空",
+            "entry_zone": entry_zone,
+            "stop_loss": {
+                "conservative": stop_conservative,
+                "aggressive": stop_aggressive
+            },
+            "targets": {
+                "target_1": target_1,
+                "target_2": target_2
+            },
+            "position_sizing": {
+                "conservative": "2-3%仓位",
+                "moderate": "5%仓位",
+                "aggressive": "10%仓位"
+            },
+            "holding_period": "中期（2-8周）" if "Markup" in phase or "Markdown" in phase else "短期（1-3周）",
+            "atr_value": round(atr, 2)
+        }
+
     def generate_json(self) -> str:
         """生成JSON格式的分析报告（供AI Agent读取）"""
         if not self.fetch_data():
@@ -908,10 +1015,12 @@ class WyckoffAnalyzer:
         with open(os.devnull, 'w') as f, redirect_stdout(f):
             idx_success = idx_analyzer.fetch_data()
             
+        market_phase = "Unknown"
         if idx_success:
+            market_phase = idx_analyzer.identify_phase()
             result["market_context"] = {
                 "index_symbol": index_symbol,
-                "phase": idx_analyzer.identify_phase()
+                "phase": market_phase
             }
         else:
             result["market_context"] = {
@@ -919,6 +1028,10 @@ class WyckoffAnalyzer:
                 "error": "无法获取大盘数据"
             }
             
+        # 增加信号质量评分和交易计划
+        result["signal_quality"] = self.calculate_signal_quality(market_phase)
+        result["trading_plan"] = self.generate_trading_plan()
+        
         result = self._round_floats(result)
         
         # 转换 datetime 和特殊类型以便序列化

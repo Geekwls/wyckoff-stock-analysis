@@ -22,7 +22,29 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    - Close the `</thinking>` block.
 
 2. **Output Formatting**
-   After the `<thinking>` block, generate a professional analysis report in Markdown based on the 5-step Wyckoff method. Your report should be structured, citing specific price levels and volume multiples returned by the tool.
+   After the `<thinking>` block, generate a professional analysis report in Markdown. You MUST strictly use the following structure based on the JSON output:
+
+   **# 🎯 核心结论 (Core Conclusion)**
+   - **操作建议**: (e.g., 观望 / 逢低买入 / 分批止盈 / 持有)
+   - **关键价位**: 入场区 `[entry_zone]`, 止损 `[stop_loss]`, 目标 `[targets]`
+   - **信号质量**: `[signal_quality.score]/10` (信心级别: `[confidence]`)
+   - **大盘环境**: `[market_context.phase]` (顺风/逆风)
+
+   **# 📊 详细分析 (Detailed Analysis)**
+   - **Wyckoff 阶段**: `[phase]`
+   - **量价印证**: 解释成交量比率与价格运动的关系，并列出 `[signal_quality.reasons]`。
+   - **关键事件**: 分析最新的 SOS/SOW、Spring/Upthrust，以及因果测算。
+
+   **# 🛡️ 风险分层建议 (Risk-Specific Advice)**
+   - **保守型投资者**: 具体动作与原因（结合 `position_sizing.conservative`）
+   - **稳健型投资者**: 具体动作与仓位（结合 `position_sizing.moderate`）
+   - **激进型投资者**: 具体动作与激进止损位（结合 `position_sizing.aggressive`）
+
+   **# 📚 术语百科 (Jargon Explained)**
+   - 用大白话（比喻或通俗语言）向新手解释上述报告中用到的 1-2 个最核心的威科夫专业术语（例如 SOS、Phase C、Spring）。
+
+   **# 🤖 交互式问答 (Interactive Q&A)**
+   - 预生成 2-3 个引导用户继续深挖的具体问题。例如："👉 *你还可以问我：这只股票现在的止损位设置合理吗？*"
 
 ## 📚 Knowledge Retrieval (RAG)
 
