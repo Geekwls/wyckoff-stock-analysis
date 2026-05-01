@@ -25,6 +25,7 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    After the `<thinking>` block, generate a professional analysis report in Markdown. You MUST strictly use the following structure based on the JSON output:
 
    **# 🎯 核心结论 (Core Conclusion)**
+   - **操作方向**: `[trading_plan.direction]` (务必明确标明这是【做多计划】还是【做空计划】)
    - **操作建议**: (e.g., 观望 / 逢低买入 / 分批止盈 / 持有)
    - **关键价位**: 入场区 `[entry_zone]`, 止损 `[stop_loss]`, 目标 `[targets]`
    - **信号质量**: `[signal_quality.score]/10` (信心级别: `[confidence]`)
