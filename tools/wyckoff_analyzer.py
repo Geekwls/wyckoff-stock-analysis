@@ -806,17 +806,18 @@ class WyckoffAnalyzer:
             return {'detected': True, 'signals': sow_signals, 'latest': sow_signals[-1]}
         return {'detected': False}
 
-    def detect_lps(self, days_since_sos: int = 20) -> Dict:
+    def detect_lps(self, days_since_sos: int = 20, sos_result: Dict = None) -> Dict:
         """检测 LPS（Last Point of Support - 最后支撑点） - 修复版
-        修复：使用原始成交量比较，不再使用量比（volume_ratio）与原始量混用
+        sos_result: 可传入预先计算的 detect_sos() 结果，避免重复计算
         """
-        sos_result = self.detect_sos()
+        if sos_result is None:
+            sos_result = self.detect_sos()
         if not sos_result.get('detected'):
             return {'detected': False}
 
         latest_sos = sos_result['latest']
         sos_date = latest_sos['date']
-        sos_raw_vol = latest_sos.get('volume', 0)  # 原始成交量
+        sos_raw_vol = latest_sos.get('volume', 0)
 
         mask = self.data.index >= sos_date
         df_after_sos = self.data[mask].tail(days_since_sos)
@@ -828,7 +829,6 @@ class WyckoffAnalyzer:
         lps_price = df_after_sos['Low'].min()
         lps_vol = df_after_sos.loc[lps_idx, 'Volume']
 
-        # 修复：统一用原始成交量比较（缩量回调是 LPS 的核心特征）
         is_lps = (
             (sos_raw_vol == 0 or lps_vol < sos_raw_vol * 0.7) and
             lps_price > latest_sos['breakthrough_level'] * 0.95
@@ -845,17 +845,18 @@ class WyckoffAnalyzer:
             }
         return {'detected': False}
 
-    def detect_lpsy(self, days_since_sow: int = 20) -> Dict:
+    def detect_lpsy(self, days_since_sow: int = 20, sow_result: Dict = None) -> Dict:
         """检测 LPSY（Last Point of Supply - 最后供应点） - 修复版
-        修复：使用原始成交量比较，将 days_since_sow 扩大到 20 以覆盖更完整的回测区
+        sow_result: 可传入预先计算的 detect_sow() 结果，避免重复计算
         """
-        sow_result = self.detect_sow()
+        if sow_result is None:
+            sow_result = self.detect_sow()
         if not sow_result.get('detected'):
             return {'detected': False}
 
         latest_sow = sow_result['latest']
         sow_date = latest_sow['date']
-        sow_raw_vol = latest_sow.get('volume', 0)  # 原始成交量
+        sow_raw_vol = latest_sow.get('volume', 0)
 
         mask = self.data.index >= sow_date
         df_after_sow = self.data[mask].tail(days_since_sow)
@@ -867,7 +868,6 @@ class WyckoffAnalyzer:
         lpsy_price = df_after_sow['High'].max()
         lpsy_vol = df_after_sow.loc[lpsy_idx, 'Volume']
 
-        # 修复：统一用原始成交量比较
         is_lpsy = (
             (sow_raw_vol == 0 or lpsy_vol < sow_raw_vol * 0.7) and
             lpsy_price < latest_sow['breakdown_level'] * 1.05
@@ -915,27 +915,29 @@ class WyckoffAnalyzer:
                 events['automatic_reaction']
             )
         
-        # 将现有的形态检测合并进去
+        # 将现有的形态检测合并进去，对 sos/sow 先计算一次再复用
         spring_res = self.detect_spring()
         upthrust_res = self.detect_upthrust()
-        if spring_res.get('detected'):
-            events['spring_upthrust'] = spring_res
-        elif upthrust_res.get('detected'):
-            events['spring_upthrust'] = upthrust_res
-            
         sos_res = self.detect_sos()
         sow_res = self.detect_sow()
+        # 将预先计算的结果传入，避免 detect_lps/detect_lpsy 内部再次调用 detect_sos/detect_sow
+        lps_res = self.detect_lps(sos_result=sos_res)
+        lpsy_res = self.detect_lpsy(sow_result=sow_res)
+
+        if spring_res.get('detected'):
+            events['spring_upthrust'] = {**spring_res, '_type': 'spring'}
+        elif upthrust_res.get('detected'):
+            events['spring_upthrust'] = {**upthrust_res, '_type': 'upthrust'}
+
         if sos_res.get('detected'):
-            events['sos_sow'] = sos_res
+            events['sos_sow'] = {**sos_res, '_type': 'sos'}
         elif sow_res.get('detected'):
-            events['sos_sow'] = sow_res
-            
-        lps_res = self.detect_lps()
-        lpsy_res = self.detect_lpsy()
+            events['sos_sow'] = {**sow_res, '_type': 'sow'}
+
         if lps_res.get('detected'):
-            events['lps_lpsy'] = lps_res
+            events['lps_lpsy'] = {**lps_res, '_type': 'lps'}
         elif lpsy_res.get('detected'):
-            events['lps_lpsy'] = lpsy_res
+            events['lps_lpsy'] = {**lpsy_res, '_type': 'lpsy'}
 
         # 步骤2：根据事件序列判断阶段
         phase, confidence = self._determine_phase_from_events(events)
@@ -1002,31 +1004,44 @@ class WyckoffAnalyzer:
         }
 
     def _determine_phase_from_events(self, events: Dict) -> Tuple[str, float]:
-        """根据事件序列判断阶段"""
-        if events['spring_upthrust'] and events.get('spring_upthrust', {}).get('detected'):
-            if events['sos_sow'] and events.get('sos_sow', {}).get('detected') and 'sos' in str(events['sos_sow']):
-                return 'Accumulation Phase D (积累期突破)', 0.85
-            else:
-                return 'Accumulation Phase C (积累期震仓)', 0.70
-                
-        elif events['secondary_test'] and events['secondary_test'].get('detected'):
-            if events['climax']['type'] == 'selling_climax':
-                return 'Accumulation Phase B (积累期测试)', 0.60
-            else:
-                return 'Distribution Phase B (派发期测试)', 0.60
-                
-        elif events['climax'] and events['climax'].get('detected') and events['automatic_reaction'] and events['automatic_reaction'].get('detected'):
-            if events['climax']['type'] == 'selling_climax':
+        """根据事件序列判断阶段 - 修复版
+        修复: 使用结构化 '_type' 字段区分 Spring vs Upthrust，替代脆弱的字符串包含判断
+        """
+        su = events.get('spring_upthrust') or {}
+        ss = events.get('sos_sow') or {}
+        cl = events.get('climax') or {}
+        ar = events.get('automatic_reaction') or {}
+        st = events.get('secondary_test') or {}
+
+        is_spring   = su.get('detected') and su.get('_type') == 'spring'
+        is_upthrust = su.get('detected') and su.get('_type') == 'upthrust'
+        is_sos      = ss.get('detected') and ss.get('_type') == 'sos'
+        is_sow      = ss.get('detected') and ss.get('_type') == 'sow'
+
+        # Spring + SOS → 积累期 Phase D (最强买入信号)
+        if is_spring and is_sos:
+            return 'Accumulation Phase D (积累期突破)', 0.85
+        # Spring 独立 → Phase C
+        if is_spring:
+            return 'Accumulation Phase C (积累期震仓)', 0.70
+        # Upthrust + SOW → 派发期 Phase D (最强卖出信号)
+        if is_upthrust and is_sow:
+            return 'Distribution Phase D (派发期跌破)', 0.85
+        # Upthrust 独立 → Phase C
+        if is_upthrust:
+            return 'Distribution Phase C (派发期诱多)', 0.70
+        # CL + AR → Phase A
+        if cl.get('detected') and ar.get('detected'):
+            if cl.get('type') == 'selling_climax':
                 return 'Accumulation Phase A (恐慌抛售停止)', 0.75
             else:
                 return 'Distribution Phase A (买入高潮停止)', 0.75
-                
-        elif events['spring_upthrust'] and events.get('spring_upthrust', {}).get('detected') and 'upthrust' in str(events['spring_upthrust']):
-            if events['sos_sow'] and events.get('sos_sow', {}).get('detected') and 'sow' in str(events['sos_sow']):
-                return 'Distribution Phase D (派发期跌破)', 0.85
+        # ST → Phase B
+        if st.get('detected'):
+            if cl.get('type') == 'selling_climax':
+                return 'Accumulation Phase B (积累期测试)', 0.60
             else:
-                return 'Distribution Phase C (派发期诱多)', 0.70
-                
+                return 'Distribution Phase B (派发期测试)', 0.60
         return 'Unknown', 0.30
 
     def _check_ma_confirmation(self, phase: str) -> float:
@@ -1081,31 +1096,57 @@ class WyckoffAnalyzer:
         return 0.5
 
     def _check_volume_confirmation(self, phase: str) -> float:
-        """检查成交量是否确认阶段判断"""
+        """检查成交量是否确认阶段判断 - 升级版
+        升级: 区分积累期子阶段的量价结构
+          - Phase A/B 吸笹期: 大跌放量/小涨缩量 才是主力吸笹特征（跌天量 > 涨天量反而对）
+          - Phase D/E 突破期: 涨天量 > 跌天量 才是健康突破特征
+        """
         df = self.data.tail(20)
         up_days = df[df['Close'] > df['Close'].shift(1)]
         down_days = df[df['Close'] < df['Close'].shift(1)]
-        
+
         if len(up_days) == 0 or len(down_days) == 0:
             return 0.5
-        
+
         avg_up_vol = up_days['Volume'].mean()
         avg_down_vol = down_days['Volume'].mean()
         vol_ratio = avg_up_vol / avg_down_vol if avg_down_vol > 0 else 1
-        
-        if 'Accumulation' in phase or 'Markup' in phase:
-            if vol_ratio > 1.2:
-                return 0.8
-            elif vol_ratio > 1.0:
-                return 0.6
-            else:
+
+        if 'Markup' in phase:
+            # 上涨期: 涨天放量、跌天缩量 = 健康特征
+            if vol_ratio > 1.3: return 0.9
+            if vol_ratio > 1.1: return 0.7
+            if vol_ratio > 0.9: return 0.5
+            return 0.3
+        elif 'Accumulation' in phase:
+            # 积累期 Phase A/B: 大跌放量吵跌，小涨缩量轻浮 = 主力吸笹中 (跌天量 > 涨天量)
+            # 积累期 Phase D/E: 涨天量开始放大，准备突破 (涨天量 > 跌天量)
+            if 'Phase A' in phase or 'Phase B' in phase:
+                # A/B 阶段吸笹期: 跌天量大 = 应该吸笹在进行，得分要反过来
+                if vol_ratio < 0.8: return 0.8  # 涨天缩量，吸笹特征
+                if vol_ratio < 1.0: return 0.6
                 return 0.4
-        elif 'Distribution' in phase or 'Markdown' in phase:
-            if vol_ratio < 0.8:
-                return 0.8
-            elif vol_ratio < 1.0:
-                return 0.6
             else:
+                # C/D/E 阶段: 需要涨天放量证明多头力量
+                if vol_ratio > 1.2: return 0.8
+                if vol_ratio > 1.0: return 0.6
+                return 0.4
+        elif 'Markdown' in phase:
+            # 下跌期: 跌天放量、涨天缩量 = 健康下跌
+            if vol_ratio < 0.7: return 0.9
+            if vol_ratio < 0.9: return 0.7
+            if vol_ratio < 1.1: return 0.5
+            return 0.3
+        elif 'Distribution' in phase:
+            if 'Phase A' in phase or 'Phase B' in phase:
+                # 派发期 A/B: 涨天放量，跌天缩量 = 证明主力在出货
+                if vol_ratio > 1.2: return 0.8
+                if vol_ratio > 1.0: return 0.6
+                return 0.4
+            else:
+                # C/D/E: 跌天量开始放大，市场开始崩溃
+                if vol_ratio < 0.8: return 0.8
+                if vol_ratio < 1.0: return 0.6
                 return 0.4
         return 0.5
 
@@ -1322,7 +1363,10 @@ class WyckoffAnalyzer:
     # ----------------------------------------------------------
 
     def calculate_cause_effect(self) -> Dict:
-        """计算因果定律目标"""
+        """计算因果定律目标 - 升级版
+        升级：将积累期持续时间（consolidation_duration_days）纳入目标价成气计算
+        原则：积累时间越长，因果越大，突破目标距离越远
+        """
         if self.data is None or len(self.data) < 60:
             return {}
 
@@ -1334,29 +1378,34 @@ class WyckoffAnalyzer:
         current_price = tr_info['current_price']
         position = tr_info['position']
 
-        # 判断突破方向
+        # 时间因子：积累期越长，目标逐渐放大。基准是 60 天
+        duration_days = tr_info.get('consolidation_duration_days', 60)
+        time_factor = min(duration_days / 60.0, 3.0)  # 最多放大到 3倍，防止过于乐观
+
+        # 目标位 = 突破点 + 区间幅度 x 时间因子 x 费波那奇系数
         if position > 0.5:
-            # 向上突破
             breakout_point = tr_info['high']
             targets = {
-                'target_1': breakout_point + cause_size * 0.618,
-                'target_2': breakout_point + cause_size * 1.0,
-                'target_3': breakout_point + cause_size * 1.618,
+                'target_1': round(breakout_point + cause_size * 0.618 * time_factor, 2),
+                'target_2': round(breakout_point + cause_size * 1.0   * time_factor, 2),
+                'target_3': round(breakout_point + cause_size * 1.618 * time_factor, 2),
             }
         else:
-            # 向下突破
             breakout_point = tr_info['low']
             targets = {
-                'target_1': breakout_point - cause_size * 0.618,
-                'target_2': breakout_point - cause_size * 1.0,
-                'target_3': breakout_point - cause_size * 1.618,
+                'target_1': round(breakout_point - cause_size * 0.618 * time_factor, 2),
+                'target_2': round(breakout_point - cause_size * 1.0   * time_factor, 2),
+                'target_3': round(breakout_point - cause_size * 1.618 * time_factor, 2),
             }
 
         return {
-            'cause_size': cause_size,
-            'breakout_point': breakout_point,
+            'cause_size': round(cause_size, 2),
+            'breakout_point': round(breakout_point, 2),
             'targets': targets,
-            'current_position': position
+            'current_position': round(position, 2),
+            'consolidation_duration_days': duration_days,
+            'time_factor': round(time_factor, 2),
+            'method': 'Wyckoff Cause & Effect (duration-adjusted Fibonacci)'
         }
 
     # ----------------------------------------------------------
@@ -1923,77 +1972,66 @@ class WyckoffAnalyzer:
         }
 
         results = {}
+        # 预先建立日期字符串 -> 整数位置的映射，将 O(n) 逐行扫描改为 O(1) 查找
+        date_to_pos = {
+            dt.strftime('%Y-%m-%d'): i
+            for i, dt in enumerate(self.data.index)
+        }
+
         for display_name, config in signal_mapping.items():
             key = config["key"]
             is_bullish = config["is_bullish"]
-            
+
             signals = events.get(key, {}).get("signals", [])
             if len(signals) < 2:
-                results[display_name] = static_baseline[display_name]
+                results[display_name] = dict(static_baseline[display_name])
                 results[display_name]["note"] = "样本不足2次，采用全市场基准"
                 continue
-                
+
             success_count = 0
             total_returns = []
-            
+
             for sig in signals:
                 date_str = sig.get("date")
                 entry_price = sig.get("price")
                 if not date_str or not entry_price:
                     continue
-                    
+
                 try:
-                    # 获取日期的索引（需将 date_str 转为 datetime 或处理索引格式匹配）
-                    # self.data.index 可能是 DatetimeIndex
-                    # 为了安全匹配，我们将字符串转换为与 index 类型一致
                     target_date = pd.to_datetime(date_str).strftime('%Y-%m-%d')
-                    idx = -1
-                    # 遍历 index 寻找匹配日期，因为有时有时间戳
-                    for i, dt in enumerate(self.data.index):
-                        if dt.strftime('%Y-%m-%d') == target_date:
-                            idx = i
-                            break
+                    idx = date_to_pos.get(target_date, -1)  # O(1) 查找
                     if idx == -1:
                         continue
                 except Exception:
                     continue
-                    
+
                 target_idx = min(idx + 20, len(self.data) - 1)
-                
-                # 如果信号距离今天不足5个交易日，视为无足够回测空间，跳过
                 if target_idx - idx < 5:
                     continue
-                    
+
                 future_price = self.data['Close'].iloc[target_idx]
-                
-                if is_bullish:
-                    ret = (future_price - entry_price) / entry_price
-                else:
-                    ret = (entry_price - future_price) / entry_price
-                    
+
+                ret = (future_price - entry_price) / entry_price if is_bullish else (entry_price - future_price) / entry_price
                 total_returns.append(ret)
                 if ret > 0:
                     success_count += 1
-            
+
             valid_count = len(total_returns)
             if valid_count < 2:
-                results[display_name] = static_baseline[display_name]
+                results[display_name] = dict(static_baseline[display_name])
                 results[display_name]["note"] = "样本不足2次，采用全市场基准"
             else:
                 avg_ret = sum(total_returns) / valid_count
                 succ_rate = success_count / valid_count
-                
-                # 显示真实涨跌幅（针对做空信号，取负值还原股票本身跌幅）
                 display_avg_ret = -avg_ret if not is_bullish else avg_ret
                 display_prefix = "+" if display_avg_ret > 0 else ""
-
                 results[display_name] = {
                     "total_occurrences": valid_count,
                     "success_rate": f"{succ_rate*100:.1f}%",
                     "avg_return": f"{display_prefix}{display_avg_ret*100:.1f}%",
                     "note": f"本股专属动态回测 ({valid_count}次)"
                 }
-                
+
         return results
 
     def add_market_sentiment(self) -> dict:
@@ -2031,17 +2069,12 @@ class WyckoffAnalyzer:
                     
             # 2. 如果是 A股，或者外盘获取不到 VIX，回退到计算大盘的 20日历史实现波动率 (Realized Volatility)
             if current_vix is None:
+                idx_analyzer = self._get_cached_index_analyzer()
                 index_symbol = self._get_baseline_index_symbol()
-                idx_analyzer = WyckoffAnalyzer(index_symbol, self.period, self.config)
-                
-                import os, sys
-                from contextlib import redirect_stdout
-                with open(os.devnull, 'w') as f, redirect_stdout(f):
-                    success = idx_analyzer.fetch_data()
-                    
-                if not success or idx_analyzer.data is None or len(idx_analyzer.data) < 20:
+
+                if idx_analyzer is None or idx_analyzer.data is None or len(idx_analyzer.data) < 20:
                     return {"market_sentiment": "unknown", "vix_level": None, "implication": "无法获取大盘数据计算情绪"}
-                
+
                 df = idx_analyzer.data.copy()
                 returns = df['Close'].pct_change().dropna()
                 if len(returns) < 20:
