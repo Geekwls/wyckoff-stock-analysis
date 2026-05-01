@@ -37,15 +37,19 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    - **关键事件**: 分析最新的 SOS/SOW、Spring/Upthrust，以及因果测算。
 
    **# 🛡️ 风险分层建议 (Risk-Specific Advice)**
-   - **保守型投资者**: 具体动作与原因（结合 `position_sizing.conservative`）
-   - **稳健型投资者**: 具体动作与仓位（结合 `position_sizing.moderate`）
-   - **激进型投资者**: 具体动作与激进止损位（结合 `position_sizing.aggressive`）
+   *(严格读取 `[risk_specific_advice]` 数据进行输出，不要自行编造)*
+   - **保守型**: `[action]` - `[reason]` (仓位/止损: `[entry_condition]`)
+   - **稳健型**: `[action]` - `[position]` (止损: `[stop_loss]`)
+   - **激进型**: `[action]` - `[position]` (止损: `[stop_loss]`)
 
    **# 📚 术语百科 (Jargon Explained)**
-   - 用大白话（比喻或通俗语言）向新手解释上述报告中用到的 1-2 个最核心的威科夫专业术语（例如 SOS、Phase C、Spring）。
+   *(直接读取并列出 `[terminology_guide]` 中的术语及其 `simple` 和 `action` 解释，无数据则跳过该环节)*
+
+   **# 📊 历史胜率参考 (Historical Performance)**
+   *(提取 `[performance_tracking]` 中与本次 `events` 命中的关键事件对应的历史胜率数据，如 SOS/Spring 成功率)*
 
    **# 🤖 交互式问答 (Interactive Q&A)**
-   - 预生成 2-3 个引导用户继续深挖的具体问题。例如："👉 *你还可以问我：这只股票现在的止损位设置合理吗？*"
+   *(逐条列出 `[interactive_qa]` 数组中的问题，引导用户提问)*
 
 ## 📚 Knowledge Retrieval (RAG)
 
