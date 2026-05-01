@@ -15,7 +15,10 @@ Wyckoff Utilities - Screening and Reporting
 
 import pandas as pd
 from typing import List, Dict
-from wyckoff_analyzer import WyckoffAnalyzer
+try:
+    from .wyckoff_analyzer import WyckoffAnalyzer
+except ImportError:
+    from wyckoff_analyzer import WyckoffAnalyzer
 
 
 class WyckoffScreener:
@@ -51,33 +54,41 @@ class WyckoffScreener:
         results = []
 
         for symbol, analyzer in self.analyzers.items():
-            phase = analyzer.identify_phase()
+            phase_res = analyzer.identify_phase()
+            phase_str = phase_res.get('phase', 'Unknown')
 
-            if 'Accumulation' in phase:
+            if 'Accumulation' not in phase_str:
+                continue
+
+            events = phase_res.get('events_detected', {})
+            spring_upthrust = events.get('spring_upthrust', {})
+            sos_sow = events.get('sos_sow', {})
+            lps_lpsy = events.get('lps_lpsy', {})
+
+            has_spring = spring_upthrust.get('detected') and spring_upthrust.get('_type') == 'spring'
+            has_sos = sos_sow.get('detected') and sos_sow.get('_type') == 'sos'
+            has_lps = lps_lpsy.get('detected') and lps_lpsy.get('_type') == 'lps'
+
+            score = 0
+            if has_spring:
+                score += 2
+            if has_sos:
+                score += 2
+            if has_lps:
+                score += 3
+
+            if score >= 3:
                 trading_range = analyzer.detect_trading_range()
-                spring = analyzer.detect_spring()
-                sos = analyzer.detect_sos()
-                lps = analyzer.detect_lps()
-
-                score = 0
-                if spring['detected']:
-                    score += 2
-                if sos['detected']:
-                    score += 2
-                if lps['detected']:
-                    score += 3
-
-                if score >= 3:
-                    results.append({
-                        'symbol': symbol,
-                        'phase': phase,
-                        'score': score,
-                        'has_spring': spring['detected'],
-                        'has_sos': sos['detected'],
-                        'has_lps': lps['detected'],
-                        'trading_range': trading_range,
-                        'current_price': analyzer.data['Close'].iloc[-1]
-                    })
+                results.append({
+                    'symbol': symbol,
+                    'phase': phase_str,
+                    'score': score,
+                    'has_spring': has_spring,
+                    'has_sos': has_sos,
+                    'has_lps': has_lps,
+                    'trading_range': trading_range,
+                    'current_price': analyzer.data['Close'].iloc[-1]
+                })
 
         results.sort(key=lambda x: x['score'], reverse=True)
         return results
@@ -92,33 +103,41 @@ class WyckoffScreener:
         results = []
 
         for symbol, analyzer in self.analyzers.items():
-            phase = analyzer.identify_phase()
+            phase_res = analyzer.identify_phase()
+            phase_str = phase_res.get('phase', 'Unknown')
 
-            if 'Distribution' in phase:
+            if 'Distribution' not in phase_str:
+                continue
+
+            events = phase_res.get('events_detected', {})
+            spring_upthrust = events.get('spring_upthrust', {})
+            sos_sow = events.get('sos_sow', {})
+            lps_lpsy = events.get('lps_lpsy', {})
+
+            has_upthrust = spring_upthrust.get('detected') and spring_upthrust.get('_type') == 'upthrust'
+            has_sow = sos_sow.get('detected') and sos_sow.get('_type') == 'sow'
+            has_lpsy = lps_lpsy.get('detected') and lps_lpsy.get('_type') == 'lpsy'
+
+            score = 0
+            if has_upthrust:
+                score += 2
+            if has_sow:
+                score += 2
+            if has_lpsy:
+                score += 3
+
+            if score >= 3:
                 trading_range = analyzer.detect_trading_range()
-                upthrust = analyzer.detect_upthrust()
-                sow = analyzer.detect_sow()
-                lpsy = analyzer.detect_lpsy()
-
-                score = 0
-                if upthrust['detected']:
-                    score += 2
-                if sow['detected']:
-                    score += 2
-                if lpsy['detected']:
-                    score += 3
-
-                if score >= 3:
-                    results.append({
-                        'symbol': symbol,
-                        'phase': phase,
-                        'score': score,
-                        'has_upthrust': upthrust['detected'],
-                        'has_sow': sow['detected'],
-                        'has_lpsy': lpsy['detected'],
-                        'trading_range': trading_range,
-                        'current_price': analyzer.data['Close'].iloc[-1]
-                    })
+                results.append({
+                    'symbol': symbol,
+                    'phase': phase_str,
+                    'score': score,
+                    'has_upthrust': has_upthrust,
+                    'has_sow': has_sow,
+                    'has_lpsy': has_lpsy,
+                    'trading_range': trading_range,
+                    'current_price': analyzer.data['Close'].iloc[-1]
+                })
 
         results.sort(key=lambda x: x['score'], reverse=True)
         return results
@@ -133,9 +152,15 @@ class WyckoffScreener:
         results = []
 
         for symbol, analyzer in self.analyzers.items():
-            lps = analyzer.detect_lps()
+            # 复用 identify_phase 已计算的 sos 结果，避免重复检测
+            phase_res = analyzer.identify_phase()
+            events = phase_res.get('events_detected', {})
+            sos_res = events.get('sos_sow', {})
+            if not (sos_res.get('detected') and sos_res.get('_type') == 'sos'):
+                sos_res = analyzer.detect_sos()
+            lps = analyzer.detect_lps(sos_result=sos_res)
 
-            if lps['detected']:
+            if lps.get('detected'):
                 current_price = lps['price']
                 stop_loss = current_price * 0.95
                 trading_range = analyzer.detect_trading_range()
@@ -171,9 +196,15 @@ class WyckoffScreener:
         results = []
 
         for symbol, analyzer in self.analyzers.items():
-            lpsy = analyzer.detect_lpsy()
+            # 复用 identify_phase 已计算的 sow 结果，避免重复检测
+            phase_res = analyzer.identify_phase()
+            events = phase_res.get('events_detected', {})
+            sow_res = events.get('sos_sow', {})
+            if not (sow_res.get('detected') and sow_res.get('_type') == 'sow'):
+                sow_res = analyzer.detect_sow()
+            lpsy = analyzer.detect_lpsy(sow_result=sow_res)
 
-            if lpsy['detected']:
+            if lpsy.get('detected'):
                 current_price = lpsy['price']
                 stop_loss = current_price * 1.05
                 trading_range = analyzer.detect_trading_range()
@@ -344,9 +375,9 @@ if __name__ == "__main__":
 
     for symbol in symbols:
         if screener.add_stock(symbol):
-            print(f"  ✅ {symbol}")
+            print(f"  [OK] {symbol}")
         else:
-            print(f"  ❌ {symbol}")
+            print(f"  [FAIL] {symbol}")
 
     print("\n" + "="*60)
     print("生成筛选报告...\n")

@@ -24,11 +24,24 @@ import json
 import os
 import logging
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, TypedDict
 from enum import Enum, auto
 from dataclasses import dataclass
 import warnings
 warnings.filterwarnings('ignore')
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# 智能导入：尝试相对导入，失败则用绝对导入
+try:
+    from .exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError
+except ImportError:
+    # 当直接运行脚本时，使用绝对导入
+    import sys
+    current_dir = os.path.dirname(__file__)
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+    from exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError
 
 # 模块级日志，默认不输出；调用方可以通过 logging.basicConfig() 开启
 logger = logging.getLogger(__name__)
@@ -47,14 +60,65 @@ class MarketPhase(Enum):
     UNKNOWN = auto()
 
 
-@dataclass
-class WyckoffConfig:
-    """威科夫分析配置"""
-    confidence_threshold: float = 0.85
-    min_data_length: int = 60
-    atr_period: int = 14
-    atr_multiplier: float = 1.5
-    volume_ma_period: int = 20
+class PhaseResult(TypedDict):
+    """阶段识别结果类型"""
+    phase: str
+    confidence: float
+    events_detected: Dict[str, Any]
+    ma_confidence: float
+    vol_confidence: float
+    sequence_score: Dict[str, Any]
+    divergence: Dict[str, Any]
+
+
+class SpringSignal(TypedDict):
+    """Spring信号类型"""
+    date: datetime
+    breakdown_price: float
+    support_level: float
+    recovery_day: int
+    recovery_price: float
+    close_above_support: bool
+    vol_pattern: str
+    confidence: float
+
+
+class SpringResult(TypedDict):
+    """Spring检测结果类型"""
+    detected: bool
+    reason: Optional[str]
+    signals: Optional[List[SpringSignal]]
+    latest_spring: Optional[SpringSignal]
+
+
+class WyckoffConfig(BaseModel):
+    """威科夫分析配置（带验证）"""
+    confidence_threshold: float = Field(0.85, ge=0.0, le=1.0)
+    min_data_length: int = Field(60, ge=20, le=1000)
+    atr_period: int = Field(14, ge=5, le=50)
+    atr_multiplier: float = Field(1.5, ge=0.5, le=5.0)
+    volume_ma_period: int = Field(20, ge=5, le=100)
+    
+    # Spring检测参数
+    spring_lookback: int = Field(120, ge=30, le=252)
+    spring_max_recovery_days: int = Field(3, ge=1, le=10)
+    spring_range_threshold: float = Field(0.30, ge=0.1, le=0.5)
+    
+    # 高潮检测参数
+    climax_vol_multiplier: float = Field(3.0, ge=2.0, le=10.0)
+    climax_range_multiplier: float = Field(1.5, ge=1.0, le=5.0)
+    
+    @field_validator('min_data_length')
+    @classmethod
+    def validate_data_length(cls, v):
+        if v < 20:
+            raise ValueError('数据长度至少20天')
+        return v
+    
+    model_config = ConfigDict(
+        env_prefix="WYCKOFF_",
+        populate_by_name=True
+    )
 
 
 # ============================================================
@@ -108,12 +172,34 @@ def prepare_data(data: pd.DataFrame, config: WyckoffConfig = None) -> pd.DataFra
     return df
 
 
+@dataclass
+class AnalysisCache:
+    """分析结果缓存"""
+    _cache: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        self._cache = {}
+    
+    def get_or_compute(self, key: str, compute_fn, *args, **kwargs):
+        if key not in self._cache:
+            self._cache[key] = compute_fn(*args, **kwargs)
+        return self._cache[key]
+    
+    def invalidate(self, key: str = None):
+        if key:
+            self._cache.pop(key, None)
+        else:
+            self._cache.clear()
+
+
 # ============================================================
 # 主分析器类
 # ============================================================
 
 class WyckoffAnalyzer:
     """威科夫分析器"""
+
+    _bs_logged_in: bool = False  # 类级别 baostock 登录状态，避免重复登录
 
     def __init__(self, symbol: str, period: str = "1y", config: WyckoffConfig = None):
         """
@@ -130,6 +216,7 @@ class WyckoffAnalyzer:
         self.data = None
         self.cache_file = os.path.join(os.path.dirname(__file__), "stock_cache.json")
         self._index_analyzer_cache: Optional['WyckoffAnalyzer'] = None  # 大盘数据缓存，避免重复IO
+        self._analysis_cache = AnalysisCache()
 
     def _get_cached_index_analyzer(self) -> Optional['WyckoffAnalyzer']:
         """获取大盘分析器（带缓存，避免同一次分析中多次拉取大盘数据）"""
@@ -144,7 +231,7 @@ class WyckoffAnalyzer:
         with open(_os.devnull, 'w') as f, redirect_stdout(f):
             success = idx_analyzer.fetch_data()
 
-        if success and idx_analyzer.data is not None:
+        if success is not None and (not isinstance(success, pd.DataFrame) or not success.empty) and idx_analyzer.data is not None:
             self._index_analyzer_cache = idx_analyzer
 
         return self._index_analyzer_cache
@@ -172,8 +259,8 @@ class WyckoffAnalyzer:
                     cache = json.load(f)
                 if name in cache:
                     return cache[name]
-            except Exception:
-                pass
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("读取股票缓存失败: %s", e)
 
         code = self._search_from_baostock(name)
         if code:
@@ -199,27 +286,49 @@ class WyckoffAnalyzer:
         else:
             return "SPY"  # 美股/其他 - 标普500
 
-    def _search_from_baostock(self, keyword: str) -> Optional[str]:
-        """从 baostock 搜索股票"""
+    def _ensure_bs_login(self) -> bool:
+        """确保 baostock 已登录（类级别，只登录一次）"""
+        if WyckoffAnalyzer._bs_logged_in:
+            return True
         try:
             lg = bs.login()
-            if lg.error_code != '0':
-                return None
+            if lg.error_code == '0':
+                WyckoffAnalyzer._bs_logged_in = True
+                return True
+            logger.warning("baostock登录失败: %s", lg.error_msg)
+            return False
+        except Exception:
+            logger.exception("baostock登录异常")
+            return False
 
+    @classmethod
+    def logout_baostock(cls):
+        """显式登出 baostock（可选，通常在程序退出时调用）"""
+        if cls._bs_logged_in:
+            try:
+                bs.logout()
+            except Exception:
+                pass
+            cls._bs_logged_in = False
+
+    def _search_from_baostock(self, keyword: str) -> Optional[str]:
+        """从 baostock 搜索股票"""
+        if not self._ensure_bs_login():
+            return None
+
+        try:
             rs = bs.query_stock_basic()
             data_list = []
             while (rs.error_code == '0') & rs.next():
                 data_list.append(rs.get_row_data())
-
-            bs.logout()
 
             if data_list:
                 df = pd.DataFrame(data_list, columns=rs.fields)
                 match = df[df['code_name'].str.contains(keyword, na=False)]
                 if not match.empty:
                     return match.iloc[0]['code']
-        except Exception as e:
-            print(f"baostock查询失败: {e}")
+        except Exception:
+            logger.exception("baostock查询异常 keyword=%s", keyword)
             return None
 
         return None
@@ -239,12 +348,12 @@ class WyckoffAnalyzer:
         try:
             with open(self.cache_file, 'w', encoding='utf-8') as f:
                 json.dump(cache, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"缓存更新失败: {e}")
-            logger.debug("缓存写入失败: %s", e)
+        except (OSError, TypeError) as e:
+            logger.warning("缓存写入失败: %s", e)
 
-    def fetch_data(self) -> bool:
+    def fetch_data(self) -> pd.DataFrame:
         """获取股票数据（自动识别市场）"""
+        self._analysis_cache.invalidate()
         try:
             symbol = self.symbol
             # 检查是否包含中文字符
@@ -254,87 +363,78 @@ class WyckoffAnalyzer:
                     symbol = resolved
                     self.symbol = symbol
                 else:
-                    print(f"无法识别股票名称: {self.symbol}")
-                    return False
+                    raise DataFetchError(self.symbol, f"无法识别股票名称: {self.symbol}")
 
             if self._is_a_stock(symbol):
-                return self._fetch_a_stock_data(symbol)
+                data = self._fetch_a_stock_data(symbol)
             else:
-                return self._fetch_global_stock_data(symbol)
+                data = self._fetch_global_stock_data(symbol)
+            
+            if data is None or len(data) < self.config.min_data_length:
+                raise InsufficientDataError(
+                    self.symbol, 
+                    self.config.min_data_length, 
+                    len(data) if data is not None else 0
+                )
+            
+            self.data = prepare_data(data, self.config)
+            return self.data
 
+        except WyckoffError:
+            raise
         except Exception as e:
-            print(f"获取数据失败: {self.symbol} - {str(e)}")
             logger.exception("获取数据异常 symbol=%s", self.symbol)
-            return False
+            raise DataFetchError(self.symbol, str(e)) from e
 
-    def _fetch_a_stock_data(self, symbol: str) -> bool:
+    def _fetch_a_stock_data(self, symbol: str) -> pd.DataFrame:
         """baostock 获取A股数据"""
-        try:
-            if '.' in symbol:
-                parts = symbol.split('.')
-                code = f"{parts[1].lower()}.{parts[0]}"
-            else:
-                prefix = 'sh' if symbol.startswith('6') else 'sz'
-                code = f"{prefix}.{symbol}"
+        if '.' in symbol:
+            parts = symbol.split('.')
+            code = f"{parts[1].lower()}.{parts[0]}"
+        else:
+            prefix = 'sh' if symbol.startswith('6') else 'sz'
+            code = f"{prefix}.{symbol}"
 
-            end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
-            period_days = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
-            days = period_days.get(self.period, 365)
-            start_date = (pd.Timestamp.now() - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
+        end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
+        period_days = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
+        days = period_days.get(self.period, 365)
+        start_date = (pd.Timestamp.now() - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
 
-            lg = bs.login()
-            if lg.error_code != '0':
-                print(f"baostock登录失败: {symbol}")
-                return False
+        if not self._ensure_bs_login():
+            raise DataFetchError(symbol, "baostock登录失败")
 
-            rs = bs.query_history_k_data_plus(
-                code, "date,open,high,low,close,volume,amount",
-                start_date=start_date, end_date=end_date,
-                frequency="d", adjustflag="3"
-            )
+        rs = bs.query_history_k_data_plus(
+            code, "date,open,high,low,close,volume,amount",
+            start_date=start_date, end_date=end_date,
+            frequency="d", adjustflag="3"
+        )
 
-            data_list = []
-            while (rs.error_code == '0') & rs.next():
-                data_list.append(rs.get_row_data())
+        data_list = []
+        while (rs.error_code == '0') & rs.next():
+            data_list.append(rs.get_row_data())
 
-            bs.logout()
+        if not data_list:
+            raise DataFetchError(symbol, "未获取到数据")
 
-            if not data_list or len(data_list) < 60:
-                print(f"数据不足: {symbol}")
-                return False
+        df = pd.DataFrame(data_list, columns=rs.fields)
+        df = df.rename(columns={
+            'date': 'Date', 'open': 'Open', 'high': 'High',
+            'low': 'Low', 'close': 'Close', 'volume': 'Volume'
+        })
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date')
+        df = df.astype(float)
+        return df
 
-            df = pd.DataFrame(data_list, columns=rs.fields)
-            df = df.rename(columns={
-                'date': 'Date', 'open': 'Open', 'high': 'High',
-                'low': 'Low', 'close': 'Close', 'volume': 'Volume'
-            })
-            df['Date'] = pd.to_datetime(df['Date'])
-            df = df.set_index('Date')
-            df = df.astype(float)
-
-            self.data = prepare_data(df, self.config)
-            return True
-
-        except Exception as e:
-            print(f"获取A股数据失败: {symbol} - {str(e)}")
-            return False
-
-    def _fetch_global_stock_data(self, symbol: str) -> bool:
+    def _fetch_global_stock_data(self, symbol: str) -> pd.DataFrame:
         """yfinance 获取其他市场数据"""
-        try:
-            stock = yf.Ticker(symbol)
-            self.data = stock.history(period=self.period)
+        stock = yf.Ticker(symbol)
+        data = stock.history(period=self.period)
 
-            if self.data.empty or len(self.data) < 60:
-                print(f"数据不足: {symbol}")
-                return False
+        if data.empty:
+            raise DataFetchError(symbol, "未获取到数据")
 
-            self.data = prepare_data(self.data, self.config)
-            return True
-
-        except Exception as e:
-            print(f"获取数据失败: {symbol} - {str(e)}")
-            return False
+        return data
 
     # ----------------------------------------------------------
     # 形态检测
@@ -387,10 +487,22 @@ class WyckoffAnalyzer:
             'current_price': current_price
         }
 
-    def detect_spring(self, lookback: int = 120) -> Dict:
+    def detect_spring(self, lookback: int = None) -> Dict:
         """
-        增强版Spring检测 (V2)
-        
+        增强版Spring检测 (V2) - 带缓存
+        """
+        lookback = lookback or self.config.spring_lookback
+        cache_key = f"spring_{lookback}"
+        return self._analysis_cache.get_or_compute(
+            cache_key, self._detect_spring_impl, lookback
+        )
+
+    def _detect_spring_impl(self, lookback: int = None) -> Dict:
+        """
+        Spring检测核心实现
+        """
+        lookback = lookback or self.config.spring_lookback
+        """
         威科夫Spring完整定义：
         1. 存在明确的交易区间（至少30天的横盘整理）
         2. 价格短暂跌破交易区间下边界（1-3天）
@@ -412,8 +524,8 @@ class WyckoffAnalyzer:
         tr_low = tr_data['Low'].min()
         tr_range_pct = (tr_high - tr_low) / tr_low
         
-        # 交易区间幅度应该小于20%（可调整）
-        if tr_range_pct > 0.30:  # 为了宽幅震荡的A股稍微放宽到30%
+        # 交易区间幅度应该小于阈值
+        if tr_range_pct > self.config.spring_range_threshold:
             return {'detected': False, 'reason': 'no_trading_range'}
         
         # 步骤2：确认支撑位（交易区间下边界）
@@ -424,157 +536,194 @@ class WyckoffAnalyzer:
         threshold_map = {'low': 0.03, 'medium': 0.04, 'high': 0.05}
         max_breakdown_pct = threshold_map.get(volatility_class, 0.04)
         
-        # 步骤3：寻找跌破支撑的情况（之前固定30天，扩展至 45 天以覆盖更多延迟出现的 Spring）
-        search_start = max(0, len(df) - 45)  # 最近30天 → 45天
+        # 步骤3：向量化寻找跌破支撑的情况（优化性能）
+        search_df = df.iloc[max(0, len(df) - 45):].copy()
 
-        # 用于去重的日期集合（避免同一日期被重复检测）
-        seen_dates: set = set()
-        
+        # 向量化计算：识别跌破支撑位的K线
+        breakdown_mask = (
+            (search_df['Low'] < support_level) &
+            (search_df['Low'] >= support_level * (1 - max_breakdown_pct))
+        )
+
+        if not breakdown_mask.any():
+            return {'detected': False, 'reason': 'no_breakdown_found'}
+
+        # 向量化计算：收盘价位置和成交量比率
+        search_df = search_df.copy()
+        search_df['close_above_support'] = search_df['Close'] >= support_level
+        search_df['vol_ma'] = search_df['Volume_MA20'].fillna(search_df['Volume'].mean())
+        search_df['breakdown_vol_ratio'] = search_df['Volume'] / search_df['vol_ma']
+        search_df['daily_range'] = search_df['High'] - search_df['Low']
+        search_df['close_position'] = (
+            (search_df['Close'] - search_df['Low']) / search_df['daily_range']
+        ).fillna(1.0)
+
+        # 向量化检查未来恢复情况（使用rolling和shift）
+        recovery_days = self.config.spring_max_recovery_days
+        recovery_info = []
+
+        for day_offset in range(recovery_days + 1):
+            if day_offset == 0:
+                # 当天恢复
+                future_mask = search_df['close_above_support']
+            else:
+                # 未来day_offset天内恢复
+                future_close = search_df['Close'].shift(-day_offset)
+                future_mask = future_close > support_level
+
+            recovery_info.append({
+                'day_offset': day_offset,
+                'recovery_mask': future_mask,
+                'recovery_close': search_df['Close'].shift(-day_offset),
+                'recovery_high': search_df['High'].shift(-day_offset),
+                'recovery_low': search_df['Low'].shift(-day_offset),
+                'recovery_vol': search_df['Volume'].shift(-day_offset)
+            })
+
+        # 找到每个跌破点的最早恢复日
         springs = []
-        for i in range(search_start, len(df)):
-            current_low = df['Low'].iloc[i]
-            current_close = df['Close'].iloc[i]
-            current_vol = df['Volume'].iloc[i]
-            vol_ma = df['Volume_MA20'].iloc[i]
-            
-            # 跌破支撑位且跌破幅度在允许的假跌破范围内
-            if current_low < support_level and current_low >= support_level * (1 - max_breakdown_pct):
-                # 步骤4：检查收盘价是否在支撑位上方（假跌破当天直接收回）
-                close_above_support = current_close >= support_level
-                
-                # 步骤5：检查恢复情况（1-3天内）
-                recovery_found = False
-                recovery_day = 0
-                recovery_vol = current_vol
-                recovery_close = current_close
-                recovery_high = df['High'].iloc[i]
-                recovery_low = current_low
-                
-                if close_above_support:
-                    recovery_found = True
-                else:
-                    for j in range(1, 4):
-                        if i + j < len(df):
-                            if df['Close'].iloc[i + j] > support_level:
-                                recovery_found = True
-                                recovery_day = j
-                                recovery_vol = df['Volume'].iloc[i + j]
-                                recovery_close = df['Close'].iloc[i + j]
-                                recovery_high = df['High'].iloc[i + j]
-                                recovery_low = df['Low'].iloc[i + j]
-                                break
-                
-                if not recovery_found:
-                    continue
-                    
-                # 收盘位置验证（威科夫原著：收盘回到支撑位上方是核心，70%过严）
-                # 主判断：收盘价是否在支撑位上方
-                # 辅助判断：收盘位置 >= 0.5（当天收盘在日内中位以上即视为有效反弹）
-                daily_range = recovery_high - recovery_low
-                if daily_range > 0:
-                    close_position = (recovery_close - recovery_low) / daily_range
-                else:
-                    close_position = 1.0 if recovery_close >= support_level else 0.0
+        seen_dates = set()
 
-                # 主要条件：收盘在支撑位上方；辅助条件：日内位置 >= 50%
-                if not (recovery_close >= support_level or close_position >= 0.5):
-                    continue  # 两个条件都不满足才跳过，尽量减少漏报
-                
-                # 步骤6：验证成交量模式
-                breakdown_vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1
-                recovery_vol_ratio = recovery_vol / vol_ma if vol_ma > 0 else 1
-                
-                vol_pattern = 'neutral'
-                if breakdown_vol_ratio < 0.8 and recovery_vol_ratio > 1.2:
-                    vol_pattern = 'bullish'
-                elif breakdown_vol_ratio < 1.0 and recovery_vol_ratio > 1.0:
-                    vol_pattern = 'mildly_bullish'
-                elif breakdown_vol_ratio > 1.5:
-                    vol_pattern = 'bearish'
-                
-                # 步骤7：综合判断是否为真Spring（修复：close_position 阈值降至 0.5）
-                is_spring = False
-                confidence = 0
+        breakdown_indices = search_df[breakdown_mask].index
 
-                if close_above_support and close_position >= 0.7:
-                    # 当天直接收回且在高位 = 最强 Spring
-                    is_spring = True
-                    confidence = 0.85
-                elif close_above_support:
-                    # 当天收回但位置一般
-                    is_spring = True
-                    confidence = 0.75
-                elif recovery_found and vol_pattern in ['bullish', 'mildly_bullish']:
-                    is_spring = True
-                    confidence = 0.65
-                elif recovery_found and recovery_day <= 2:
-                    is_spring = True
-                    confidence = 0.5
-                
-                if is_spring:
-                    date_key = df.index[i].strftime('%Y-%m-%d')
-                    if date_key not in seen_dates:   # 去重：同日期不重复添加
-                        seen_dates.add(date_key)
-                        springs.append({
-                            'date': df.index[i],
-                            'breakdown_price': current_low,
-                            'support_level': support_level,
-                            'recovery_day': recovery_day,
-                            'recovery_price': recovery_close,
-                            'close_above_support': close_above_support,
-                            'vol_pattern': vol_pattern,
-                            'breakdown_volume': current_vol,
-                            'recovery_volume': recovery_vol,
-                            'volume_ma': vol_ma,
-                            'confidence': confidence,
-                            'price': current_low
-                        })
-        
+        for idx in breakdown_indices:
+            date_key = idx.strftime('%Y-%m-%d')
+            if date_key in seen_dates:
+                continue
+            seen_dates.add(date_key)
+
+            row_idx = search_df.index.get_loc(idx)
+            current_low = search_df.loc[idx, 'Low']
+            current_close = search_df.loc[idx, 'Close']
+            current_vol = search_df.loc[idx, 'Volume']
+            vol_ma = search_df.loc[idx, 'vol_ma']
+
+            # 检查恢复情况
+            recovery_found = False
+            recovery_day = 0
+            recovery_close = current_close
+            recovery_high = search_df.loc[idx, 'High']
+            recovery_low = current_low
+            recovery_vol = current_vol
+
+            close_above_support = search_df.loc[idx, 'close_above_support']
+
+            if close_above_support:
+                recovery_found = True
+            else:
+                for recovery in recovery_info[1:]:  # 跳过第0个（当天）
+                    if row_idx < len(search_df) and recovery['recovery_mask'].iloc[row_idx]:
+                        recovery_found = True
+                        recovery_day = recovery['day_offset']
+                        recovery_close = recovery['recovery_close'].iloc[row_idx]
+                        recovery_high = recovery['recovery_high'].iloc[row_idx]
+                        recovery_low = recovery['recovery_low'].iloc[row_idx]
+                        recovery_vol = recovery['recovery_vol'].iloc[row_idx]
+                        break
+
+            if not recovery_found:
+                continue
+
+            # 收盘位置验证
+            daily_range = recovery_high - recovery_low
+            if daily_range > 0:
+                close_position = (recovery_close - recovery_low) / daily_range
+            else:
+                close_position = 1.0 if recovery_close >= support_level else 0.0
+
+            if not (recovery_close >= support_level or close_position >= 0.5):
+                continue
+
+            # 成交量模式验证
+            breakdown_vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1
+            recovery_vol_ratio = recovery_vol / vol_ma if vol_ma > 0 else 1
+
+            vol_pattern = 'neutral'
+            if breakdown_vol_ratio < 0.8 and recovery_vol_ratio > 1.2:
+                vol_pattern = 'bullish'
+            elif breakdown_vol_ratio < 1.0 and recovery_vol_ratio > 1.0:
+                vol_pattern = 'mildly_bullish'
+            elif breakdown_vol_ratio > 1.5:
+                vol_pattern = 'bearish'
+
+            # 综合判断
+            is_spring = False
+            confidence = 0
+
+            if close_above_support and close_position >= 0.7:
+                is_spring = True
+                confidence = 0.85
+            elif close_above_support:
+                is_spring = True
+                confidence = 0.75
+            elif recovery_found and vol_pattern in ['bullish', 'mildly_bullish']:
+                is_spring = True
+                confidence = 0.65
+            elif recovery_found and recovery_day <= 2:
+                is_spring = True
+                confidence = 0.5
+
+            if is_spring:
+                springs.append({
+                    'date': idx,
+                    'breakdown_price': current_low,
+                    'support_level': support_level,
+                    'recovery_day': recovery_day,
+                    'recovery_price': recovery_close,
+                    'close_above_support': close_above_support,
+                    'vol_pattern': vol_pattern,
+                    'breakdown_volume': current_vol,
+                    'recovery_volume': recovery_vol,
+                    'volume_ma': vol_ma,
+                    'confidence': confidence,
+                    'price': current_low
+                })
+
         if springs:
             return {'detected': True, 'signals': springs, 'latest_spring': springs[-1]}
         return {'detected': False, 'reason': 'no_spring_found'}
 
     def detect_climax(self) -> Dict:
         """
-        检测高潮（CL）
-        威科夫高潮定义：成交量急剧放大（3-5倍平均成交量）+ 价格波动剧烈
-        收集所有高潮事件并返回最新的一次（而非历史最早的那次）
+        检测高潮（CL）- 向量化版本
         """
+        return self._analysis_cache.get_or_compute("climax", self._detect_climax_impl)
+
+    def _detect_climax_impl(self) -> Dict:
+        """向量化高潮检测实现"""
         if self.data is None or len(self.data) < 20:
             return {'detected': False}
-            
+        
         df = self.data.copy()
-        avg_range_series = (df['High'] - df['Low']).rolling(20).mean()
-        climax_events = []
         
-        for i in range(20, len(df)):
-            current_vol = df['Volume'].iloc[i]
-            vol_ma = df['Volume_MA20'].iloc[i]
-            daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
-            avg_range = avg_range_series.iloc[i]
-            
-            vol_spike = current_vol / vol_ma if vol_ma > 0 else 1
-            range_spike = daily_range / avg_range if avg_range > 0 else 1
-            
-            # 高潮条件：成交量3倍以上 + 价格波动1.5倍以上
-            if vol_spike >= 3.0 and range_spike >= 1.5:
-                price_change = df['Close'].iloc[i] - df['Close'].iloc[i-1]
-                climax_type = 'buying_climax' if price_change > 0 else 'selling_climax'
-                
-                climax_events.append({
-                    'detected': True,
-                    'type': climax_type,
-                    'date': df.index[i],
-                    'price': df['Close'].iloc[i],
-                    'volume': current_vol,       # 原始量，供 LPS/ST 比较
-                    'volume_ratio': vol_spike,
-                    'range_ratio': range_spike
-                })
+        # 向量化计算
+        avg_range = (df['High'] - df['Low']).rolling(20).mean()
+        vol_spike = df['Volume'] / df['Volume_MA20']
+        range_spike = (df['High'] - df['Low']) / avg_range
         
-        # 返回最新的高潮（最近发生的，对当前市场最有参考价值）
-        if climax_events:
-            return climax_events[-1]
-        return {'detected': False}
+        # 布尔掩码 - 一次性筛选所有高潮日
+        climax_mask = (vol_spike >= self.config.climax_vol_multiplier) & (range_spike >= self.config.climax_range_multiplier)
+        
+        if not climax_mask.any():
+            return {'detected': False}
+        
+        # 获取所有高潮日期
+        climax_dates = df.index[climax_mask]
+        latest_date = climax_dates[-1]
+        latest_idx = df.index.get_loc(latest_date)
+        
+        # 价格变化（与前一日对比）
+        price_change = df['Close'].iloc[latest_idx] - df['Close'].iloc[latest_idx - 1]
+        
+        return {
+            'detected': True,
+            'type': 'buying_climax' if price_change > 0 else 'selling_climax',
+            'date': latest_date,
+            'price': df['Close'].iloc[latest_idx],
+            'volume': df['Volume'].iloc[latest_idx],
+            'volume_ratio': vol_spike.iloc[latest_idx],
+            'range_ratio': range_spike.iloc[latest_idx]
+        }
 
     def detect_automatic_reaction(self, climax_event: Dict) -> Dict:
         """检测自动反弹/回落（AR）"""
@@ -618,225 +767,288 @@ class WyckoffAnalyzer:
         return {'detected': False}
 
     def detect_secondary_test(self, climax_event: Dict, ar_event: Dict) -> Dict:
-        """检测二次测试（ST） - 修复版
+        """检测二次测试（ST） - 向量化修复版
         修复：添加核心条件 - 成交量必须明显小于高潮（< 50%），避免误判
         """
         if not climax_event.get('detected') or not ar_event.get('detected'):
             return {'detected': False}
-        
+
         df = self.data.copy()
         try:
             climax_idx = df.index.get_loc(climax_event['date'])
         except KeyError:
             return {'detected': False}
-        
-        # 使用原始高潮量（修复: 高潮事件现在包含 'volume' 字段）
+
+        # 使用原始高潮量
         climax_raw_volume = climax_event.get('volume', df['Volume'].iloc[climax_idx])
-        
-        # 在AR后20天内寻找ST
+
+        # 向量化搜索：在高潮后25天内寻找ST
         search_end = min(climax_idx + 25, len(df))
+        if search_end <= climax_idx + 2:
+            return {'detected': False}
+
+        search_df = df.iloc[climax_idx + 2:search_end].copy()
+
+        # 核心条件：成交量必须明显缩量 (< 高潮量的 50%)
+        vol_filter = search_df['Volume'] < climax_raw_volume * 0.5
+
+        if not vol_filter.any():
+            return {'detected': False}
+
         st_events = []
-        
-        for i in range(climax_idx + 2, search_end):
-            current_vol = df['Volume'].iloc[i]
-            
-            # 核心修复：二次测试的成交量必须明显缩量 (< 高潮量的 50%)
-            if current_vol >= climax_raw_volume * 0.5:
-                continue  # 量太大，不是有效的二次测试
-            
-            if climax_event['type'] == 'buying_climax':
-                if df['High'].iloc[i] > df['High'].iloc[climax_idx] * 0.95:
+        seen_dates = set()
+
+        # 根据高潮类型向量化识别测试水平
+        if climax_event['type'] == 'buying_climax':
+            climax_high = df['High'].iloc[climax_idx]
+            test_mask = vol_filter & (search_df['High'] > climax_high * 0.95)
+
+            for idx in search_df[test_mask].index:
+                date_key = idx.strftime('%Y-%m-%d')
+                if date_key not in seen_dates:
+                    seen_dates.add(date_key)
                     st_events.append({
                         'detected': True,
                         'type': 'secondary_test',
-                        'date': df.index[i],
-                        'price': df['Close'].iloc[i],
+                        'date': idx,
+                        'price': search_df.loc[idx, 'Close'],
                         'test_level': 'high',
-                        'volume_ratio_vs_climax': round(current_vol / climax_raw_volume, 2)
+                        'volume_ratio_vs_climax': round(search_df.loc[idx, 'Volume'] / climax_raw_volume, 2)
                     })
-            else:
-                if df['Low'].iloc[i] < df['Low'].iloc[climax_idx] * 1.05:
+        else:
+            climax_low = df['Low'].iloc[climax_idx]
+            test_mask = vol_filter & (search_df['Low'] < climax_low * 1.05)
+
+            for idx in search_df[test_mask].index:
+                date_key = idx.strftime('%Y-%m-%d')
+                if date_key not in seen_dates:
+                    seen_dates.add(date_key)
                     st_events.append({
                         'detected': True,
                         'type': 'secondary_test',
-                        'date': df.index[i],
-                        'price': df['Close'].iloc[i],
+                        'date': idx,
+                        'price': search_df.loc[idx, 'Close'],
                         'test_level': 'low',
-                        'volume_ratio_vs_climax': round(current_vol / climax_raw_volume, 2)
+                        'volume_ratio_vs_climax': round(search_df.loc[idx, 'Volume'] / climax_raw_volume, 2)
                     })
-        
+
         if st_events:
             return st_events[-1]  # 返回最近的二次测试
         return {'detected': False}
 
     def detect_upthrust(self, lookback: int = 20) -> Dict:
-        """检测Upthrust（假突破）"""
+        """检测Upthrust（假突破）- 带缓存"""
+        cache_key = f"upthrust_{lookback}"
+        return self._analysis_cache.get_or_compute(
+            cache_key, self._detect_upthrust_impl, lookback
+        )
+
+    def _detect_upthrust_impl(self, lookback: int = 20) -> Dict:
+        """Upthrust检测核心实现 - 向量化版本"""
         if self.data is None or len(self.data) < lookback + 10:
             return {}
 
         df = self.data.tail(lookback + 10).copy()
+
+        # 向量化计算20日滚动最高点作为阻力位
+        df['resistance_level'] = df['High'].rolling(window=20, min_periods=10).max().shift(1)
+
+        # 获取波动率分类
+        volatility_class = self._classify_volatility()
+        threshold_map = {'low': 0.03, 'medium': 0.04, 'high': 0.05}
+        max_breakout_pct = threshold_map.get(volatility_class, 0.04)
+
+        # 向量化识别假突破条件
+        breakout_mask = (
+            (df['resistance_level'] < df['High']) &
+            (df['High'] <= df['resistance_level'] * (1 + max_breakout_pct))
+        )
+
+        if not breakout_mask.any():
+            return {'detected': False}
+
+        # 计算日内位置
+        df['daily_range'] = df['High'] - df['Low']
+        df['close_from_high'] = (
+            (df['High'] - df['Close']) / df['daily_range']
+        ).fillna(0.0)
+
+        # 向量化检查未来5天的最低点
+        future_lows = pd.DataFrame({
+            f'low_{i}': df['Low'].shift(-i) for i in range(1, 6)
+        })
+        df['future_low'] = future_lows.min(axis=1)
+        df['future_low_idx'] = future_lows.idxmin(axis=1).replace({
+            f'low_{i}': i for i in range(1, 6)
+        }).astype(float)
+
+        # 计算未来平均成交量
+        future_vols = pd.DataFrame({
+            f'vol_{i}': df['Volume'].shift(-i) for i in range(1, 6)
+        })
+        df['future_avg_vol'] = future_vols.mean(axis=1)
+
+        # 过滤有效的Upthrust候选
+        valid_upthrust_mask = (
+            breakout_mask &
+            (df['future_low'] < df['resistance_level']) &
+            (df['future_low_idx'] <= 3) &
+            (df['close_from_high'] > 0.7) &
+            (df['Volume'] > df['future_avg_vol'] * 1.2)
+        )
+
+        if not valid_upthrust_mask.any():
+            return {'detected': False}
+
+        # 收集有效的Upthrust事件
         upthrusts = []
+        seen_dates = set()
 
-        for i in range(10, len(df)):
-            current_high = df['High'].iloc[i]
-            current_close = df['Close'].iloc[i]
+        for idx in df[valid_upthrust_mask].index:
+            date_key = idx.strftime('%Y-%m-%d')
+            if date_key in seen_dates:
+                continue
+            seen_dates.add(date_key)
 
-            past_highs = df['High'].iloc[i-20:i]
-            resistance_level = past_highs.max()
-
-            volatility_class = self._classify_volatility()
-            threshold_map = {'low': 0.03, 'medium': 0.04, 'high': 0.05}
-            max_breakout_pct = threshold_map.get(volatility_class, 0.04)
-
-            # 突破阻力位，但在允许的假突破范围内
-            if resistance_level < current_high <= resistance_level * (1 + max_breakout_pct):
-                future_data = df.iloc[i:min(i+5, len(df))]
-                future_low = future_data['Low'].min()
-                rejection_days = (future_data['Low'].idxmin() - df.index[i]).days if len(future_data) > 1 else 0
-
-                breakout_vol = df['Volume'].iloc[i]
-                rejection_vol = future_data['Volume'].mean()
-                vol_ma = df['Volume_MA20'].iloc[i]
-
-                # 收盘位置验证（需在日内低位，距高点 > 70%）
-                daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
-                if daily_range > 0:
-                    close_from_high = (current_high - current_close) / daily_range
-                else:
-                    close_from_high = 1.0 if current_close <= resistance_level else 0.0
-
-                # 威科夫 Upthrust 成交量逻辑（修复：原逻辑完全相反）
-                # 正确逻辑：
-                #   突破日（诱多日）：主力放量引诱散户追高
-                #   拒绝日（回落日）：买盘枯竭，量能萎缩
-                # 所以应该是：breakout_vol（大）> rejection_vol（小）
-                is_upthrust = (
-                    future_low < resistance_level and
-                    rejection_days <= 3 and
-                    close_from_high > 0.7 and
-                    breakout_vol > rejection_vol * 1.2   # 突破日放量，拒绝日缩量
-                )
-
-                if is_upthrust:
-                    upthrusts.append({
-                        'date': df.index[i],
-                        'breakout_price': current_high,
-                        'resistance_level': resistance_level,
-                        'rejection_price': future_low,
-                        'rejection_days': rejection_days,
-                        'close_from_high': close_from_high,
-                        'breakout_volume': breakout_vol,
-                        'rejection_volume': rejection_vol,
-                        'volume_ma': vol_ma
-                    })
+            upthrusts.append({
+                'date': idx,
+                'breakout_price': df.loc[idx, 'High'],
+                'resistance_level': df.loc[idx, 'resistance_level'],
+                'rejection_price': df.loc[idx, 'future_low'],
+                'rejection_days': int(df.loc[idx, 'future_low_idx']),
+                'close_from_high': round(df.loc[idx, 'close_from_high'], 3),
+                'breakout_volume': df.loc[idx, 'Volume'],
+                'rejection_volume': df.loc[idx, 'future_avg_vol'],
+                'volume_ma': df.loc[idx, 'Volume_MA20']
+            })
 
         if upthrusts:
             return {'detected': True, 'upthrusts': upthrusts, 'latest_upthrust': upthrusts[-1]}
         return {'detected': False}
 
     def detect_sos(self) -> Dict:
-        """检测SOS（Sign of Strength - 强势信号）"""
+        """检测SOS（Sign of Strength - 强势信号）- 向量化版本"""
+        return self._analysis_cache.get_or_compute("sos", self._detect_sos_impl)
+
+    def _detect_sos_impl(self) -> Dict:
+        """向量化SOS检测实现"""
         if self.data is None or len(self.data) < 60:
             return {}
 
         df = self.data.copy()
-        sos_signals = []
-
         volatility_class = self._classify_volatility()
         threshold_map = {'low': 0.02, 'medium': 0.035, 'high': 0.05}
         min_price_change = threshold_map.get(volatility_class, 0.035)
 
-        for i in range(20, len(df)):
-            current_close = df['Close'].iloc[i]
-            current_vol = df['Volume'].iloc[i]
-            vol_ma = df['Volume_MA20'].iloc[i]
+        # 向量化计算
+        past_high = df['High'].rolling(20).max().shift(1)
+        price_change = df['Close'].pct_change()
+        vol_ratio = df['Volume'] / df['Volume_MA20'].replace(0, np.nan)
+        daily_range = df['High'] - df['Low']
+        
+        # 收盘位置计算 (确保是 Series 类型)
+        close_position = pd.Series(
+            np.where(
+                daily_range > 0,
+                (df['Close'] - df['Low']) / daily_range,
+                np.where(price_change > 0, 1.0, 0.0)
+            ),
+            index=df.index
+        )
+        
+        # 涨停板判断
+        is_limit_up = price_change >= 0.095
+        
+        # SOS 掩码
+        sos_mask = (
+            (df['Close'] > past_high) &
+            (price_change > min_price_change) &
+            (close_position > 0.7) &
+            ((vol_ratio > 1.5) | is_limit_up)
+        )
+        
+        # 排除前20天（无有效过去高点）
+        sos_mask.iloc[:20] = False
+        
+        if not sos_mask.any():
+            return {'detected': False}
+            
+        # 收集信号
+        sos_indices = np.where(sos_mask)[0]
+        sos_signals = []
+        for idx in sos_indices:
+            sos_signals.append({
+                'date': df.index[idx],
+                'price': df['Close'].iloc[idx],
+                'volume': df['Volume'].iloc[idx],
+                'volume_ratio': vol_ratio.iloc[idx],
+                'price_change': price_change.iloc[idx],
+                'breakthrough_level': past_high.iloc[idx]
+            })
 
-            past_high = df['High'].iloc[i-20:i].max()
-
-            if current_close > past_high:
-                vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1
-                price_change = (current_close - df['Close'].iloc[i-1]) / df['Close'].iloc[i-1]
-                daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
-                
-                if daily_range > 0:
-                    close_position = (current_close - df['Low'].iloc[i]) / daily_range
-                else:
-                    close_position = 1.0 if price_change > 0 else 0.0
-
-                # 涨停板特殊处理 (A股涨幅 >= 9.5%)，涨停时成交量可能萎缩，免除量比要求
-                is_limit_up = price_change >= 0.095
-                
-                is_sos = (
-                    price_change > min_price_change and
-                    close_position > 0.7 and
-                    (vol_ratio > 1.5 or is_limit_up)
-                )
-
-                if is_sos:
-                    sos_signals.append({
-                        'date': df.index[i],
-                        'price': current_close,
-                        'volume': current_vol,       # 原始成交量，供 LPS 比较
-                        'volume_ratio': vol_ratio,
-                        'price_change': price_change,
-                        'breakthrough_level': past_high
-                    })
-
-        if sos_signals:
-            return {'detected': True, 'signals': sos_signals, 'latest': sos_signals[-1]}
-        return {'detected': False}
+        return {'detected': True, 'signals': sos_signals, 'latest': sos_signals[-1]}
 
     def detect_sow(self) -> Dict:
-        """检测SOW（Sign of Weakness - 弱势信号）"""
+        """检测SOW（Sign of Weakness - 弱势信号）- 带缓存"""
+        return self._analysis_cache.get_or_compute("sow", self._detect_sow_impl)
+
+    def _detect_sow_impl(self) -> Dict:
+        """SOW检测核心实现 (向量化版本)"""
         if self.data is None or len(self.data) < 60:
             return {}
 
         df = self.data.copy()
-        sow_signals = []
-
         volatility_class = self._classify_volatility()
         threshold_map = {'low': -0.02, 'medium': -0.035, 'high': -0.05}
         max_price_drop = threshold_map.get(volatility_class, -0.035)
 
-        for i in range(20, len(df)):
-            current_close = df['Close'].iloc[i]
-            current_vol = df['Volume'].iloc[i]
-            vol_ma = df['Volume_MA20'].iloc[i]
+        # 向量化计算
+        past_low = df['Low'].rolling(20).min().shift(1)
+        price_change = df['Close'].pct_change()
+        vol_ratio = df['Volume'] / df['Volume_MA20'].replace(0, np.nan)
+        daily_range = df['High'] - df['Low']
+        
+        # 收盘位置计算 (SOW 是从高点算起的跌幅位置，确保是 Series 类型)
+        close_position = pd.Series(
+            np.where(
+                daily_range > 0,
+                (df['High'] - df['Close']) / daily_range,
+                np.where(price_change < 0, 1.0, 0.0)
+            ),
+            index=df.index
+        )
+        
+        # 跌停板判断
+        is_limit_down = price_change <= -0.095
 
-            past_low = df['Low'].iloc[i-20:i].min()
+        # SOW 掩码
+        sow_mask = (
+            (df['Close'] < past_low) &
+            (price_change < max_price_drop) &
+            (close_position > 0.7) &
+            ((vol_ratio > 1.5) | is_limit_down)
+        )
+        
+        # 排除前20天
+        sow_mask.iloc[:20] = False
 
-            if current_close < past_low:
-                vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1
-                price_change = (current_close - df['Close'].iloc[i-1]) / df['Close'].iloc[i-1]
-                daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
-                
-                if daily_range > 0:
-                    close_position = (df['High'].iloc[i] - current_close) / daily_range
-                else:
-                    close_position = 1.0 if price_change < 0 else 0.0
+        if not sow_mask.any():
+            return {'detected': False}
+            
+        # 收集信号
+        sow_indices = np.where(sow_mask)[0]
+        sow_signals = []
+        for idx in sow_indices:
+            sow_signals.append({
+                'date': df.index[idx],
+                'price': df['Close'].iloc[idx],
+                'volume': df['Volume'].iloc[idx],
+                'volume_ratio': vol_ratio.iloc[idx],
+                'price_change': price_change.iloc[idx],
+                'breakdown_level': past_low.iloc[idx]
+            })
 
-                # 跌停板特殊处理 (A股跌幅 <= -9.5%)，跌停时量比可能萎缩，免除量比要求
-                is_limit_down = price_change <= -0.095
-
-                is_sow = (
-                    price_change < max_price_drop and
-                    close_position > 0.7 and
-                    (vol_ratio > 1.5 or is_limit_down)
-                )
-
-                if is_sow:
-                    sow_signals.append({
-                        'date': df.index[i],
-                        'price': current_close,
-                        'volume': current_vol,       # 原始成交量，供 LPSY 比较
-                        'volume_ratio': vol_ratio,
-                        'price_change': price_change,
-                        'breakdown_level': past_low
-                    })
-
-        if sow_signals:
-            return {'detected': True, 'signals': sow_signals, 'latest': sow_signals[-1]}
-        return {'detected': False}
+        return {'detected': True, 'signals': sow_signals, 'latest': sow_signals[-1]}
 
     def detect_lps(self, days_since_sos: int = 20, sos_result: Dict = None) -> Dict:
         """检测 LPS（Last Point of Support - 最后支撑点） - 修复版
@@ -939,6 +1151,456 @@ class WyckoffAnalyzer:
                 'rally_pct': (lpsy_price - latest_sow['price']) / latest_sow['price']
             }
         return {'detected': False}
+
+    def detect_sos_variants(self) -> Dict:
+        """
+        检测SOS变体形态 - 增强版
+        包括：跳空缺口SOS、巨量SOS、突破SOS等多种变体
+        """
+        if self.data is None or len(self.data) < 60:
+            return {'detected': False, 'reason': 'insufficient_data'}
+
+        sos_variants = []
+        df = self.data.copy()
+        volatility_class = self._classify_volatility()
+        threshold_map = {'low': 0.02, 'medium': 0.035, 'high': 0.05}
+        min_price_change = threshold_map.get(volatility_class, 0.035)
+
+        # 计算技术指标
+        df['Volume_MA20'] = df['Volume'].rolling(20).mean()
+        df['Price_Change'] = df['Close'].pct_change()
+        df['Gap'] = (df['Open'] - df['High'].shift(1)) / df['High'].shift(1)
+
+        # 1. 跳空缺口SOS (Gap SOS)
+        gap_threshold = 0.015  # 1.5%以上的向上跳空
+        gap_sos_mask = (
+            (df['Gap'] > gap_threshold) &
+            (df['Volume'] > df['Volume_MA20'] * 1.5) &
+            (df['Close'] > df['Open'])  # 跳空后收阳线
+        )
+
+        for idx in df[gap_sos_mask].tail(3).index:
+            sos_variants.append({
+                'type': 'gap_sos',
+                'date': idx,
+                'price': df.loc[idx, 'Close'],
+                'volume': df.loc[idx, 'Volume'],
+                'gap_size': round(df.loc[idx, 'Gap'] * 100, 2),
+                'strength': 'strong',
+                'description': f"向上跳空{round(df.loc[idx, 'Gap'] * 100, 1)}%且放量，强势突破信号"
+            })
+
+        # 2. 巨量SOS (High Volume SOS)
+        high_vol_sos_mask = (
+            (df['Volume'] > df['Volume_MA20'] * 2.5) &
+            (df['Price_Change'] > min_price_change) &
+            (df['Close'] > df['Open'])
+        )
+
+        for idx in df[high_vol_sos_mask].tail(3).index:
+            volume_ratio = df.loc[idx, 'Volume'] / df.loc[idx, 'Volume_MA20']
+            sos_variants.append({
+                'type': 'high_volume_sos',
+                'date': idx,
+                'price': df.loc[idx, 'Close'],
+                'volume': df.loc[idx, 'Volume'],
+                'volume_ratio': round(volume_ratio, 1),
+                'price_change': round(df.loc[idx, 'Price_Change'] * 100, 2),
+                'strength': 'very_strong',
+                'description': f"巨量突破（量比{round(volume_ratio, 1)}倍），超级强势信号"
+            })
+
+        # 3. 连续突破SOS (Consecutive Breakthrough SOS)
+        df['Resistance'] = df['High'].rolling(20).max()
+        breakthrough_mask = (
+            (df['Close'] > df['Resistance'].shift(1)) &
+            (df['Volume'] > df['Volume_MA20'] * 1.3)
+        )
+
+        # 寻找连续突破
+        for i in range(len(df) - 2):
+            if breakthrough_mask.iloc[i] and breakthrough_mask.iloc[i + 1]:
+                sos_variants.append({
+                    'type': 'consecutive_sos',
+                    'date': df.index[i + 1],
+                    'price': df['Close'].iloc[i + 1],
+                    'volume': df['Volume'].iloc[i + 1],
+                    'strength': 'strong',
+                    'description': "连续两天放量突破，持续性强势信号"
+                })
+                break
+
+        # 4. 底部反转SOS (Bottom Reversal SOS)
+        # 检测长期下跌后的强力反转
+        df['MA50'] = df['Close'].rolling(50).mean()
+        bottom_reversal_mask = (
+            (df['Close'] < df['MA50'] * 0.95) &  # 价格低于50日均线5%以上
+            (df['Price_Change'] > min_price_change * 2) &  # 大幅上涨
+            (df['Volume'] > df['Volume_MA20'] * 2) &  # 大幅放量
+            (df['Close'] > df['Open'])  # 收阳线
+        )
+
+        for idx in df[bottom_reversal_mask].tail(2).index:
+            sos_variants.append({
+                'type': 'bottom_reversal_sos',
+                'date': idx,
+                'price': df.loc[idx, 'Close'],
+                'volume': df.loc[idx, 'Volume'],
+                'price_change': round(df.loc[idx, 'Price_Change'] * 100, 2),
+                'strength': 'very_strong',
+                'description': "长期下跌后的底部放量反转，潜在趋势转变信号"
+            })
+
+        if sos_variants:
+            return {
+                'detected': True,
+                'variants': sos_variants,
+                'total_signals': len(sos_variants),
+                'latest_variant': sos_variants[-1],
+                'overall_strength': self._calculate_overall_sos_strength(sos_variants)
+            }
+
+        return {'detected': False, 'reason': 'no_sos_variants_found'}
+
+    def detect_sow_variants(self) -> Dict:
+        """
+        检测SOW变体形态 - 增强版
+        包括：跳空缺口SOW、巨量SOW、破位SOW等多种变体
+        """
+        if self.data is None or len(self.data) < 60:
+            return {'detected': False, 'reason': 'insufficient_data'}
+
+        sow_variants = []
+        df = self.data.copy()
+        volatility_class = self._classify_volatility()
+        threshold_map = {'low': 0.02, 'medium': 0.035, 'high': 0.05}
+        min_price_change = threshold_map.get(volatility_class, 0.035)
+
+        # 计算技术指标
+        df['Volume_MA20'] = df['Volume'].rolling(20).mean()
+        df['Price_Change'] = df['Close'].pct_change()
+        df['Gap'] = (df['Open'] - df['Low'].shift(1)) / df['Low'].shift(1)
+
+        # 1. 跳空缺口SOW (Gap SOW)
+        gap_threshold = 0.015  # 1.5%以上的向下跳空
+        gap_sow_mask = (
+            (df['Gap'] < -gap_threshold) &
+            (df['Volume'] > df['Volume_MA20'] * 1.5) &
+            (df['Close'] < df['Open'])  # 跳空后收阴线
+        )
+
+        for idx in df[gap_sow_mask].tail(3).index:
+            sow_variants.append({
+                'type': 'gap_sow',
+                'date': idx,
+                'price': df.loc[idx, 'Close'],
+                'volume': df.loc[idx, 'Volume'],
+                'gap_size': round(abs(df.loc[idx, 'Gap']) * 100, 2),
+                'strength': 'strong',
+                'description': f"向下跳空{round(abs(df.loc[idx, 'Gap']) * 100, 1)}%且放量，弱势突破信号"
+            })
+
+        # 2. 巨量SOW (High Volume SOW)
+        high_vol_sow_mask = (
+            (df['Volume'] > df['Volume_MA20'] * 2.5) &
+            (df['Price_Change'] < -min_price_change) &
+            (df['Close'] < df['Open'])
+        )
+
+        for idx in df[high_vol_sow_mask].tail(3).index:
+            volume_ratio = df.loc[idx, 'Volume'] / df.loc[idx, 'Volume_MA20']
+            sow_variants.append({
+                'type': 'high_volume_sow',
+                'date': idx,
+                'price': df.loc[idx, 'Close'],
+                'volume': df.loc[idx, 'Volume'],
+                'volume_ratio': round(volume_ratio, 1),
+                'price_change': round(df.loc[idx, 'Price_Change'] * 100, 2),
+                'strength': 'very_strong',
+                'description': f"巨量下跌（量比{round(volume_ratio, 1)}倍），超级弱势信号"
+            })
+
+        # 3. 破位SOW (Breakdown SOW)
+        df['Support'] = df['Low'].rolling(20).min()
+        breakdown_mask = (
+            (df['Close'] < df['Support'].shift(1)) &
+            (df['Volume'] > df['Volume_MA20'] * 1.3)
+        )
+
+        for idx in df[breakdown_mask].tail(3).index:
+            sow_variants.append({
+                'type': 'breakdown_sow',
+                'date': idx,
+                'price': df.loc[idx, 'Close'],
+                'volume': df.loc[idx, 'Volume'],
+                'support_level': df.loc[idx, 'Support'],
+                'strength': 'strong',
+                'description': "跌破支撑位且放量，技术性破位信号"
+            })
+
+        # 4. 顶部反转SOW (Top Reversal SOW)
+        # 检测长期上涨后的强力反转
+        df['MA50'] = df['Close'].rolling(50).mean()
+        top_reversal_mask = (
+            (df['Close'] > df['MA50'] * 1.05) &  # 价格高于50日均线5%以上
+            (df['Price_Change'] < -min_price_change * 2) &  # 大幅下跌
+            (df['Volume'] > df['Volume_MA20'] * 2) &  # 大幅放量
+            (df['Close'] < df['Open'])  # 收阴线
+        )
+
+        for idx in df[top_reversal_mask].tail(2).index:
+            sow_variants.append({
+                'type': 'top_reversal_sow',
+                'date': idx,
+                'price': df.loc[idx, 'Close'],
+                'volume': df.loc[idx, 'Volume'],
+                'price_change': round(df.loc[idx, 'Price_Change'] * 100, 2),
+                'strength': 'very_strong',
+                'description': "长期上涨后的顶部放量反转，潜在趋势转变信号"
+            })
+
+        if sow_variants:
+            return {
+                'detected': True,
+                'variants': sow_variants,
+                'total_signals': len(sow_variants),
+                'latest_variant': sow_variants[-1],
+                'overall_strength': self._calculate_overall_sow_strength(sow_variants)
+            }
+
+        return {'detected': False, 'reason': 'no_sow_variants_found'}
+
+    def _calculate_overall_sos_strength(self, variants: List[Dict]) -> str:
+        """计算SOS变体的总体强度"""
+        if not variants:
+            return 'none'
+
+        strength_scores = {
+            'very_strong': 3,
+            'strong': 2,
+            'moderate': 1,
+            'weak': 0
+        }
+
+        total_score = sum(strength_scores.get(v.get('strength', 'weak'), 0) for v in variants)
+
+        if total_score >= 6:
+            return 'very_strong'
+        elif total_score >= 4:
+            return 'strong'
+        elif total_score >= 2:
+            return 'moderate'
+        else:
+            return 'weak'
+
+    def _calculate_overall_sow_strength(self, variants: List[Dict]) -> str:
+        """计算SOW变体的总体强度"""
+        # 使用与SOS相同的评分逻辑
+        return self._calculate_overall_sos_strength(variants)
+
+    def detect_pattern_confirmation(self) -> Dict:
+        """
+        形态确认机制 - 检查形态是否得到后续价格行为的确认
+        确认原则：
+        1. Spring确认：后续价格上涨且不创新低
+        2. SOS确认：后续持续上涨且缩量回调
+        3. Upthrust确认：后续确实下跌且量能配合
+        """
+        if self.data is None or len(self.data) < 20:
+            return {'detected': False, 'reason': 'insufficient_data'}
+
+        confirmation_results = {}
+
+        # 检查Spring确认
+        spring_result = self.detect_spring()
+        if spring_result.get('detected'):
+            confirmation_results['spring'] = self._check_spring_confirmation(spring_result)
+
+        # 检查SOS确认
+        sos_result = self.detect_sos()
+        if sos_result.get('detected'):
+            confirmation_results['sos'] = self._check_sos_confirmation(sos_result)
+
+        # 检查Upthrust确认
+        upthrust_result = self.detect_upthrust()
+        if upthrust_result.get('detected'):
+            confirmation_results['upthrust'] = self._check_upthrust_confirmation(upthrust_result)
+
+        if confirmation_results:
+            confirmed_patterns = {
+                k: v for k, v in confirmation_results.items() if v.get('confirmed', False)
+            }
+
+            return {
+                'has_confirmation': len(confirmed_patterns) > 0,
+                'confirmation_results': confirmation_results,
+                'confirmed_patterns': list(confirmed_patterns.keys()),
+                'total_confirmations': len(confirmed_patterns),
+                'reliability_score': self._calculate_reliability_score(confirmation_results)
+            }
+
+        return {'has_confirmation': False, 'reason': 'no_patterns_to_confirm'}
+
+    def _check_spring_confirmation(self, spring_result: Dict) -> Dict:
+        """检查Spring形态是否得到确认"""
+        if not spring_result.get('signals'):
+            return {'confirmed': False, 'reason': 'no_spring_signals'}
+
+        latest_spring = spring_result['signals'][-1]
+        spring_date = latest_spring['date']
+        spring_price = latest_spring['breakdown_price']
+
+        # 检查后续价格行为
+        subsequent_data = self.data[self.data.index > spring_date].head(10)
+
+        if len(subsequent_data) < 3:
+            return {'confirmed': False, 'reason': 'insufficient_subsequent_data'}
+
+        # 确认条件：
+        # 1. 后续价格没有创新低
+        # 2. 至少有一根K线收盘价高于Spring日的收盘价
+        # 3. 整体呈上升趋势
+
+        no_new_low = subsequent_data['Low'].min() >= spring_price * 0.98
+        higher_close = (subsequent_data['Close'] > subsequent_data['Open']).sum() >= len(subsequent_data) * 0.6
+
+        # 简单趋势检查：最近收盘价高于3天前
+        if len(subsequent_data) >= 3:
+            uptrend = subsequent_data['Close'].iloc[-1] > subsequent_data['Close'].iloc[0]
+        else:
+            uptrend = False
+
+        confirmed = no_new_low and (higher_close or uptrend)
+
+        return {
+            'confirmed': confirmed,
+            'no_new_low': no_new_low,
+            'higher_close_ratio': higher_close,
+            'uptrend': uptrend,
+            'confirmation_strength': 'strong' if confirmed and uptrend else ('moderate' if confirmed else 'weak')
+        }
+
+    def _check_sos_confirmation(self, sos_result: Dict) -> Dict:
+        """检查SOS形态是否得到确认"""
+        if not sos_result.get('signals'):
+            return {'confirmed': False, 'reason': 'no_sos_signals'}
+
+        latest_sos = sos_result['signals'][-1]
+        sos_date = latest_sos['date']
+        breakthrough_level = latest_sos['breakthrough_level']
+
+        # 检查后续价格行为
+        subsequent_data = self.data[self.data.index > sos_date].head(10)
+
+        if len(subsequent_data) < 3:
+            return {'confirmed': False, 'reason': 'insufficient_subsequent_data'}
+
+        # 确认条件：
+        # 1. 价格保持在突破位上方
+        # 2. 有适当的缩量回调（健康回调）
+        # 3. 整体趋势向上
+
+        above_breakthrough = subsequent_data['Close'].min() >= breakthrough_level * 0.97
+
+        # 检查是否有健康的缩量回调
+        volume_ma = self.data['Volume_MA20']
+        subsequent_volume = self.data[self.data.index > sos_date]['Volume'].head(5)
+
+        if len(subsequent_volume) > 0:
+            pullback_volume_ok = subsequent_volume.mean() <= volume_ma.mean() * 0.9
+        else:
+            pullback_volume_ok = False
+
+        # 趋势检查
+        if len(subsequent_data) >= 3:
+            uptrend = subsequent_data['Close'].iloc[-1] > subsequent_data['Close'].iloc[0]
+        else:
+            uptrend = False
+
+        confirmed = above_breakthrough and uptrend
+
+        return {
+            'confirmed': confirmed,
+            'above_breakthrough': above_breakthrough,
+            'pullback_volume_ok': pullback_volume_ok,
+            'uptrend': uptrend,
+            'confirmation_strength': 'strong' if confirmed and pullback_volume_ok else ('moderate' if confirmed else 'weak')
+        }
+
+    def _check_upthrust_confirmation(self, upthrust_result: Dict) -> Dict:
+        """检查Upthrust形态是否得到确认"""
+        if not upthrust_result.get('detected'):
+            return {'confirmed': False, 'reason': 'no_upthrust_signals'}
+
+        upthrusts = upthrust_result.get('upthrusts', [])
+        if not upthrusts:
+            return {'confirmed': False, 'reason': 'no_upthrust_details'}
+
+        latest_upthrust = upthrusts[-1]
+        upthrust_date = latest_upthrust['date']
+        resistance_level = latest_upthrust['resistance_level']
+
+        # 检查后续价格行为
+        subsequent_data = self.data[self.data.index > upthrust_date].head(10)
+
+        if len(subsequent_data) < 3:
+            return {'confirmed': False, 'reason': 'insufficient_subsequent_data'}
+
+        # 确认条件：
+        # 1. 价格确实跌回阻力位下方
+        # 2. 没有再次突破阻力位
+        # 3. 整体呈下降趋势
+
+        below_resistance = subsequent_data['Close'].max() < resistance_level * 1.02
+
+        # 检查是否有再次尝试突破
+        no_retest = subsequent_data['High'].max() < resistance_level * 1.01
+
+        # 趋势检查
+        if len(subsequent_data) >= 3:
+            downtrend = subsequent_data['Close'].iloc[-1] < subsequent_data['Close'].iloc[0]
+        else:
+            downtrend = False
+
+        confirmed = below_resistance and (no_retest or downtrend)
+
+        return {
+            'confirmed': confirmed,
+            'below_resistance': below_resistance,
+            'no_retest': no_retest,
+            'downtrend': downtrend,
+            'confirmation_strength': 'strong' if confirmed and downtrend else ('moderate' if confirmed else 'weak')
+        }
+
+    def _calculate_reliability_score(self, confirmation_results: Dict) -> float:
+        """
+        根据形态确认结果计算信号可靠性评分
+        范围：0-1，越高表示信号越可靠
+        """
+        if not confirmation_results:
+            return 0.0
+
+        total_score = 0.0
+        count = 0
+
+        for pattern_type, confirmation in confirmation_results.items():
+            if not confirmation.get('confirmed', False):
+                continue
+
+            strength = confirmation.get('confirmation_strength', 'weak')
+            if strength == 'strong':
+                total_score += 1.0
+            elif strength == 'moderate':
+                total_score += 0.7
+            elif strength == 'weak':
+                total_score += 0.4
+
+            count += 1
+
+        if count == 0:
+            return 0.0
+
+        return min(total_score / count, 1.0)
 
     def detect_divergence(self, window: int = 30) -> Dict:
         """量价/RSI背离检测
@@ -1475,6 +2137,217 @@ class WyckoffAnalyzer:
             return 'disagreement'
         return 'unknown'
 
+    def analyze_timeframe_resonance(self) -> Dict:
+        """
+        增强的多时间框架共振分析
+        分析日线、周线、月线的威科夫形态共振情况
+        """
+        # 获取日线分析结果
+        daily_analysis = self.identify_phase()
+        daily_events = daily_analysis.get('events_detected', {}) or {}
+
+        # 检查周线和月线是否出现相似形态
+        weekly_resonance = self._check_timeframe_signal_resonance('weekly')
+        monthly_resonance = self._check_timeframe_signal_resonance('monthly')
+
+        # 计算共振强度
+        resonance_strength = 0
+        resonance_signals = []
+
+        # 检查Spring共振
+        spring_upthrust = daily_events.get('spring_upthrust') or {}
+        if spring_upthrust.get('_type') == 'spring':
+            resonance_strength += 1
+            resonance_signals.append('daily_spring')
+
+        if weekly_resonance.get('has_spring'):
+            resonance_strength += 2
+            resonance_signals.append('weekly_spring')
+
+        if monthly_resonance.get('has_spring'):
+            resonance_strength += 3
+            resonance_signals.append('monthly_spring')
+
+        # 检查SOS共振
+        sos_sow = daily_events.get('sos_sow') or {}
+        if sos_sow.get('_type') == 'sos':
+            resonance_strength += 1
+            resonance_signals.append('daily_sos')
+
+        if weekly_resonance.get('has_sos'):
+            resonance_strength += 2
+            resonance_signals.append('weekly_sos')
+
+        if monthly_resonance.get('has_sos'):
+            resonance_strength += 3
+            resonance_signals.append('monthly_sos')
+
+        # 检查趋势共振
+        weekly_trend = self._get_weekly_trend()
+        monthly_trend = self._get_monthly_trend()
+
+        trend_agreement = False
+        if 'Accumulation' in daily_analysis.get('phase', '') or 'Markup' in daily_analysis.get('phase', ''):
+            trend_agreement = (weekly_trend == 'bullish' and monthly_trend != 'bearish')
+        elif 'Distribution' in daily_analysis.get('phase', '') or 'Markdown' in daily_analysis.get('phase', ''):
+            trend_agreement = (weekly_trend == 'bearish' and monthly_trend != 'bullish')
+
+        if trend_agreement:
+            resonance_strength += 2
+            resonance_signals.append('trend_agreement')
+
+        # 评估共振等级
+        if resonance_strength >= 8:
+            resonance_level = 'strong_resonance'
+            implication = '多时间框架强烈共振，信号可靠性极高'
+        elif resonance_strength >= 5:
+            resonance_level = 'moderate_resonance'
+            implication = '多时间框架共振良好，信号可靠性较高'
+        elif resonance_strength >= 2:
+            resonance_level = 'weak_resonance'
+            implication = '多时间框架有共振迹象，需要进一步确认'
+        else:
+            resonance_level = 'no_resonance'
+            implication = '多时间框架无共振，信号可靠性较低'
+
+        return {
+            'resonance_level': resonance_level,
+            'resonance_strength': resonance_strength,
+            'resonance_signals': resonance_signals,
+            'implication': implication,
+            'daily_phase': daily_analysis.get('phase', 'unknown'),
+            'weekly_trend': weekly_trend,
+            'monthly_trend': monthly_trend,
+            'trend_agreement': trend_agreement,
+            'weekly_analysis': weekly_resonance,
+            'monthly_analysis': monthly_resonance,
+            'trading_recommendation': self._get_resonance_trading_recommendation(resonance_level, daily_analysis)
+        }
+
+    def _check_timeframe_signal_resonance(self, timeframe: str) -> Dict:
+        """
+        检查特定时间框架的威科夫形态信号
+        timeframe: 'weekly' 或 'monthly'
+        """
+        if self.data is None or len(self.data) < 60:
+            return {}
+
+        try:
+            # 重采样数据
+            if timeframe == 'weekly':
+                df = self.data.copy()
+                df['Week'] = df.index.isocalendar().week
+                df['Year'] = df.index.isocalendar().year
+                resampled = df.groupby(['Year', 'Week']).agg({
+                    'Open': 'first', 'High': 'max', 'Low': 'min',
+                    'Close': 'last', 'Volume': 'sum'
+                })
+                min_periods = 20
+            else:  # monthly
+                df = self.data.copy()
+                df['Month'] = df.index.month
+                df['Year'] = df.index.year
+                resampled = df.groupby(['Year', 'Month']).agg({
+                    'Open': 'first', 'High': 'max', 'Low': 'min',
+                    'Close': 'last', 'Volume': 'sum'
+                })
+                min_periods = 12
+
+            if len(resampled) < min_periods:
+                return {'insufficient_data': True}
+
+            # 简化的形态检测（基于关键指标）
+            has_spring = False
+            has_sos = False
+            has_upthrust = False
+
+            # 检测Spring（低位支撑测试）
+            recent_data = resampled.tail(10)
+            low = recent_data['Low'].min()
+            recent_low = recent_data['Low'].iloc[-1]
+
+            # 简化Spring检测：接近最低点后反弹
+            if recent_low <= low * 1.02:
+                recent_close = recent_data['Close'].iloc[-1]
+                if recent_close > recent_data['Open'].iloc[-1]:
+                    has_spring = True
+
+            # 检测SOS（放量突破）
+            recent_data['Volume_MA'] = recent_data['Volume'].rolling(5).mean()
+            latest_vol_ratio = recent_data['Volume'].iloc[-1] / recent_data['Volume_MA'].iloc[-1]
+
+            if latest_vol_ratio > 1.3:
+                price_change = (recent_data['Close'].iloc[-1] - recent_data['Close'].iloc[-2]) / recent_data['Close'].iloc[-2]
+                if price_change > 0.03:
+                    has_sos = True
+
+            # 检测Upthrust（假突破）
+            recent_high = recent_data['High'].max()
+            if recent_data['High'].iloc[-1] >= recent_high * 0.98:
+                if recent_data['Close'].iloc[-1] < recent_data['Open'].iloc[-1]:
+                    has_upthrust = True
+
+            return {
+                'has_spring': has_spring,
+                'has_sos': has_sos,
+                'has_upthrust': has_upthrust,
+                'timeframe': timeframe,
+                'data_points': len(resampled)
+            }
+
+        except Exception as e:
+            logger.exception(f"Error checking {timeframe} signal resonance: {e}")
+            return {'error': str(e)}
+
+    def _get_resonance_trading_recommendation(self, resonance_level: str, daily_analysis: Dict) -> Dict:
+        """
+        根据共振等级提供交易建议
+        """
+        phase = daily_analysis.get('phase', '')
+        confidence = daily_analysis.get('confidence', 0.0)
+
+        if resonance_level == 'strong_resonance':
+            if 'Accumulation' in phase or 'Markup' in phase:
+                return {
+                    'action': 'strong_buy',
+                    'position_size': 'aggressive',
+                    'reason': f'多时间框架强烈共振 + {phase}，可考虑积极建仓'
+                }
+            else:
+                return {
+                    'action': 'strong_sell',
+                    'position_size': 'aggressive',
+                    'reason': f'多时间框架强烈共振 + {phase}，可考虑积极做空'
+                }
+
+        elif resonance_level == 'moderate_resonance':
+            if 'Accumulation' in phase or 'Markup' in phase:
+                return {
+                    'action': 'moderate_buy',
+                    'position_size': 'moderate',
+                    'reason': f'多时间框架中等共振 + {phase}，可考虑适度建仓'
+                }
+            else:
+                return {
+                    'action': 'moderate_sell',
+                    'position_size': 'moderate',
+                    'reason': f'多时间框架中等共振 + {phase}，可考虑适度做空'
+                }
+
+        elif resonance_level == 'weak_resonance':
+            return {
+                'action': 'wait_or_small_position',
+                'position_size': 'conservative',
+                'reason': '多时间框架共振较弱，建议观望或轻仓试探'
+            }
+
+        else:  # no_resonance
+            return {
+                'action': 'avoid',
+                'position_size': 'none',
+                'reason': '多时间框架无共振，建议暂时观望'
+            }
+
     def identify_phase_with_rs(self) -> Dict:
         """结合相对强度的阶段识别"""
         benchmark_symbol = self._get_baseline_index_symbol()
@@ -1650,8 +2523,10 @@ class WyckoffAnalyzer:
 
     def generate_report(self) -> str:
         """生成分析报告"""
-        if not self.fetch_data():
-            return f"无法获取数据: {self.symbol}"
+        if self.data is None:
+            data = self.fetch_data()
+            if data is None or (isinstance(data, pd.DataFrame) and data.empty):
+                return f"无法获取数据: {self.symbol}"
 
         report = f"""
 {'='*60}
@@ -1698,7 +2573,7 @@ class WyckoffAnalyzer:
    成交量趋势: {trading_range['volume_trend']}
 """
 
-        if spring['detected']:
+        if spring.get('detected'):
             latest = spring['latest_spring']
             report += f"""
 ✅ 检测到Spring:
@@ -1710,7 +2585,7 @@ class WyckoffAnalyzer:
    ✓ 真Spring（3天内收回且放量）
 """
 
-        if upthrust['detected']:
+        if upthrust.get('detected'):
             latest = upthrust['latest_upthrust']
             report += f"""
 ✅ 检测到Upthrust:
@@ -1723,7 +2598,7 @@ class WyckoffAnalyzer:
    ✓ 真Upthrust（3天内回落且放量）
 """
 
-        if sos['detected']:
+        if sos.get('detected'):
             latest = sos['latest']
             report += f"""
 ✅ 检测到SOS（Sign of Strength）:
@@ -1735,7 +2610,7 @@ class WyckoffAnalyzer:
    ✓ 强势信号（放量突破）
 """
 
-        if sow['detected']:
+        if sow.get('detected'):
             latest = sow['latest']
             report += f"""
 ✅ 检测到SOW（Sign of Weakness）:
@@ -1747,7 +2622,7 @@ class WyckoffAnalyzer:
    ✓ 弱势信号（放量跌破）
 """
 
-        if lps['detected']:
+        if lps.get('detected'):
             report += f"""
 ✅ 检测到LPS（Last Point of Support）:
    日期: {lps['date'].strftime('%Y-%m-%d')}
@@ -1757,7 +2632,7 @@ class WyckoffAnalyzer:
    ⭐ 建议做多入场点
 """
 
-        if lpsy['detected']:
+        if lpsy.get('detected'):
             report += f"""
 ✅ 检测到LPSY（Last Point of Supply）:
    日期: {lpsy['date'].strftime('%Y-%m-%d')}
@@ -1790,7 +2665,7 @@ class WyckoffAnalyzer:
 【交易建议】
 """
 
-        if lps['detected'] and not lpsy['detected']:
+        if lps.get('detected') and not lpsy.get('detected'):
             report += f"""
 ✅ 做多机会:
    入场价格: {lps['price']:.2f} (LPS)
@@ -1798,7 +2673,7 @@ class WyckoffAnalyzer:
    目标价格: {cause_effect['targets']['target_2']:.2f} (因果测算)
    风险提示: 请设置好止损，严格执行
 """
-        elif lpsy['detected'] and not lps['detected']:
+        elif lpsy.get('detected') and not lps.get('detected'):
             report += f"""
 ✅ 做空机会:
    入场价格: {lpsy['price']:.2f} (LPSY)
@@ -2701,7 +3576,8 @@ class WyckoffAnalyzer:
 
     def generate_json(self) -> str:
         """生成JSON格式的分析报告（供AI Agent读取）"""
-        if not self.fetch_data():
+        data = self.fetch_data()
+        if data is None or (isinstance(data, pd.DataFrame) and data.empty):
             return json.dumps({"error": f"无法获取数据: {self.symbol}"}, ensure_ascii=False)
             
         # 1. 基础事件分析
@@ -2821,56 +3697,72 @@ class WyckoffAnalyzer:
 # 批量扫描功能
 # ============================================================
 
-def batch_scan(symbols: List[str], period: str = "1y", use_json: bool = False) -> List[Dict]:
+def batch_scan(symbols: List[str], period: str = "1y", use_json: bool = False,
+               max_workers: int = None, show_progress: bool = True) -> List[Dict]:
     """
-    批量扫描股票 - 升级版
-    升级：内部复用 generate_json 的计算结果，消除重复形态检测
+    批量扫描股票 - 增强版
+    增强特性：
+    - 并行处理支持（使用ThreadPoolExecutor）
+    - 进度显示
+    - 改进的异常处理和错误恢复
+    - 更好的内存管理
 
     Args:
         symbols: 股票代码列表
         period: 数据周期
         use_json: True 则完整解析 JSON 输出（较慢），False 则仅提取摘要
+        max_workers: 最大并行工作线程数，默认为CPU核心数
+        show_progress: 是否显示进度条
 
     Returns:
         扫描结果列表，每项包含 symbol / phase / strength / signals
     """
-    results = []
+    import concurrent.futures
+    from tqdm import tqdm
+    import os
 
-    for symbol in symbols:
-        print(f"扫描 {symbol}...")
+    # 自动确定最大工作线程数
+    if max_workers is None:
+        max_workers = min(os.cpu_count() or 4, 8)  # 最多8个线程
+
+    results = []
+    failed_symbols = []
+
+    def scan_single_symbol(symbol: str) -> Dict:
+        """扫描单个股票的内部函数"""
         try:
             analyzer = WyckoffAnalyzer(symbol, period)
 
-            if not analyzer.fetch_data():
-                print(f"  ❌ 获取数据失败")
+            data = analyzer.fetch_data()
+            if data is None or (isinstance(data, pd.DataFrame) and data.empty):
                 logger.warning("batch_scan: 获取数据失败 symbol=%s", symbol)
-                continue
+                return {'error': 'data_fetch_failed', 'symbol': symbol}
 
-            # 利用已有的 sos/sow 结果传入 lps/lpsy，避免每个再计算一次
-            phase_res  = analyzer.identify_phase()
-            sos_res    = analyzer.detect_sos()
-            sow_res    = analyzer.detect_sow()
-            spring_res = analyzer.detect_spring()
-            up_res     = analyzer.detect_upthrust()
-            lps_res    = analyzer.detect_lps(sos_result=sos_res)
-            lpsy_res   = analyzer.detect_lpsy(sow_result=sow_res)
+            # 从 identify_phase 结果中提取事件，避免重复计算
+            phase_res = analyzer.identify_phase()
+            events = phase_res.get('events_detected', {})
 
-            phase_str  = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else str(phase_res)
+            phase_str = (phase_res.get('phase') or 'Unknown') if isinstance(phase_res, dict) else str(phase_res)
 
-            has_spring   = spring_res.get('detected', False)
-            has_upthrust = up_res.get('detected', False)
-            has_sos      = sos_res.get('detected', False)
-            has_sow      = sow_res.get('detected', False)
-            has_lps      = lps_res.get('detected', False)
-            has_lpsy     = lpsy_res.get('detected', False)
+            # 从 events 中提取各信号检测结果
+            spring_upthrust = events.get('spring_upthrust') or {}
+            sos_sow = events.get('sos_sow') or {}
+            lps_lpsy = events.get('lps_lpsy') or {}
+
+            has_spring = spring_upthrust.get('detected', False) and spring_upthrust.get('_type') == 'spring'
+            has_upthrust = spring_upthrust.get('detected', False) and spring_upthrust.get('_type') == 'upthrust'
+            has_sos = sos_sow.get('detected', False) and sos_sow.get('_type') == 'sos'
+            has_sow = sos_sow.get('detected', False) and sos_sow.get('_type') == 'sow'
+            has_lps = lps_lpsy.get('detected', False) and lps_lpsy.get('_type') == 'lps'
+            has_lpsy = lps_lpsy.get('detected', False) and lps_lpsy.get('_type') == 'lpsy'
 
             # 信号强度：各项汇总，最高 6 分
             strength = sum([has_spring, has_upthrust, has_sos, has_sow, has_lps, has_lpsy])
 
-            entry = {
+            return {
                 'symbol':       symbol,
                 'phase':        phase_str,
-                'confidence':   round(phase_res.get('confidence', 0.0) if isinstance(phase_res, dict) else 0.0, 2),
+                'confidence':   round((phase_res.get('confidence') or 0.0) if isinstance(phase_res, dict) else 0.0, 2),
                 'has_spring':   has_spring,
                 'has_upthrust': has_upthrust,
                 'has_sos':      has_sos,
@@ -2880,23 +3772,53 @@ def batch_scan(symbols: List[str], period: str = "1y", use_json: bool = False) -
                 'strength':     strength,
             }
 
-            results.append(entry)
-
-            if strength >= 1:
-                icons = []
-                if has_spring:   icons.append('Spring')
-                if has_lps:      icons.append('LPS ⬆')
-                if has_upthrust: icons.append('Upthrust')
-                if has_lpsy:     icons.append('LPSY ⬇')
-                if has_sos:      icons.append('SOS')
-                if has_sow:      icons.append('SOW')
-                print(f"  ✅ [{phase_str}] {' | '.join(icons)} (强度{strength}/6)")
-            else:
-                print(f"  — [{phase_str}] 无明显信号")
-
         except Exception as exc:
-            print(f"  ⚠️ 扫描异常: {exc}")
-            logger.exception("batch_scan exception for symbol=%s", symbol)
+            logger.exception("batch_scan exception for symbol=%s: %s", symbol, exc)
+            return {'error': str(exc), 'symbol': symbol}
+
+    # 并行扫描所有股票
+    if show_progress:
+        print(f"[PARALLEL] 开始并行扫描 {len(symbols)} 只股票 (使用 {max_workers} 线程)...")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 使用tqdm显示进度条
+        futures = {executor.submit(scan_single_symbol, symbol): symbol for symbol in symbols}
+
+        for future in tqdm(concurrent.futures.as_completed(futures),
+                          total=len(symbols),
+                          desc="扫描进度",
+                          disable=not show_progress):
+            result = future.result()
+            if 'error' not in result:
+                results.append(result)
+
+                # 显示找到信号的股票
+                if result['strength'] >= 1:
+                    icons = []
+                    if result['has_spring']:   icons.append('Spring')
+                    if result['has_lps']:      icons.append('LPS')
+                    if result['has_upthrust']: icons.append('Upthrust')
+                    if result['has_lpsy']:     icons.append('LPSY')
+                    if result['has_sos']:      icons.append('SOS')
+                    if result['has_sow']:      icons.append('SOW')
+
+                    print(f"  [OK] {result['symbol']}: [{result['phase']}] {' | '.join(icons)} (强度{result['strength']}/6)")
+            else:
+                failed_symbols.append(result.get('symbol', 'unknown'))
+
+    # 显示统计信息
+    if show_progress:
+        print(f"\n[SUMMARY] 扫描完成:")
+        print(f"  成功: {len(results)}/{len(symbols)}")
+        if failed_symbols:
+            print(f"  失败: {len(failed_symbols)} ({', '.join(failed_symbols[:5])}{'...' if len(failed_symbols) > 5 else ''})")
+
+        # 按信号强度排序
+        top_signals = sorted(results, key=lambda x: x['strength'], reverse=True)[:5]
+        if top_signals and top_signals[0]['strength'] > 0:
+            print(f"\n[TOP] 信号强度 TOP 5:")
+            for i, stock in enumerate(top_signals, 1):
+                print(f"  {i}. {stock['symbol']} - {stock['phase']} (强度{stock['strength']}/6)")
 
     return results
 
@@ -2940,6 +3862,6 @@ if __name__ == "__main__":
             if best['strength'] > 0:
                 print(f"\n最佳机会: {best['symbol']}")
                 print(f"   阶段: {best['phase']}")
-                print(f"   信号强度: {best['strength']}/4")
+                print(f"   信号强度: {best['strength']}/6")
     else:
         parser.print_help()

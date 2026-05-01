@@ -16,9 +16,9 @@
 
 ## 1. Claude Code 自动集成
 
-### ✅ 已自动激活
+### ✅ 本地 Agent 直接可用
 
-你的skill已经放在正确位置 `~/.claude/user-skills/wyckoff-stock-analysis/`
+将项目放在任意目录，Agent 即可通过 `tools/wyckoff_analyzer.py` 进行分析。
 
 **使用方法**：
 ```
@@ -26,11 +26,6 @@
 "请用威科夫理论分析 茅台"
 "AAPL 处于威科夫周期的哪个阶段？"
 "应用威科夫方法分析 比亚迪"
-```
-
-**验证skill是否加载**：
-```bash
-ls -la ~/.claude/user-skills/wyckoff-stock-analysis/
 ```
 
 ---
@@ -48,7 +43,7 @@ ls -la ~/.claude/user-skills/wyckoff-stock-analysis/
 
 - **使用方法**：
   1. 将 `SKILL.md` 的内容设为 Custom Instructions (自定义指令) 或 Project Instructions。
-  2. 如果您需要量化数据，可以将 `tools/wyckoff_analyzer.py` 以及需要的股票历史数据（CSV）上传给大模型。
+  2. 如果需要量化数据，可以将 `tools/wyckoff_analyzer.py` 上传给大模型。
 - **背后原理**：利用大模型自带的代码解释器 (Code Interpreter / Advanced Data Analysis) 运行脚本，精准输出分析结论。
 
 ### 🔌 MCP 兼容平台 (Claude Desktop 等)
@@ -94,16 +89,18 @@ zip -r wyckoff-skill.zip wyckoff-stock-analysis/
 
 ### 💻 Python 集成示例
 
-#### Python 调用入口
-
 ```python
-from tools.wyckoff_analyzer import WyckoffAnalyzer
+from tools.wyckoff_analyzer import WyckoffAnalyzer, batch_scan
 
-# 初始化分析器
+# 单股分析
 analyzer = WyckoffAnalyzer("AAPL")
-
-# 生成分析报告
 print(analyzer.generate_report())
+
+# JSON 输出（供 AI Agent 使用）
+json_result = analyzer.generate_json()
+
+# 批量扫描
+results = batch_scan(["AAPL", "TSLA", "NVDA"])
 ```
 
 ```python
@@ -116,18 +113,6 @@ screener.add_stock("TSLA")
 print(screener.generate_screening_report())
 ```
 
-### 🌐 Web 应用
-
-已提供简单的 Streamlit 应用：`app/streamlit_app.py`
-
-**运行**：
-```bash
-pip install streamlit yfinance
-streamlit run app/streamlit_app.py
-```
-
-**访问**：http://localhost:8501
-
 ---
 
 ## 📋 快速参考
@@ -136,13 +121,9 @@ streamlit run app/streamlit_app.py
 
 | 使用场景 | 推荐方式 | 文件位置 |
 |---------|---------|---------|
-| Claude Code本地使用 | 已自动激活 | `~/.claude/user-skills/` |
-| Web端大模型 | Custom Instructions | 见第2节 |
 | 命令行分析 | Python工具 | `tools/wyckoff_analyzer.py` |
 | 批量筛选 | 筛选器 | `tools/wyckoff_utils.py` |
-| Web界面 | Streamlit应用 | `app/streamlit_app.py` |
 | 分享给他人 | GitHub仓库 | 整个目录 |
-| 企业应用 | Docker容器 | `docker/` |
 
 ---
 
@@ -176,9 +157,8 @@ head -10 ~/.claude/user-skills/wyckoff-stock-analysis/SKILL.md
 
 ## 📞 获取帮助
 
-- GitHub Issues: [创建issue](https://github.com/your-repo/issues)
-- 文档: `docs/` 目录
 - 示例: `examples/` 目录
+- 理论参考: `references/` 目录
 
 ---
 

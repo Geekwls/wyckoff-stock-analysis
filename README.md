@@ -26,7 +26,7 @@
 建议在 Python 3.8+ 环境下运行：
 
 ```bash
-git clone https://github.com/Geekwls/wyckoff-stock-analysis.git
+# 下载项目后进入目录
 cd wyckoff-stock-analysis
 pip install -r requirements.txt
 ```
@@ -85,9 +85,6 @@ wyckoff-stock-analysis/
 │   ├── learning-path.md              # 学习路线图
 │   └── chart-examples/               # 实战图表案例库 (30+ 案例)
 │
-├── app/                              # Web 独立应用
-│   └── streamlit_app.py              # 可视化界面面板
-│
 └── examples/                         # 调用示例
     └── example_usage.py              # Python API 使用案例
 ```
@@ -108,6 +105,19 @@ wyckoff-stock-analysis/
 ---
 
 ## 🔄 更新日志
+
+### v3.8.1 (2026-05-02) - Bug 修复与代码质量 (P0/P1)
+- 🐛 **修复 `generate_report()` 重复拉取数据**：已有数据时不再调用 `fetch_data()`，避免双倍网络请求。
+- 🐛 **修复 dict 隐式 bool 判断**：`spring`/`upthrust`/`sos`/`sow`/`lps`/`lpsy` 全部改为 `.get('detected')`，消除空 dict 永真隐患。
+- 🐛 **修复 `batch_scan` 中 `None` 值崩溃**：`events_detected` 中未命中事件返回 `None`，增加 `or {}` 保护。
+- 🐛 **修复 `strength` 分母不一致**：`batch_scan` 和示例中 `/4` → `/6`（实际最高 6 分）。
+- 🐛 **修复 Windows GBK 编码崩溃**：`batch_scan` 输出中的 emoji 改为 ASCII 标签。
+- ⚡ **baostock 登录优化**：类级别 `_bs_logged_in` 状态，批量操作只登录一次。
+- ⚡ **`wyckoff_utils` 性能提升**：复用 `identify_phase()` 已计算的 events，避免 6 次重复检测。
+- 📝 **异常处理收紧**：`_resolve_stock_name` 吞异常改为精确捕获 `JSONDecodeError`/`OSError` 并记录日志。
+- 📝 **依赖版本约束**：`requirements.txt` 全部依赖加上 `<3.0.0` 上限。
+- 📝 **文档修正**：移除 `HOW_TO_USE.md`、`README.md`、`example_usage.py` 中不存在的 `api/`、`docker/`、`app/`、`dotenv` 引用。
+- 📝 **新增 `__version__`**：`tools/__init__.py` 导出 `__version__ = "3.8.0"`。
 
 ### v3.8.0 (2026-05-01) - 稳定性与质量提升 (P2)
 - ✨ **日志设施接入**：增加模块级日志，方便使用者随时配置和追踪调试。
