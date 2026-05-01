@@ -1416,8 +1416,8 @@ class WyckoffAnalyzer:
             "reasons": reasons
         }
 
-    def generate_trading_plan(self) -> dict:
-        """生成实战交易计算器数据"""
+    def generate_trading_plan(self, sentiment_data: dict = None, phase_str: str = "") -> dict:
+        """生成实战交易计算器数据（带情绪风控）"""
         if self.data is None:
             return {}
             
@@ -1428,8 +1428,10 @@ class WyckoffAnalyzer:
         high = tr.get("high", current_price * 1.1)
         low = tr.get("low", current_price * 0.9)
         
-        phase_res = self.identify_phase()
-        phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
+        if not phase_str:
+            phase_res = self.identify_phase()
+            phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
+            
         is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
         
         if is_bullish:
@@ -1445,6 +1447,30 @@ class WyckoffAnalyzer:
             target_1 = round(low, 2) if current_price > low else round(current_price - atr * 2, 2)
             target_2 = round(low - atr * 3, 2)
 
+        # 情绪仓位管理
+        pos_conservative = 2.5
+        pos_moderate = 5.0
+        pos_aggressive = 10.0
+        
+        dynamic_warning = None
+        if sentiment_data:
+            sentiment = sentiment_data.get("market_sentiment", "neutral")
+            
+            if sentiment == "extreme_fear":
+                pos_conservative *= 0.5
+                pos_moderate *= 0.5
+                pos_aggressive *= 0.5
+            elif sentiment == "greed":
+                pos_conservative *= 1.2
+                pos_moderate *= 1.2
+                pos_aggressive *= 1.2
+                
+            # 情绪背离预警
+            if sentiment == "greed" and ("Distribution" in phase_str or "Markdown" in phase_str):
+                dynamic_warning = "⚠️ 极度危险：大盘贪婪 + 个股派发 = 暴跌前兆，禁止盲目接刀！"
+            elif sentiment == "extreme_fear" and ("Accumulation" in phase_str or "Markup" in phase_str):
+                dynamic_warning = "💡 黄金坑预警：大盘极度恐慌 + 个股筑底 = 绝佳击球区，请重点关注抗跌表现！"
+
         return {
             "direction": "做多" if is_bullish else "做空",
             "entry_zone": entry_zone,
@@ -1457,12 +1483,13 @@ class WyckoffAnalyzer:
                 "target_2": target_2
             },
             "position_sizing": {
-                "conservative": "2-3%仓位",
-                "moderate": "5%仓位",
-                "aggressive": "10%仓位"
+                "conservative": f"{round(pos_conservative, 1)}%仓位",
+                "moderate": f"{round(pos_moderate, 1)}%仓位",
+                "aggressive": f"{round(pos_aggressive, 1)}%仓位"
             },
             "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周）",
-            "atr_value": round(atr, 2)
+            "atr_value": round(atr, 2),
+            "dynamic_warning": dynamic_warning
         }
 
     def get_relevant_terms(self, phase: str, events: dict) -> dict:
@@ -1713,14 +1740,22 @@ class WyckoffAnalyzer:
             # 1. 尝试直接获取期权隐含波动率指数 (VIX / VHSI)
             if is_us_market:
                 vix = yf.download('^VIX', period='5d', progress=False)
-                if not vix.empty and not pd.isna(vix['Close'].iloc[-1]):
-                    current_vix = float(vix['Close'].iloc[-1].iloc[0] if isinstance(vix['Close'].iloc[-1], pd.Series) else vix['Close'].iloc[-1])
-                    benchmark_used = '^VIX (CBOE Implied Volatility)'
+                if not vix.empty:
+                    last_close = vix['Close'].iloc[-1]
+                    if isinstance(last_close, pd.Series):
+                        last_close = last_close.iloc[0] if len(last_close) > 0 else None
+                    if last_close is not None and not pd.isna(last_close):
+                        current_vix = float(last_close)
+                        benchmark_used = '^VIX (CBOE Implied Volatility)'
             elif is_hk_market:
                 vhsi = yf.download('^VHSI', period='5d', progress=False)
-                if not vhsi.empty and not pd.isna(vhsi['Close'].iloc[-1]):
-                    current_vix = float(vhsi['Close'].iloc[-1].iloc[0] if isinstance(vhsi['Close'].iloc[-1], pd.Series) else vhsi['Close'].iloc[-1])
-                    benchmark_used = '^VHSI (HSI Implied Volatility)'
+                if not vhsi.empty:
+                    last_close = vhsi['Close'].iloc[-1]
+                    if isinstance(last_close, pd.Series):
+                        last_close = last_close.iloc[0] if len(last_close) > 0 else None
+                    if last_close is not None and not pd.isna(last_close):
+                        current_vix = float(last_close)
+                        benchmark_used = '^VHSI (HSI Implied Volatility)'
                     
             # 2. 如果是 A股，或者外盘获取不到 VIX，回退到计算大盘的 20日历史实现波动率 (Realized Volatility)
             if current_vix is None:
@@ -1839,9 +1874,13 @@ class WyckoffAnalyzer:
                 "error": "无法获取大盘数据"
             }
             
+        # 增加市场情绪整合
+        global_sentiment = self.add_market_sentiment()
+        result["global_sentiment"] = global_sentiment
+        
         # 增加信号质量评分和交易计划
         signal_quality = self.calculate_signal_quality(market_phase_str)
-        trading_plan = self.generate_trading_plan()
+        trading_plan = self.generate_trading_plan(global_sentiment, phase_str)
         
         result["signal_quality"] = signal_quality
         result["trading_plan"] = trading_plan
@@ -1851,9 +1890,6 @@ class WyckoffAnalyzer:
         result["risk_specific_advice"] = self.generate_risk_advice(signal_quality, trading_plan)
         result["interactive_qa"] = self.generate_interactive_qa(signal_quality, trading_plan)
         result["performance_tracking"] = self.get_signal_performance(events)
-        
-        # 增加市场情绪整合
-        result["global_sentiment"] = self.add_market_sentiment()
         
         result = self._round_floats(result)
         
