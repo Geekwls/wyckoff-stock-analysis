@@ -1,392 +1,113 @@
 # Wyckoff Stock Analysis Skill v3.1.0
 
-基于理查德·威科夫（Richard D. Wyckoff）理论的股票分析技能，用于识别市场周期、积累/分布模式，并做出明智的交易决策。
+> 一个专为 AI Agent（如 Claude Code, Cursor, MCP 客户端）打造的威科夫股票分析标准组件。
+
+基于理查德·威科夫（Richard D. Wyckoff）的经典量价理论，本项目提供了一套**“提示词路由 + 本地量化工具”**的双核架构，使大语言模型能够 100% 准确地获取股票形态数据，并进行深度的市场周期分析。
 
 ---
 
-## 🆕 v3.0 重大更新
+## 🌟 核心特性 (v3.1.0 架构)
 
-本次更新大幅增强了威科夫skill的深度和实用性，从**入门级提升至专业级**。
+本项目已经超越了单纯的“提示词模板”，进化为一个平台无关的 Agent 技能包：
 
-### 新增核心内容
-
-✨ **威科夫5步骤方法** - 系统化的分析流程
-✨ **高级威科夫概念** - Wyckoff Wave、Trading Range Sub-Structures等
-✨ **量化交易标准** - 具体的成交量、价格、时间标准
-✨ **常见错误和陷阱** - 详细的实战避坑指南
-✨ **渐进式学习路径** - 从入门到精通的完整课程
-✨ **30+实战图表案例** - 真实市场案例分析（v3.0新增）
-✨ **威科夫形态自动识别工具** - Python自动检测工具（v3.0新增）
-✨ **A股市场特定指南** - 中国市场本土化应用（v3.0新增）
-
-### 内容质量提升
-
-| 维度 | v1.0 | v2.0 | 提升 |
-|------|------|------|------|
-| 理论完整性 | 8/10 | 9.5/10 | +1.5 |
-| 实战可操作性 | 7/10 | 9/10 | +2 |
-| 新手友好度 | 5/10 | 8/10 | +3 |
-| 专业深度 | 6/10 | 9/10 | +3 |
-| **整体评分** | **7/10** | **9/10** | **+2** |
+1. **双核驱动**：
+   - **大脑**：精简高效的 `SKILL.md`（充当 System Prompt Router）。
+   - **四肢**：`tools/wyckoff_analyzer.py`（Python 数据获取与形态检测引擎）。
+2. **AI 友好输出**：核心分析器提供 `--json` 参数，输出结构化数据（含阶段识别、支撑压力位、因果目标价等），彻底消除大模型解析纯文本时产生的幻觉。
+3. **全平台兼容**：完美支持 Cursor、Windsurf、Claude Code、ChatGPT Plus、Dify 等各类现代 AI 工作流生态。
+4. **内置 A 股适配**：特殊的规则约束，防止 AI 误判 A 股“一字涨跌停”等极端量价形态。
 
 ---
 
-## 功能特性
+## 🚀 快速上手
 
-这个skill帮助你：
+### 1. 安装依赖环境
 
-### 1. 识别市场周期阶段
-- 积累期 (Accumulation) - 机构建仓（5个子阶段A-E）
-- 上涨期 (Markup) - 价格上涨趋势
-- 分布期 (Distribution) - 机构出货（5个子阶段A-E）
-- 下跌期 (Markdown) - 价格下跌趋势
+建议在 Python 3.8+ 环境下运行：
 
-### 2. 应用威科夫三大定律
-- 供求定律 - 价格由供需不平衡驱动
-- 因果定律 - 每个显著的价格变动都有其前因
-- 努力结果定律 - 比较价格变动与成交量的关系
-
-### 3. 威科夫5步骤方法（NEW）
-- Step 1: 确定当前位置和趋势
-- Step 2: 判断相对强度（RS）
-- Step 3: 找到与趋势一致的股票
-- Step 4: 判断准备程度（因果分析）
-- Step 5: 把握交易时机
-
-### 4. 识别关键威科夫事件
-- PS (Preliminary Support) - 初步支撑
-- PSY (Preliminary Supply) - 初步供应
-- CL (Climax) - 极端价格波动
-- AR (Automatic Rally) - 自动反弹
-- ST (Secondary Test) - 二次测试
-- Spring/Upthrust - 假突破/震仓
-- SOS (Sign of Strength) - 强势信号
-- SOW (Sign of Weakness) - 弱势信号
-- LPS (Last Point of Support) - 最佳入场点（多）
-- LPSY (Last Point of Supply) - 最佳入场点（空）
-
-### 5. 高级威科夫概念（NEW）
-- Wyckoff Wave - 市场整体指标
-- Trading Range Sub-Structures - 交易区间次级结构
-- Optimism/Danger Position - 乐观/危险位置
-- Creeping Trends - 潜行趋势
-- Stop Volume - 停止成交量
-- Absorption Patterns - 吸收形态
-- Re-accumulation/Re-distribution - 再积累/再分布
-
-### 6. 量化交易标准（NEW）
-- 成交量确认标准（1.5-5x平均量）
-- Spring/Upthrust时间标准（1-3天）
-- 价格和时间幅度标准
-- 止损设置标准（保守/中等/激进）
-- 风险回报比要求（>1.5:1）
-
-### 7. 成交量分析框架
-- 确认价格走势
-- 识别背离
-- 判断趋势强度
-- 努力vs结果分析
-
-### 8. 实战避坑指南（NEW）
-- 10大常见错误及解决方案
-- 假信号识别方法（假Spring、假SOS等）
-- 不同市场环境陷阱（牛市、熊市、震荡市）
-- 进阶错误：过度优化
-
-### 9. 渐进式学习系统（NEW）
-- Level 1：入门（1-2个月）- 基础概念
-- Level 2：进阶（2-4个月）- 实战交易
-- Level 3：高级（4-6个月）- 交易系统
-- Level 4：专家（持续精进）- 形成风格
-
----
-
-## 使用方法
-
-### 基本分析
-
-当你想要分析某只股票时，直接询问即可：
-
-```
-请使用威科夫理论分析 [股票代码]
-```
-
-```
-[股票代码] 现在处于威科夫周期的哪个阶段？
-```
-
-```
-帮我识别 [股票代码] 的威科夫形态
-```
-
-### 深度分析
-
-```
-请对 [股票代码] 进行完整的威科夫分析，包括：
-1. 当前阶段识别
-2. 关键威科夫事件
-3. 成交量分析
-4. 相对强度判断
-5. 因果测算目标位
-6. 交易建议和风险管理
-```
-
-### 具体问题
-
-- "这只股票处于积累期还是分布期？"
-- "有没有识别到 Spring 或 Upthrust 形态？"
-- "成交量和价格的关系如何？"
-- "根据威科夫理论，现在适合入场吗？"
-- "设置止损和止盈位在什么位置？"
-
----
-
-## 文件结构
-
-```
-wyckoff-stock-analysis/
-├── SKILL.md                          # 主技能定义（已增强）
-├── README.md                         # 本说明文件
-├── HOW_TO_USE.md                     # 详细使用指南
-│
-├── references/                       # 参考资料
-│   ├── quick-reference.md            # 速查表
-│   ├── analysis-example.md           # 分析案例
-│   ├── common-pitfalls.md            # 常见错误（v2.0）
-│   ├── learning-path.md              # 学习路径（v2.0）
-│   ├── china-market-guide.md         # A股市场指南（v3.0）
-│   └── chart-examples/               # 实战图表案例（v3.0）
-│       ├── accumulation-examples.md  # 积累期案例（10个）
-│       ├── distribution-examples.md  # 分布期案例（10个）
-│       ├── spring-upthrust-examples.md # Spring/Upthrust专题（10个）
-│       └── failed-patterns.md        # 失败形态（5个）
-│
-├── requirements.txt                  # Python依赖包
-├── tools/                            # 威科夫工具库
-│   ├── wyckoff_analyzer.py           # 核心分析器（形态检测、阶段识别、因果计算）
-│   └── wyckoff_utils.py              # 工具集（股票筛选、报告生成）
-│
-├── app/                              # Web应用
-│   └── streamlit_app.py              # Streamlit界面
-│
-├── examples/                         # 使用示例
-│   └── example_usage.py              # Python示例
-│
-└── .env.example                      # 环境变量模板
-```
-
----
-
-## 多平台使用
-
-### 1. Claude Code（已自动配置）
-直接对话即可使用
-
-### 2. 其他 AI Agent 兼容 (ChatGPT / Dify 等)
-将 `SKILL.md` 内容作为 Custom Instructions，并提供 `tools/wyckoff_analyzer.py` 作为分析工具调用。详见 HOW_TO_USE.md。
-
-### 3. 命令行工具
 ```bash
+git clone https://github.com/Geekwls/wyckoff-stock-analysis.git
+cd wyckoff-stock-analysis
 pip install -r requirements.txt
+```
+
+### 2. 命令行快速测试 (人类视角)
+
+直接在终端运行分析器，获取格式化的分析报告：
+
+```bash
+# 分析美股
+python tools/wyckoff_analyzer.py AAPL
+
+# 分析 A 股 (需要 baostock 数据)
+python tools/wyckoff_analyzer.py sh.600519
+```
+
+### 3. JSON 数据接口 (AI 视角)
+
+使用 `--json` 参数，获取供 AI Agent 解析的结构化数据：
+
+```bash
 python tools/wyckoff_analyzer.py AAPL --json
 ```
 
-### 4. Python工具库
-```python
-from tools.wyckoff_analyzer import WyckoffAnalyzer
+---
 
-# 初始化分析器
-analyzer = WyckoffAnalyzer("AAPL")
+## 🤖 AI 平台集成指南
 
-# 生成分析报告
-print(analyzer.generate_report())
-```
+想让你的 AI 变成威科夫专家？集成方法非常简单。
 
-```python
-from tools.wyckoff_utils import WyckoffScreener
+详细教程请参考：👉 **[HOW_TO_USE.md (多平台使用指南)](HOW_TO_USE.md)**
 
-# 批量筛选
-screener = WyckoffScreener()
-screener.add_stock("AAPL")
-screener.add_stock("TSLA")
-print(screener.generate_screening_report())
-```
-
-### 5. Web应用
-```bash
-pip install streamlit
-streamlit run app/streamlit_app.py
-```
-
-详见：[HOW_TO_USE.md](HOW_TO_USE.md)
+**简要说明：**
+- **本地 Agent (Cursor / Claude Code)**：无需配置。直接在其终端中提问，或 `@SKILL.md` 即可。Agent 会自动调用 Python 脚本。
+- **Web 端大模型 (ChatGPT / Claude)**：将 `SKILL.md` 内容设为 Custom Instructions，并允许模型使用 Python 解释器运行 `tools/` 目录下的代码。
 
 ---
 
-## 学习建议
+## 📁 文件结构
 
-### 对于初学者
-
-1. **先学理论**
-   - 阅读 `references/learning-path.md`
-   - 从Level 1开始
-   - 不要跳级
-
-2. **多做练习**
-   - 用历史图表练习识别形态
-   - 模拟交易不少于20笔
-   - 达到>60%准确率再考虑实盘
-
-3. **避免错误**
-   - 阅读 `references/common-pitfalls.md`
-   - 了解10大常见错误
-   - 建立交易纪律
-
-### 对于有经验的交易者
-
-1. **系统化你的方法**
-   - 应用威科夫5步骤
-   - 使用量化标准
-   - 建立交易系统
-
-2. **避免陷阱**
-   - 检查是否犯高级错误
-   - 优化止损和目标设置
-   - 改进风险回报比
-
-3. **持续改进**
-   - 记录交易日志
-   - 定期复盘
-   - 适应市场变化
-
----
-
-## 核心概念速查
-
-### 威科夫市场周期
-
-```
-积累期 → 上涨期 → 分布期 → 下跌期 → 循环
-```
-
-### 最佳入场时机
-
-**做多**：
-- 位置：积累期Phase D
-- 信号：SOS确认后
-- 入场：LPS（最后支撑点）
-- 止损：Spring下方
-
-**做空**：
-- 位置：分布期Phase D
-- 信号：SOW确认后
-- 入场：LPSY（最后供应点）
-- 止损：Upthrust上方
-
-### 因果测算公式
-
-```
-目标价 = 突破价 ± 因果幅度
-
-示例：
-积累区间：$40 - $50
-因果幅度：$10
-突破点：$51
-目标价：$51 + $10 = $61
+```text
+wyckoff-stock-analysis/
+├── SKILL.md                          # 核心：AI Agent 系统提示词/路由规则
+├── README.md                         # 本说明文件
+├── HOW_TO_USE.md                     # 多平台 AI 接入使用指南
+│
+├── requirements.txt                  # Python 环境依赖包
+├── tools/                            # 本地量化工具库
+│   ├── wyckoff_analyzer.py           # 核心引擎：数据获取、阶段检测、JSON 输出
+│   └── wyckoff_utils.py              # 辅助工具：批量筛选、报告生成
+│
+├── references/                       # 威科夫理论知识库 (供 AI 检索 RAG)
+│   ├── wyckoff-theory-full.md        # 完整理论与量化标准
+│   ├── china-market-guide.md         # A股市场特色指南
+│   ├── common-pitfalls.md            # 实战常见错误与避坑
+│   ├── learning-path.md              # 学习路线图
+│   └── chart-examples/               # 实战图表案例库 (30+ 案例)
+│
+├── app/                              # Web 独立应用
+│   └── streamlit_app.py              # 可视化界面面板
+│
+└── examples/                         # 调用示例
+    └── example_usage.py              # Python API 使用案例
 ```
 
 ---
 
-## 注意事项
+## 📚 威科夫理论学习资源
 
-1. **不是100%准确**
-   - 威科夫理论是提高胜率的工具
-   - 大约60-70%成功率
-   - 需要配合风险管理
+如果你是人类交易员，希望系统学习威科夫理论（Wyckoff Method），项目中也包含了极其丰富的学习资料：
 
-2. **需要经验积累**
-   - 形态识别需要练习
-   - 实盘经验至关重要
-   - 持续学习是关键
+- 📖 **理论核心**：[威科夫理论全解析](references/wyckoff-theory-full.md)（含四大阶段、九大事件、三大定律）
+- 🛤️ **学习路线**：[渐进式学习指南](references/learning-path.md)
+- ⚠️ **实战避坑**：[常见错误与陷阱](references/common-pitfalls.md)
+- 🇨🇳 **A 股专区**：[中国市场特色指南](references/china-market-guide.md)
 
-3. **风险管理优先**
-   - 单笔风险<2%
-   - 严格止损
-   - 不要孤注一掷
-
-4. **多时间框架确认**
-   - 周线定方向
-   - 日线找形态
-   - 小时线找点位
-
-5. **保持灵活性**
-   - 市场永远在变化
-   - 承认错误并调整
-   - 不要固执己见
+*注：威科夫理论是概率游戏，不保证 100% 盈利，请严格做好仓位管理与止损。*
 
 ---
 
-## 适用场景
-
-- ✅ 技术分析
-- ✅ 趋势交易
-- ✅ 摆动交易
-- ✅ 仓位管理
-- ✅ 入场和出场时机选择
-- ✅ 止损和止盈设置
-
-## 不适用场景
-
-- ❌ 基本面分析替代
-- ❌ 短期投机（日内交易）
-- ❌ 100%准确预测
-- ❌ 快速致富方案
-
----
-
-## 推荐学习顺序
-
-### 第1周：基础概念
-- 理解三大定律
-- 了解四个阶段
-- 熟悉关键事件
-
-### 第2-4周：形态识别
-- 积累期详细分析
-- 分布期详细分析
-- Spring/Upthrust识别
-
-### 第5-8周：成交量分析
-- 成交量与价格关系
-- 努力vs结果定律
-- 成交量确认标准
-
-### 第9-12周：模拟交易
-- 应用5步骤方法
-- 模拟20+笔交易
-- 达到>60%胜率
-
-详见：[learning-path.md](references/learning-path.md)
-
----
-
-## 限制与免责声明
-
-### 本技能的限制
-
-1. 不保证盈利，所有交易都有风险
-2. 需要结合其他分析方法
-3. 市场条件变化时需要灵活调整
-4. 需要大量实践才能精通
-
-### 免责声明
-
-本技能仅供教育和研究目的。任何交易决策请自行负责，并建议咨询专业的财务顾问。
-
-**股市有风险，投资需谨慎。**
-
----
-
-## 更新日志
+## 🔄 更新日志
 
 ### v3.1.0 (2026-05-01) - AI Agent 架构重构
 - ✨ **架构升级**：完全重构为“System Prompt + JSON 工具”的现代化 Agent 技能标准架构。
@@ -395,17 +116,18 @@ streamlit run app/streamlit_app.py
 - 🧹 **依赖与文件清理**：废弃冗余的 `api/` 目录和旧脚本，在根目录提供统一的 `requirements.txt`。
 - 📚 **多平台兼容**：全面重写 `HOW_TO_USE.md`，新增 Cursor、Dify、MCP 等最新 AI 工作流的集成方案。
 
+### v3.0 (2026-04-30) - 专家级版本
+- ✨ 新增30+实战图表案例与失败形态案例分析
+- ✨ 新增威科夫形态自动识别 Python 工具
+- ✨ 新增 A 股市场特定指南与批量股票筛选器
+
+### v2.0 & v1.0
+- 完成基础威科夫理论、阶段分析体系搭建，支持基础 Prompt 模板。
 
 ---
 
-## 贡献与反馈
+## 🤝 贡献与反馈
 
-如果你有改进建议或发现了bug，欢迎反馈！
+如果你对量化逻辑有改进建议、发现了 bug，或者想分享绝佳的交易案例，欢迎提交 Issue 或 Pull Request！
 
-## 致谢
-
-本skill基于理查德·威科夫（Richard D. Wyckoff）的经典理论，结合现代实战经验整理而成。
-
----
-
-**祝你交易成功！记住：保护本金是第一要务。** 📈
+**祝你交易成功！记住：保护本金永远是第一要务。** 📈
