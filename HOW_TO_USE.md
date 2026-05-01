@@ -100,7 +100,7 @@ For detailed guidance, refer to the Wyckoff analysis framework.
 
 ### 🔌 使用 OpenAI/Claude API
 
-已为你创建了 API wrapper：`api/wyckoff-api.py`
+已为你创建了 API wrapper：`api/wyckoff_api.py`
 
 **安装依赖**：
 ```bash
@@ -110,7 +110,7 @@ pip install openai anthropic requests yfinance
 **使用示例**：
 ```bash
 # 作为命令行工具
-python api/wyckoff-api.py "AAPL" --model gpt-4
+python api/wyckoff_api.py "AAPL" --model gpt-4
 
 # 或作为Python模块
 from api.wyckoff_api import WyckoffAnalyzer
@@ -160,6 +160,8 @@ zip -r wyckoff-skill.zip wyckoff-stock-analysis/
 
 ### 💻 Python 集成示例
 
+#### 方式 A：使用 AI API 分析入口
+
 ```python
 from api.wyckoff_api import WyckoffAnalyzer
 
@@ -167,16 +169,30 @@ from api.wyckoff_api import WyckoffAnalyzer
 analyzer = WyckoffAnalyzer(api_key="your-api-key")
 
 # 分析股票
-result = analyzer.analyze_stock(
-    symbol="AAPL",
-    provider="openai",  # 或 "anthropic", "ollama"
-    include_charts=True
-)
+result = analyzer.analyze("AAPL", provider="openai")
+print(result)
+```
 
-# 获取分析结果
-print(result['phase'])          # 当前阶段
-print(result['analysis'])       # 完整分析
-print(result['recommendation']) # 交易建议
+#### 方式 B：使用本地工具库
+
+```python
+from tools.wyckoff_analyzer import WyckoffAnalyzer
+
+# 初始化分析器
+analyzer = WyckoffAnalyzer("AAPL")
+
+# 生成分析报告
+print(analyzer.generate_report())
+```
+
+```python
+from tools.wyckoff_utils import WyckoffScreener
+
+# 批量筛选
+screener = WyckoffScreener()
+screener.add_stock("AAPL")
+screener.add_stock("TSLA")
+print(screener.generate_screening_report())
 ```
 
 ### 🌐 Web 应用
@@ -202,7 +218,9 @@ streamlit run app/streamlit_app.py
 | Claude Code本地使用 | 已自动激活 | `~/.claude/user-skills/` |
 | ChatGPT一次性使用 | 复制粘贴prompt | `prompts/wyckoff-quick.md` |
 | ChatGPT永久使用 | Custom Instructions | 见第3节 |
-| 批量分析 | Python API | `api/wyckoff-api.py` |
+| 批量分析 | Python API | `api/wyckoff_api.py` |
+| 本地形态检测 | 模块化工具库 | `tools/core/pattern_detector.py` |
+| 增强分析/RS/回测 | 模块化工具库 | `tools/analyzers/`, `tools/backtesting/` |
 | Web界面 | Streamlit应用 | `app/streamlit_app.py` |
 | 分享给他人 | GitHub仓库 | 整个目录 |
 | 企业应用 | Docker容器 | `docker/` |

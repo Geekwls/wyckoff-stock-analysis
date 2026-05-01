@@ -167,11 +167,12 @@ wyckoff-stock-analysis/
 │       └── failed-patterns.md        # 失败形态（5个）
 │
 ├── api/                              # Python API
-│   ├── wyckoff_api.py                # 核心API
-│   └── requirements.txt              # 依赖包
-├── tools/                            # 自动识别工具（v3.0）
-│   ├── wyckoff_detector.py           # 形态检测器
-│   └── screener.py                   # 股票筛选器
+│   ├── wyckoff_api.py                # 核心API/命令行AI分析入口
+│   ├── requirements.txt              # 依赖包
+│   └── stock_cache.json              # 股票名称缓存（运行后生成/更新）
+├── tools/                            # 威科夫工具库
+│   ├── wyckoff_analyzer.py           # 核心分析器（形态检测、阶段识别、因果计算）
+│   └── wyckoff_utils.py              # 工具集（股票筛选、报告生成）
 │
 ├── app/                              # Web应用
 │   └── streamlit_app.py              # Streamlit界面
@@ -199,7 +200,28 @@ pip install -r api/requirements.txt
 python api/wyckoff_api.py AAPL
 ```
 
-### 4. Web应用
+### 4. Python工具库
+```python
+from tools.wyckoff_analyzer import WyckoffAnalyzer
+
+# 初始化分析器
+analyzer = WyckoffAnalyzer("AAPL")
+
+# 生成分析报告
+print(analyzer.generate_report())
+```
+
+```python
+from tools.wyckoff_utils import WyckoffScreener
+
+# 批量筛选
+screener = WyckoffScreener()
+screener.add_stock("AAPL")
+screener.add_stock("TSLA")
+print(screener.generate_screening_report())
+```
+
+### 5. Web应用
 ```bash
 pip install streamlit
 streamlit run app/streamlit_app.py
