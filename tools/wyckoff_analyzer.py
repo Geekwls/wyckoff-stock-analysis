@@ -98,6 +98,13 @@ def prepare_data(data: pd.DataFrame, config: WyckoffConfig = None) -> pd.DataFra
     # 计算ATR
     df['ATR'] = calculate_atr(df, cfg.atr_period)
 
+    # 计算RSI
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+    rs = gain / loss.replace(0, np.nan)
+    df['RSI'] = 100 - (100 / (1 + rs.fillna(0)))
+
     return df
 
 
@@ -933,6 +940,179 @@ class WyckoffAnalyzer:
             }
         return {'detected': False}
 
+    def detect_divergence(self, window: int = 30) -> Dict:
+        """量价/RSI背离检测
+        顶背离识别：价格创新高但 RSI/成交量未创新高，预示上涨动能衰竭
+        底背离识别：价格创新低但 RSI/成交量未创新低，预示下跌动能衰竭
+        """
+        if self.data is None or len(self.data) < window:
+            return {'detected': False, 'reason': 'insufficient_data'}
+
+        df = self.data.tail(window).copy()
+        if 'RSI' not in df.columns or df['RSI'].isna().all():
+            return {'detected': False, 'reason': 'RSI not calculated'}
+
+        mid = len(df) // 2
+        df_early = df.iloc[:mid]
+        df_late = df.iloc[mid:]
+
+        if len(df_early) < 5 or len(df_late) < 5:
+            return {'detected': False}
+
+        # 1. 顶背离
+        price_high_early = df_early['High'].max()
+        price_high_late = df_late['High'].max()
+        rsi_high_early = df_early['RSI'].max()
+        rsi_high_late = df_late['RSI'].max()
+        vol_high_early = df_early['Volume'].max()
+        vol_high_late = df_late['Volume'].max()
+
+        top_div = False
+        top_confidence = 0.8
+        top_desc = ""
+
+        if price_high_late > price_high_early and rsi_high_late < rsi_high_early:
+            top_div = True
+            top_desc = f"价格创新高（{price_high_early:.2f} -> {price_high_late:.2f}），但RSI未创新高（{rsi_high_early:.1f} -> {rsi_high_late:.1f}），预示上涨动能衰竭"
+            if vol_high_late < vol_high_early:
+                top_confidence = 0.9
+                top_desc += "。同时成交量也确认衰竭。"
+
+        # 2. 底背离
+        price_low_early = df_early['Low'].min()
+        price_low_late = df_late['Low'].min()
+        rsi_low_early = df_early['RSI'].min()
+        rsi_low_late = df_late['RSI'].min()
+        vol_low_early = df_early['Volume'].max()
+        vol_low_late = df_late['Volume'].max()
+
+        bottom_div = False
+        bottom_confidence = 0.8
+        bottom_desc = ""
+
+        if price_low_late < price_low_early and rsi_low_late > rsi_low_early:
+            bottom_div = True
+            bottom_desc = f"价格创新低（{price_low_early:.2f} -> {price_low_late:.2f}），但RSI未创新低（{rsi_low_early:.1f} -> {rsi_low_late:.1f}），预示下跌动能衰竭"
+            if vol_low_late < vol_low_early:
+                bottom_confidence = 0.9
+                bottom_desc += "。同时成交量也确认衰竭。"
+
+        if top_div:
+            return {
+                'detected': True,
+                'type': 'top_divergence',
+                'confidence': top_confidence,
+                'description': top_desc,
+                'details': {
+                    'price_early': float(price_high_early),
+                    'price_late': float(price_high_late),
+                    'rsi_early': float(rsi_high_early),
+                    'rsi_late': float(rsi_high_late),
+                    'vol_early': float(vol_high_early),
+                    'vol_late': float(vol_high_late)
+                }
+            }
+        elif bottom_div:
+            return {
+                'detected': True,
+                'type': 'bottom_divergence',
+                'confidence': bottom_confidence,
+                'description': bottom_desc,
+                'details': {
+                    'price_early': float(price_low_early),
+                    'price_late': float(price_low_late),
+                    'rsi_early': float(rsi_low_early),
+                    'rsi_late': float(rsi_low_late),
+                    'vol_early': float(vol_low_early),
+                    'vol_late': float(vol_low_late)
+                }
+            }
+
+        return {'detected': False}
+
+    def calculate_sequence_score(self, events: Dict, phase: str) -> Dict:
+        """事件序列量化评分
+        完整度评估：计算积累/分布阶段的事件链完整度 (0-100分)
+        缺失事件追踪：自动识别并列出缺失的关键威科夫事件
+        动态置信度调整：
+        ≥80% 完整度：系数 1.0（不调整）
+        ≥60% 完整度：系数 0.9（轻微下调）
+        ≥40% 完整度：系数 0.75（适度下调）
+        <40% 完整度：系数 0.6（大幅下调）
+        """
+        is_accum = 'Accumulation' in phase or 'Unknown' in phase
+        if is_accum:
+            critical_events = {
+                'climax': 'selling_climax',
+                'automatic_reaction': 'automatic_rally',
+                'secondary_test': 'secondary_test',
+                'spring_upthrust': 'spring',
+                'sos_sow': 'sos',
+                'lps_lpsy': 'lps'
+            }
+        else:
+            critical_events = {
+                'climax': 'buying_climax',
+                'automatic_reaction': 'automatic_reaction',
+                'secondary_test': 'secondary_test',
+                'spring_upthrust': 'upthrust',
+                'sos_sow': 'sow',
+                'lps_lpsy': 'lpsy'
+            }
+
+        detected_count = 0
+        missing_events = []
+
+        for k, expected_type in critical_events.items():
+            ev = events.get(k)
+            if ev and ev.get('detected'):
+                t = ev.get('type') or ev.get('_type')
+                if not t or expected_type in str(t).lower():
+                    detected_count += 1
+                else:
+                    missing_events.append(expected_type)
+            else:
+                missing_events.append(expected_type)
+
+        completeness = round((detected_count / len(critical_events)) * 100, 1)
+        base_score = 40 + (detected_count / len(critical_events)) * 60
+
+        if completeness >= 80:
+            adj_factor = 1.0
+        elif completeness >= 60:
+            adj_factor = 0.9
+        elif completeness >= 40:
+            adj_factor = 0.75
+        else:
+            adj_factor = 0.6
+
+        final_score = round(base_score * adj_factor, 1)
+        rating = self._get_sequence_rating(final_score, completeness)
+
+        return {
+            'completeness': completeness,
+            'score': final_score,
+            'rating': rating,
+            'missing_events': missing_events,
+            'adjustment_factor': adj_factor
+        }
+
+    def _get_sequence_rating(self, score: float, completeness: float) -> str:
+        """根据分值和完整度进行信号评级
+        S 级：score≥85 且 completeness≥80（顶级信号，重仓机会）
+        A 级：score≥70 且 completeness≥60（优质信号，正常仓位）
+        B 级：score≥55 且 completeness≥40（普通信号，轻仓试探）
+        C 级：其他（弱信号，建议观望）
+        """
+        if score >= 85 and completeness >= 80:
+            return "S (顶级信号，重仓机会)"
+        elif score >= 70 and completeness >= 60:
+            return "A (优质信号，正常仓位)"
+        elif score >= 55 and completeness >= 40:
+            return "B (普通信号，轻仓试探)"
+        else:
+            return "C (弱信号，建议观望)"
+
     # ----------------------------------------------------------
     # 阶段识别
     # ----------------------------------------------------------
@@ -1043,13 +1223,20 @@ class WyckoffAnalyzer:
         vol_confidence = self._check_volume_confirmation(phase)
         
         final_confidence = confidence * 0.5 + ma_confidence * 0.3 + vol_confidence * 0.2
-        
+
+        # 结合事件序列量化评分和背离检测进行智能调整
+        seq_score = self.calculate_sequence_score(events, phase)
+        final_confidence *= seq_score.get('adjustment_factor', 1.0)
+        div_res = self.detect_divergence()
+
         return {
             'phase': phase,
             'confidence': min(final_confidence, 1.0),
             'events_detected': events,
             'ma_confidence': ma_confidence,
-            'vol_confidence': vol_confidence
+            'vol_confidence': vol_confidence,
+            'sequence_score': seq_score,
+            'divergence': div_res
         }
 
     def _determine_phase_from_events(self, events: Dict) -> Tuple[str, float]:
@@ -2186,11 +2373,17 @@ class WyckoffAnalyzer:
         phase_dict = self.identify_phase_with_rs()
         phase_str = phase_dict.get('phase', 'Unknown')
         
+        daily_phase_dict = phase_dict.get('daily_phase', {})
+        seq_score = daily_phase_dict.get('sequence_score', {})
+        div_res = daily_phase_dict.get('divergence', {})
+
         result = {
             "symbol": self.symbol,
             "date": datetime.now().strftime('%Y-%m-%d'),
             "phase": phase_str,
             "phase_confidence": phase_dict.get('confidence', 0.0),
+            "sequence_score": seq_score,
+            "divergence": div_res,
             "multi_timeframe": {
                 "weekly_trend": phase_dict.get('weekly_trend', 'unknown'),
                 "monthly_trend": phase_dict.get('monthly_trend', 'unknown'),
