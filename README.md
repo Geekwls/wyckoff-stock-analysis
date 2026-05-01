@@ -1,4 +1,4 @@
-# Wyckoff Stock Analysis Skill v3.0
+# Wyckoff Stock Analysis Skill v3.1.0
 
 基于理查德·威科夫（Richard D. Wyckoff）理论的股票分析技能，用于识别市场周期、积累/分布模式，并做出明智的交易决策。
 
@@ -148,11 +148,6 @@ wyckoff-stock-analysis/
 ├── SKILL.md                          # 主技能定义（已增强）
 ├── README.md                         # 本说明文件
 ├── HOW_TO_USE.md                     # 详细使用指南
-├── quickstart.sh                     # 快速开始脚本
-│
-├── prompts/                          # Prompt模板（给其他AI用）
-│   ├── wyckoff-quick.md              # 快速版
-│   └── wyckoff-system-prompt.md      # 系统提示词版
 │
 ├── references/                       # 参考资料
 │   ├── quick-reference.md            # 速查表
@@ -166,10 +161,7 @@ wyckoff-stock-analysis/
 │       ├── spring-upthrust-examples.md # Spring/Upthrust专题（10个）
 │       └── failed-patterns.md        # 失败形态（5个）
 │
-├── api/                              # Python API
-│   ├── wyckoff_api.py                # 核心API/命令行AI分析入口
-│   ├── requirements.txt              # 依赖包
-│   └── stock_cache.json              # 股票名称缓存（运行后生成/更新）
+├── requirements.txt                  # Python依赖包
 ├── tools/                            # 威科夫工具库
 │   ├── wyckoff_analyzer.py           # 核心分析器（形态检测、阶段识别、因果计算）
 │   └── wyckoff_utils.py              # 工具集（股票筛选、报告生成）
@@ -178,8 +170,7 @@ wyckoff-stock-analysis/
 │   └── streamlit_app.py              # Streamlit界面
 │
 ├── examples/                         # 使用示例
-│   ├── example_usage.py              # Python示例
-│   └── bash_examples.sh              # Shell示例
+│   └── example_usage.py              # Python示例
 │
 └── .env.example                      # 环境变量模板
 ```
@@ -191,13 +182,13 @@ wyckoff-stock-analysis/
 ### 1. Claude Code（已自动配置）
 直接对话即可使用
 
-### 2. ChatGPT / Claude.ai
-复制 `prompts/wyckoff-quick.md` 内容
+### 2. 其他 AI Agent 兼容 (ChatGPT / Dify 等)
+将 `SKILL.md` 内容作为 Custom Instructions，并提供 `tools/wyckoff_analyzer.py` 作为分析工具调用。详见 HOW_TO_USE.md。
 
 ### 3. 命令行工具
 ```bash
-pip install -r api/requirements.txt
-python api/wyckoff_api.py AAPL
+pip install -r requirements.txt
+python tools/wyckoff_analyzer.py AAPL --json
 ```
 
 ### 4. Python工具库
@@ -397,31 +388,13 @@ streamlit run app/streamlit_app.py
 
 ## 更新日志
 
-### v3.0 (2026-04-30) - 专家级版本
-- ✨ 新增30+实战图表案例
-- ✨ 新增威科夫形态自动识别工具
-- ✨ 新增A股市场特定指南
-- ✨ 新增股票筛选器
-- ✨ 新增失败形态案例分析
-- 📈 内容质量从9/10提升至9.5/10
-- 📚 新增5个文件，2个工具
-- 🎯 达到专家级水平
+### v3.1.0 (2026-05-01) - AI Agent 架构重构
+- ✨ **架构升级**：完全重构为“System Prompt + JSON 工具”的现代化 Agent 技能标准架构。
+- ✨ **SKILL 瘦身**：剥离长篇理论至独立参考文档，将 `SKILL.md` 优化为极度精简的 Agent 路由规则。
+- ✨ **JSON 机器可读接口**：核心分析器新增 `--json` 格式化输出，保障大模型 100% 稳定解析返回数据。
+- 🧹 **依赖与文件清理**：废弃冗余的 `api/` 目录和旧脚本，在根目录提供统一的 `requirements.txt`。
+- 📚 **多平台兼容**：全面重写 `HOW_TO_USE.md`，新增 Cursor、Dify、MCP 等最新 AI 工作流的集成方案。
 
-### v2.0 (2026-04-30)
-- ✨ 新增威科夫5步骤方法
-- ✨ 新增高级威科夫概念
-- ✨ 新增量化交易标准
-- ✨ 新增常见错误和陷阱指南
-- ✨ 新增渐进式学习路径
-- 📈 内容质量从7/10提升至9/10
-- 📚 新增3个参考文件
-
-### v1.0 (2026-04-30)
-- 🎉 初始版本
-- ✨ 基础威科夫理论
-- ✨ 市场周期分析
-- ✨ 关键事件识别
-- ✨ 多平台支持
 
 ---
 

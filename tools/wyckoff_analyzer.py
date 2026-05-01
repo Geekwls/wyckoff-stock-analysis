@@ -842,6 +842,46 @@ class WyckoffAnalyzer:
 
         return report
 
+    def generate_json(self) -> str:
+        """生成JSON格式的分析报告（供AI Agent读取）"""
+        if not self.fetch_data():
+            return json.dumps({"error": f"无法获取数据: {self.symbol}"}, ensure_ascii=False)
+            
+        result = {
+            "symbol": self.symbol,
+            "date": datetime.now().strftime('%Y-%m-%d'),
+            "phase": self.identify_phase(),
+            "basic_data": {
+                "current_price": round(self.data['Close'].iloc[-1], 2),
+                "volume": int(self.data['Volume'].iloc[-1]),
+                "volume_ratio": round(self.data['Volume'].iloc[-1] / self.data['Volume_MA20'].iloc[-1], 2)
+            },
+            "events": {
+                "trading_range": self.detect_trading_range(),
+                "spring": self.detect_spring(),
+                "upthrust": self.detect_upthrust(),
+                "sos": self.detect_sos(),
+                "sow": self.detect_sow(),
+                "lps": self.detect_lps(),
+                "lpsy": self.detect_lpsy()
+            },
+            "cause_effect": self.calculate_cause_effect()
+        }
+        
+        # 转换 datetime 和特殊类型以便序列化
+        def default_serializer(obj):
+            if isinstance(obj, (pd.Timestamp, datetime)):
+                return obj.strftime('%Y-%m-%d')
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return str(obj)
+            
+        return json.dumps(result, ensure_ascii=False, default=default_serializer, indent=2)
+
 
 # ============================================================
 # 批量扫描功能
@@ -906,13 +946,23 @@ def batch_scan(symbols: List[str], period: str = "1y") -> List[Dict]:
 # ============================================================
 
 if __name__ == "__main__":
+    import argparse
     import sys
 
-    if len(sys.argv) > 1:
-        symbol = sys.argv[1]
-        analyzer = WyckoffAnalyzer(symbol)
-        print(analyzer.generate_report())
-    else:
+    parser = argparse.ArgumentParser(description="威科夫股票分析工具")
+    parser.add_argument("symbol", nargs="?", help="股票代码 (如 AAPL, 600519)")
+    parser.add_argument("--json", action="store_true", help="以JSON格式输出 (供AI Agent使用)")
+    parser.add_argument("--batch", action="store_true", help="运行批量扫描示例")
+    
+    args = parser.parse_args()
+
+    if args.symbol:
+        analyzer = WyckoffAnalyzer(args.symbol)
+        if args.json:
+            print(analyzer.generate_json())
+        else:
+            print(analyzer.generate_report())
+    elif args.batch:
         symbols = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL']
         print("批量扫描美股示例...\n")
         results = batch_scan(symbols)
@@ -927,3 +977,5 @@ if __name__ == "__main__":
                 print(f"\n最佳机会: {best['symbol']}")
                 print(f"   阶段: {best['phase']}")
                 print(f"   信号强度: {best['strength']}/4")
+    else:
+        parser.print_help()
