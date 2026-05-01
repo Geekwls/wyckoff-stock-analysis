@@ -1,34 +1,43 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-威科夫股票筛选器
-Wyckoff Stock Screener
+威科夫工具集 - 筛选和报告
+Wyckoff Utilities - Screening and Reporting
 
-根据威科夫理论筛选股票，找到潜在的交易机会
+合并了原 screener.py 的功能
+
+功能：
+1. 股票筛选（积累期/分布期）
+2. 入场信号筛选（LPS/LPSY）
+3. 生成筛选报告
+4. 预定义股票池
 """
 
-import yfinance as yf
 import pandas as pd
 from typing import List, Dict
-from wyckoff_detector import WyckoffPatternDetector
+from wyckoff_analyzer import WyckoffAnalyzer
 
 
 class WyckoffScreener:
     """威科夫股票筛选器"""
 
     def __init__(self):
-        self.detectors = {}
+        self.analyzers = {}
 
-    def add_stock(self, symbol: str, period: str = "1y"):
+    def add_stock(self, symbol: str, period: str = "1y") -> bool:
         """
         添加股票到筛选列表
 
         Args:
             symbol: 股票代码
             period: 数据周期
+
+        Returns:
+            是否成功添加
         """
-        detector = WyckoffPatternDetector(symbol, period)
-        if detector.fetch_data():
-            self.detectors[symbol] = detector
+        analyzer = WyckoffAnalyzer(symbol, period)
+        if analyzer.fetch_data():
+            self.analyzers[symbol] = analyzer
             return True
         return False
 
@@ -41,19 +50,15 @@ class WyckoffScreener:
         """
         results = []
 
-        for symbol, detector in self.detectors.items():
-            phase = detector.identify_phase()
+        for symbol, analyzer in self.analyzers.items():
+            phase = analyzer.identify_phase()
 
-            # 判断是否在积累期
             if 'Accumulation' in phase:
-                trading_range = detector.detect_trading_range()
+                trading_range = analyzer.detect_trading_range()
+                spring = analyzer.detect_spring()
+                sos = analyzer.detect_sos()
+                lps = analyzer.detect_lps()
 
-                # 检测Spring和SOS
-                spring = detector.detect_spring()
-                sos = detector.detect_sos()
-                lps = detector.detect_lps()
-
-                # 评分
                 score = 0
                 if spring['detected']:
                     score += 2
@@ -62,7 +67,6 @@ class WyckoffScreener:
                 if lps['detected']:
                     score += 3
 
-                # 判断是否值得关注
                 if score >= 3:
                     results.append({
                         'symbol': symbol,
@@ -72,10 +76,9 @@ class WyckoffScreener:
                         'has_sos': sos['detected'],
                         'has_lps': lps['detected'],
                         'trading_range': trading_range,
-                        'current_price': detector.data['Close'].iloc[-1]
+                        'current_price': analyzer.data['Close'].iloc[-1]
                     })
 
-        # 按评分排序
         results.sort(key=lambda x: x['score'], reverse=True)
         return results
 
@@ -88,19 +91,15 @@ class WyckoffScreener:
         """
         results = []
 
-        for symbol, detector in self.detectors.items():
-            phase = detector.identify_phase()
+        for symbol, analyzer in self.analyzers.items():
+            phase = analyzer.identify_phase()
 
-            # 判断是否在分布期
             if 'Distribution' in phase:
-                trading_range = detector.detect_trading_range()
+                trading_range = analyzer.detect_trading_range()
+                upthrust = analyzer.detect_upthrust()
+                sow = analyzer.detect_sow()
+                lpsy = analyzer.detect_lpsy()
 
-                # 检测Upthrust和SOW
-                upthrust = detector.detect_upthrust()
-                sow = detector.detect_sow()
-                lpsy = detector.detect_lpsy()
-
-                # 评分
                 score = 0
                 if upthrust['detected']:
                     score += 2
@@ -109,7 +108,6 @@ class WyckoffScreener:
                 if lpsy['detected']:
                     score += 3
 
-                # 判断是否值得关注
                 if score >= 3:
                     results.append({
                         'symbol': symbol,
@@ -119,10 +117,9 @@ class WyckoffScreener:
                         'has_sow': sow['detected'],
                         'has_lpsy': lpsy['detected'],
                         'trading_range': trading_range,
-                        'current_price': detector.data['Close'].iloc[-1]
+                        'current_price': analyzer.data['Close'].iloc[-1]
                     })
 
-        # 按评分排序
         results.sort(key=lambda x: x['score'], reverse=True)
         return results
 
@@ -135,17 +132,15 @@ class WyckoffScreener:
         """
         results = []
 
-        for symbol, detector in self.detectors.items():
-            lps = detector.detect_lps()
+        for symbol, analyzer in self.analyzers.items():
+            lps = analyzer.detect_lps()
 
             if lps['detected']:
-                # 计算风险回报比
                 current_price = lps['price']
-                stop_loss = current_price * 0.95  # 5%止损
-                trading_range = detector.detect_trading_range()
+                stop_loss = current_price * 0.95
+                trading_range = analyzer.detect_trading_range()
 
                 if trading_range.get('is_consolidation'):
-                    # 因果测算
                     cause_size = trading_range['high'] - trading_range['low']
                     target = trading_range['high'] + cause_size
 
@@ -163,7 +158,6 @@ class WyckoffScreener:
                             'pullback_pct': lps['pullback_pct'] * 100
                         })
 
-        # 按风险回报比排序
         results.sort(key=lambda x: x['risk_reward_ratio'], reverse=True)
         return results
 
@@ -176,17 +170,15 @@ class WyckoffScreener:
         """
         results = []
 
-        for symbol, detector in self.detectors.items():
-            lpsy = detector.detect_lpsy()
+        for symbol, analyzer in self.analyzers.items():
+            lpsy = analyzer.detect_lpsy()
 
             if lpsy['detected']:
-                # 计算风险回报比
                 current_price = lpsy['price']
-                stop_loss = current_price * 1.05  # 5%止损
-                trading_range = detector.detect_trading_range()
+                stop_loss = current_price * 1.05
+                trading_range = analyzer.detect_trading_range()
 
                 if trading_range.get('is_consolidation'):
-                    # 因果测算
                     cause_size = trading_range['high'] - trading_range['low']
                     target = trading_range['low'] - cause_size
 
@@ -204,7 +196,6 @@ class WyckoffScreener:
                             'rally_pct': lpsy['rally_pct'] * 100
                         })
 
-        # 按风险回报比排序
         results.sort(key=lambda x: x['risk_reward_ratio'], reverse=True)
         return results
 
@@ -218,7 +209,6 @@ class WyckoffScreener:
         report = """
 ╔══════════════════════════════════════════════════════════════╗
 ║           威科夫股票筛选报告                                ║
-║           Wyckoff Stock Screening Report                      ║
 ╚══════════════════════════════════════════════════════════════╝
 
 """
@@ -227,18 +217,18 @@ class WyckoffScreener:
         accumulation_stocks = self.screen_accumulation()
         if accumulation_stocks:
             report += f"""
-【📈 积累期股票 - 潜在做多机会】
+【积累期股票 - 潜在做多机会】
 
 {'='*60}
 {'股票代码':<10} {'阶段':<30} {'评分':<5} {'Spring':<8} {'SOS':<8} {'LPS':<8}
 {'='*60}
 """
-            for stock in accumulation_stocks[:10]:  # 显示前10个
+            for stock in accumulation_stocks[:10]:
                 report += f"""
-{stock['symbol']:<10} {stock['phase']:<30} {stock['score']:<5} {'✅' if stock['has_spring'] else '❌':<8} {'✅' if stock['has_sos'] else '❌':<8} {'✅' if stock['has_lps'] else '❌':<8}
+{stock['symbol']:<10} {stock['phase']:<30} {stock['score']:<5} {'Y' if stock['has_spring'] else 'N':<8} {'Y' if stock['has_sos'] else 'N':<8} {'Y' if stock['has_lps'] else 'N':<8}
 """
         else:
-            report += "\n【📈 积累期股票】\n   暂无符合条件的股票\n"
+            report += "\n【积累期股票】\n   暂无符合条件的股票\n"
 
         # 筛选分布期
         distribution_stocks = self.screen_distribution()
@@ -246,7 +236,7 @@ class WyckoffScreener:
             report += f"""
 {'='*60}
 
-【📉 分布期股票 - 潜在做空机会】
+【分布期股票 - 潜在做空机会】
 
 {'='*60}
 {'股票代码':<10} {'阶段':<30} {'评分':<5} {'Upthrust':<8} {'SOW':<8} {'LPSY':<8}
@@ -254,10 +244,10 @@ class WyckoffScreener:
 """
             for stock in distribution_stocks[:10]:
                 report += f"""
-{stock['symbol']:<10} {stock['phase']:<30} {stock['score']:<5} {'✅' if stock['has_upthrust'] else '❌':<8} {'✅' if stock['has_sow'] else '❌':<8} {'✅' if stock['has_lpsy'] else '❌':<8}
+{stock['symbol']:<10} {stock['phase']:<30} {stock['score']:<5} {'Y' if stock['has_upthrust'] else 'N':<8} {'Y' if stock['has_sow'] else 'N':<8} {'Y' if stock['has_lpsy'] else 'N':<8}
 """
         else:
-            report += "\n【📉 分布期股票】\n   暂无符合条件的股票\n"
+            report += "\n【分布期股票】\n   暂无符合条件的股票\n"
 
         # LPS做多机会
         lps_entries = self.screen_lps_entries()
@@ -265,7 +255,7 @@ class WyckoffScreener:
             report += f"""
 {'='*60}
 
-【⭐ LPS入场机会 - 做多】
+【LPS入场机会 - 做多】
 
 {'='*60}
 {'股票代码':<10} {'入场价':<10} {'止损价':<10} {'目标价':<10} {'风险/回报':<10} {'回调%':<10}
@@ -276,7 +266,7 @@ class WyckoffScreener:
 {entry['symbol']:<10} ${entry['entry_price']:<9.2f} ${entry['stop_loss']:<9.2f} ${entry['target_price']:<9.2f} {entry['risk_reward_ratio']:<9.2f} {entry['pullback_pct']:<9.1f}%
 """
         else:
-            report += "\n【⭐ LPS入场机会】\n   暂无符合条件的入场点\n"
+            report += "\n【LPS入场机会】\n   暂无符合条件的入场点\n"
 
         # LPSY做空机会
         lpsy_entries = self.screen_lpsy_entries()
@@ -284,7 +274,7 @@ class WyckoffScreener:
             report += f"""
 {'='*60}
 
-【⭐ LPSY入场机会 - 做空】
+【LPSY入场机会 - 做空】
 
 {'='*60}
 {'股票代码':<10} {'入场价':<10} {'止损价':<10} {'目标价':<10} {'风险/回报':<10} {'反弹%':<10}
@@ -295,7 +285,7 @@ class WyckoffScreener:
 {entry['symbol']:<10} ${entry['entry_price']:<9.2f} ${entry['stop_loss']:<9.2f} ${entry['target_price']:<9.2f} {entry['risk_reward_ratio']:<9.2f} {entry['rally_pct']:<9.1f}%
 """
         else:
-            report += "\n【⭐ LPSY入场机会】\n   暂无符合条件的入场点\n"
+            report += "\n【LPSY入场机会】\n   暂无符合条件的入场点\n"
 
         report += f"""
 {'='*60}
@@ -314,14 +304,17 @@ class WyckoffScreener:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 生成时间: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
-股票数量: {len(self.detectors)}
+股票数量: {len(self.analyzers)}
 
 """
 
         return report
 
 
+# ============================================================
 # 预定义股票池
+# ============================================================
+
 STOCK_POOLS = {
     'tech': ['AAPL', 'MSFT', 'GOOGL', 'META', 'NVDA', 'AMD', 'INTC', 'CSCO'],
     'china_adrs': ['BABA', 'JD', 'PDD', 'BIDU', 'NTES', 'TCEHY', 'LI', 'NIO'],
@@ -332,23 +325,22 @@ STOCK_POOLS = {
 }
 
 
-# 命令行使用
+# ============================================================
+# 命令行入口
+# ============================================================
+
 if __name__ == "__main__":
     import sys
 
-    # 创建筛选器
     screener = WyckoffScreener()
 
-    # 添加股票
     if len(sys.argv) > 1:
-        # 使用命令行参数
         symbols = sys.argv[1:]
     else:
-        # 使用默认科技股池
         symbols = STOCK_POOLS['tech']
-        print(f"📊 使用默认科技股池: {', '.join(symbols)}\n")
+        print(f"使用默认科技股池: {', '.join(symbols)}\n")
 
-    print("📊 正在获取数据...\n")
+    print("正在获取数据...\n")
 
     for symbol in symbols:
         if screener.add_stock(symbol):
@@ -357,15 +349,13 @@ if __name__ == "__main__":
             print(f"  ❌ {symbol}")
 
     print("\n" + "="*60)
-    print("📊 生成筛选报告...\n")
+    print("生成筛选报告...\n")
 
-    # 生成报告
     report = screener.generate_screening_report()
     print(report)
 
-    # 保存报告
     filename = f"wyckoff_screening_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
         f.write(report)
 
-    print(f"\n📄 报告已保存到: {filename}")
+    print(f"\n报告已保存到: {filename}")
