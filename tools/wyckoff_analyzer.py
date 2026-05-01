@@ -1697,6 +1697,79 @@ class WyckoffAnalyzer:
                 
         return results
 
+    def add_market_sentiment(self) -> dict:
+        """整合市场情绪指标（区分 A股、港股和美股）"""
+        try:
+            import numpy as np
+            import yfinance as yf
+            import pandas as pd
+            
+            is_us_market = not (self.symbol.startswith('sh.') or self.symbol.startswith('sz.') or self.symbol.endswith('.HK'))
+            is_hk_market = self.symbol.endswith('.HK')
+            
+            current_vix = None
+            benchmark_used = ""
+            
+            # 1. 尝试直接获取期权隐含波动率指数 (VIX / VHSI)
+            if is_us_market:
+                vix = yf.download('^VIX', period='5d', progress=False)
+                if not vix.empty and not pd.isna(vix['Close'].iloc[-1]):
+                    current_vix = float(vix['Close'].iloc[-1].iloc[0] if isinstance(vix['Close'].iloc[-1], pd.Series) else vix['Close'].iloc[-1])
+                    benchmark_used = '^VIX (CBOE Implied Volatility)'
+            elif is_hk_market:
+                vhsi = yf.download('^VHSI', period='5d', progress=False)
+                if not vhsi.empty and not pd.isna(vhsi['Close'].iloc[-1]):
+                    current_vix = float(vhsi['Close'].iloc[-1].iloc[0] if isinstance(vhsi['Close'].iloc[-1], pd.Series) else vhsi['Close'].iloc[-1])
+                    benchmark_used = '^VHSI (HSI Implied Volatility)'
+                    
+            # 2. 如果是 A股，或者外盘获取不到 VIX，回退到计算大盘的 20日历史实现波动率 (Realized Volatility)
+            if current_vix is None:
+                index_symbol = self._get_baseline_index_symbol()
+                idx_analyzer = WyckoffAnalyzer(index_symbol, self.period, self.config)
+                
+                import os, sys
+                from contextlib import redirect_stdout
+                with open(os.devnull, 'w') as f, redirect_stdout(f):
+                    success = idx_analyzer.fetch_data()
+                    
+                if not success or idx_analyzer.data is None or len(idx_analyzer.data) < 20:
+                    return {"market_sentiment": "unknown", "vix_level": None, "implication": "无法获取大盘数据计算情绪"}
+                
+                df = idx_analyzer.data.copy()
+                returns = df['Close'].pct_change().dropna()
+                if len(returns) < 20:
+                    return {"market_sentiment": "unknown", "vix_level": None, "implication": "大盘数据不足"}
+                    
+                current_vix = returns.rolling(20).std().iloc[-1] * np.sqrt(252) * 100
+                if pd.isna(current_vix):
+                    return {"market_sentiment": "unknown", "vix_level": None, "implication": "波动率计算失败"}
+                    
+                current_vix = float(current_vix)
+                benchmark_used = f'{index_symbol} (20-day Realized Volatility)'
+            
+            # 3. 统一的情绪评级标准
+            if current_vix >= 30:
+                sentiment = "extreme_fear"
+                implication = "大盘处于极度恐慌或剧烈波动环境，技术信号极易失效（暴涨暴跌），建议严控仓位"
+            elif current_vix >= 22:
+                sentiment = "fear"
+                implication = "大盘恐慌情绪上升，警惕向下突破或大幅震荡"
+            elif current_vix <= 15:
+                sentiment = "greed"
+                implication = "大盘波动极低，多头环境良好或处于温水煮青蛙的赶顶期，需防范高位诱多"
+            else:
+                sentiment = "neutral"
+                implication = "大盘情绪平稳，个股的技术信号和形态的有效性较高"
+                
+            return {
+                "market_sentiment": sentiment,
+                "vix_level": round(current_vix, 2),
+                "implication": implication,
+                "benchmark_used": benchmark_used
+            }
+        except Exception as e:
+            return {"market_sentiment": "unknown", "vix_level": None, "implication": f"获取情绪数据失败: {str(e)}"}
+
     def generate_json(self) -> str:
         """生成JSON格式的分析报告（供AI Agent读取）"""
         if not self.fetch_data():
@@ -1778,6 +1851,9 @@ class WyckoffAnalyzer:
         result["risk_specific_advice"] = self.generate_risk_advice(signal_quality, trading_plan)
         result["interactive_qa"] = self.generate_interactive_qa(signal_quality, trading_plan)
         result["performance_tracking"] = self.get_signal_performance(events)
+        
+        # 增加市场情绪整合
+        result["global_sentiment"] = self.add_market_sentiment()
         
         result = self._round_floats(result)
         
