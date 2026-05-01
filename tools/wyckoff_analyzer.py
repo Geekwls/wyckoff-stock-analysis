@@ -337,50 +337,236 @@ class WyckoffAnalyzer:
             'current_price': current_price
         }
 
-    def detect_spring(self, lookback: int = 20) -> Dict:
-        """检测Spring（震仓）"""
-        if self.data is None or len(self.data) < lookback + 10:
-            return {}
-
-        df = self.data.tail(lookback + 10).copy()
+    def detect_spring(self, lookback: int = 120) -> Dict:
+        """
+        增强版Spring检测 (V2)
+        
+        威科夫Spring完整定义：
+        1. 存在明确的交易区间（至少30天的横盘整理）
+        2. 价格短暂跌破交易区间下边界（1-3天）
+        3. 快速收回区间内（收盘价回到支撑位上方）
+        4. 成交量模式：下跌时缩量或正常，反弹时放量
+        """
+        if self.data is None or len(self.data) < 30:
+            return {'detected': False, 'reason': 'insufficient_data'}
+            
+        df = self.data.tail(lookback).copy()
+        
+        # 步骤1：检测交易区间
+        tr_window = 60
+        if len(df) < tr_window:
+            return {'detected': False, 'reason': 'insufficient_data'}
+        
+        tr_data = df.tail(tr_window)
+        tr_high = tr_data['High'].max()
+        tr_low = tr_data['Low'].min()
+        tr_range_pct = (tr_high - tr_low) / tr_low
+        
+        # 交易区间幅度应该小于20%（可调整）
+        if tr_range_pct > 0.30:  # 为了宽幅震荡的A股稍微放宽到30%
+            return {'detected': False, 'reason': 'no_trading_range'}
+        
+        # 步骤2：确认支撑位（交易区间下边界）
+        support_level = tr_low
+        
+        # 步骤3：寻找跌破支撑的情况
+        search_start = max(0, len(df) - 30)  # 最近30天
+        
         springs = []
-
-        for i in range(10, len(df)):
+        for i in range(search_start, len(df)):
             current_low = df['Low'].iloc[i]
             current_close = df['Close'].iloc[i]
-
-            past_lows = df['Low'].iloc[i-20:i]
-            support_level = past_lows.min()
-
+            current_vol = df['Volume'].iloc[i]
+            vol_ma = df['Volume_MA20'].iloc[i]
+            
+            # 跌破支撑位（低于支撑位）
             if current_low < support_level * 0.98:
-                future_data = df.iloc[i:min(i+5, len(df))]
-                future_high = future_data['High'].max()
-                recovery_days = (future_data['High'].idxmax() - df.index[i]).days if len(future_data) > 1 else 0
-
-                breakdown_vol = df['Volume'].iloc[i]
-                recovery_vol = future_data['Volume'].mean()
-                vol_ma = df['Volume_MA20'].iloc[i]
-
-                is_spring = (
-                    future_high > support_level * 1.02 and
-                    recovery_days <= 3 and
-                    recovery_vol > breakdown_vol * 1.2
-                )
-
+                # 步骤4：检查收盘价是否在支撑位上方（假跌破）
+                close_above_support = current_close >= support_level
+                
+                # 步骤5：检查恢复情况（1-3天内）
+                recovery_found = False
+                recovery_day = None
+                recovery_vol = 0
+                
+                for j in range(1, 4):
+                    if i + j < len(df):
+                        if df['Close'].iloc[i + j] > support_level:
+                            recovery_found = True
+                            recovery_day = j
+                            recovery_vol = df['Volume'].iloc[i + j]
+                            break
+                
+                if not recovery_found:
+                    continue
+                
+                # 步骤6：验证成交量模式
+                breakdown_vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1
+                recovery_vol_ratio = recovery_vol / vol_ma if vol_ma > 0 else 1
+                
+                vol_pattern = 'neutral'
+                if breakdown_vol_ratio < 0.8 and recovery_vol_ratio > 1.2:
+                    vol_pattern = 'bullish'
+                elif breakdown_vol_ratio < 1.0 and recovery_vol_ratio > 1.0:
+                    vol_pattern = 'mildly_bullish'
+                elif breakdown_vol_ratio > 1.5:
+                    vol_pattern = 'bearish'
+                
+                # 步骤7：综合判断是否为真Spring
+                is_spring = False
+                confidence = 0
+                
+                if close_above_support and recovery_found:
+                    is_spring = True
+                    confidence = 0.8
+                elif recovery_found and vol_pattern in ['bullish', 'mildly_bullish']:
+                    is_spring = True
+                    confidence = 0.6
+                elif recovery_found and recovery_day <= 2:
+                    is_spring = True
+                    confidence = 0.5
+                
                 if is_spring:
                     springs.append({
                         'date': df.index[i],
                         'breakdown_price': current_low,
                         'support_level': support_level,
-                        'recovery_price': future_high,
-                        'recovery_days': recovery_days,
-                        'breakdown_volume': breakdown_vol,
+                        'recovery_day': recovery_day,
+                        'recovery_price': df['Close'].iloc[i + recovery_day],
+                        'close_above_support': close_above_support,
+                        'vol_pattern': vol_pattern,
+                        'breakdown_volume': current_vol,
                         'recovery_volume': recovery_vol,
-                        'volume_ma': vol_ma
+                        'volume_ma': vol_ma,
+                        'confidence': confidence,
+                        'price': current_low
                     })
-
+        
         if springs:
-            return {'detected': True, 'springs': springs, 'latest_spring': springs[-1]}
+            return {'detected': True, 'signals': springs, 'latest_spring': springs[-1]}
+        return {'detected': False, 'reason': 'no_spring_found'}
+
+    def detect_climax(self) -> Dict:
+        """
+        检测高潮（CL）
+        威科夫高潮定义：成交量急剧放大（3-5倍平均成交量）+ 价格波动剧烈
+        """
+        if self.data is None or len(self.data) < 20:
+            return {'detected': False}
+            
+        df = self.data.copy()
+        
+        for i in range(20, len(df)):
+            current_vol = df['Volume'].iloc[i]
+            vol_ma = df['Volume_MA20'].iloc[i]
+            daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
+            avg_range = (df['High'] - df['Low']).rolling(20).mean().iloc[i]
+            
+            # 成交量急剧放大
+            vol_spike = current_vol / vol_ma if vol_ma > 0 else 1
+            # 价格波动剧烈
+            range_spike = daily_range / avg_range if avg_range > 0 else 1
+            
+            # 高潮条件：成交量3倍以上 + 价格波动2倍以上 (A股考虑到涨跌停板，可能波动率不需要那么大)
+            if vol_spike >= 3.0 and range_spike >= 1.5:
+                price_change = df['Close'].iloc[i] - df['Close'].iloc[i-1]
+                
+                if price_change > 0:
+                    climax_type = 'buying_climax'  # 顶部高潮
+                else:
+                    climax_type = 'selling_climax'  # 底部高潮
+                
+                return {
+                    'detected': True,
+                    'type': climax_type,
+                    'date': df.index[i],
+                    'price': df['Close'].iloc[i],
+                    'volume_ratio': vol_spike,
+                    'range_ratio': range_spike
+                }
+        
+        return {'detected': False}
+
+    def detect_automatic_reaction(self, climax_event: Dict) -> Dict:
+        """检测自动反弹/回落（AR）"""
+        if not climax_event.get('detected'):
+            return {'detected': False}
+        
+        df = self.data.copy()
+        try:
+            climax_idx = df.index.get_loc(climax_event['date'])
+        except KeyError:
+            return {'detected': False}
+        
+        # 在高潮后5天内寻找AR
+        for i in range(climax_idx + 1, min(climax_idx + 6, len(df))):
+            current_vol = df['Volume'].iloc[i]
+            climax_vol = df['Volume'].iloc[climax_idx]
+            
+            # 成交量应该低于高潮
+            if current_vol < climax_vol * 0.7:
+                if climax_event['type'] == 'buying_climax':
+                    # 买入高潮后应该是下跌
+                    if df['Close'].iloc[i] < df['Close'].iloc[climax_idx]:
+                        return {
+                            'detected': True,
+                            'type': 'automatic_reaction',
+                            'date': df.index[i],
+                            'price': df['Close'].iloc[i],
+                            'direction': 'down'
+                        }
+                else:
+                    # 卖出高潮后应该是上涨
+                    if df['Close'].iloc[i] > df['Close'].iloc[climax_idx]:
+                        return {
+                            'detected': True,
+                            'type': 'automatic_rally',
+                            'date': df.index[i],
+                            'price': df['Close'].iloc[i],
+                            'direction': 'up'
+                        }
+        
+        return {'detected': False}
+
+    def detect_secondary_test(self, climax_event: Dict, ar_event: Dict) -> Dict:
+        """检测二次测试（ST）"""
+        if not climax_event.get('detected') or not ar_event.get('detected'):
+            return {'detected': False}
+        
+        df = self.data.copy()
+        try:
+            climax_idx = df.index.get_loc(climax_event['date'])
+        except KeyError:
+            return {'detected': False}
+        
+        # 在AR后20天内寻找ST
+        search_end = min(climax_idx + 25, len(df))
+        
+        for i in range(climax_idx + 2, search_end):
+            current_vol = df['Volume'].iloc[i]
+            climax_vol = df['Volume'].iloc[climax_idx]
+            
+            # 成交量应该低于高潮
+            if current_vol < climax_vol * 0.7:
+                if climax_event['type'] == 'buying_climax':
+                    if df['High'].iloc[i] > df['High'].iloc[climax_idx] * 0.95:
+                        return {
+                            'detected': True,
+                            'type': 'secondary_test',
+                            'date': df.index[i],
+                            'price': df['Close'].iloc[i],
+                            'test_level': 'high'
+                        }
+                else:
+                    if df['Low'].iloc[i] < df['Low'].iloc[climax_idx] * 1.05:
+                        return {
+                            'detected': True,
+                            'type': 'secondary_test',
+                            'date': df.index[i],
+                            'price': df['Close'].iloc[i],
+                            'test_level': 'low'
+                        }
+        
         return {'detected': False}
 
     def detect_upthrust(self, lookback: int = 20) -> Dict:
@@ -589,47 +775,342 @@ class WyckoffAnalyzer:
     # 阶段识别
     # ----------------------------------------------------------
 
-    def identify_phase(self) -> str:
-        """识别当前威科夫阶段"""
+    def identify_phase(self) -> Dict:
+        """
+        增强版阶段识别 (V2)
+        基于威科夫事件序列，而非简单的均线排列
+        返回包含置信度、细分事件、多时间框架等综合判断的字典
+        """
         if self.data is None:
-            return "Unknown"
+            return {'phase': 'Unknown', 'confidence': 0.0}
 
-        tr_info = self.detect_trading_range()
+        events = {
+            'climax': self.detect_climax(),
+            'automatic_reaction': None,
+            'secondary_test': None,
+            'spring_upthrust': None,
+            'sos_sow': None,
+            'lps_lpsy': None
+        }
+        
+        if events['climax']['detected']:
+            events['automatic_reaction'] = self.detect_automatic_reaction(events['climax'])
+        
+        if events['climax']['detected'] and events['automatic_reaction'] and events['automatic_reaction']['detected']:
+            events['secondary_test'] = self.detect_secondary_test(
+                events['climax'], 
+                events['automatic_reaction']
+            )
+        
+        # 将现有的形态检测合并进去
+        spring_res = self.detect_spring()
+        upthrust_res = self.detect_upthrust()
+        if spring_res.get('detected'):
+            events['spring_upthrust'] = spring_res
+        elif upthrust_res.get('detected'):
+            events['spring_upthrust'] = upthrust_res
+            
+        sos_res = self.detect_sos()
+        sow_res = self.detect_sow()
+        if sos_res.get('detected'):
+            events['sos_sow'] = sos_res
+        elif sow_res.get('detected'):
+            events['sos_sow'] = sow_res
+            
+        lps_res = self.detect_lps()
+        lpsy_res = self.detect_lpsy()
+        if lps_res.get('detected'):
+            events['lps_lpsy'] = lps_res
+        elif lpsy_res.get('detected'):
+            events['lps_lpsy'] = lpsy_res
 
-        if not tr_info.get('is_consolidation'):
-            ma20 = self.data['MA20'].iloc[-1]
-            ma50 = self.data['MA50'].iloc[-1]
-            ma200 = self.data['MA200'].iloc[-1]
-            current = self.data['Close'].iloc[-1]
-
-            if current > ma20 > ma50 > ma200:
-                return "Markup Phase E (强势上涨)"
-            elif current > ma20 > ma50 and ma20 < ma200:
-                return "Accumulation Phase D (可能在建仓末期)"
-            elif current < ma20 < ma50 < ma200:
-                return "Markdown Phase E (强势下跌)"
-            elif current < ma20 < ma50 and ma20 > ma200:
-                return "Distribution Phase D (可能在出货末期)"
-            else:
-                return "Trending (趋势中)"
-        else:
-            position = tr_info['position']
-            vol_trend = tr_info['volume_trend']
-
-            if vol_trend == 'decreasing':
-                if position < 0.3:
-                    return "Accumulation Phase B/C (可能在建仓中)"
-                elif position < 0.7:
-                    return "Accumulation Phase C-D (可能在震仓)"
+        # 步骤2：根据事件序列判断阶段
+        phase, confidence = self._determine_phase_from_events(events)
+        
+        # 如果事件序列无法判断（常见情况），退回到使用原有的交易区间和均线判断逻辑
+        if phase == 'Unknown':
+            tr_info = self.detect_trading_range()
+            if not tr_info.get('is_consolidation'):
+                ma20 = self.data['MA20'].iloc[-1]
+                ma50 = self.data['MA50'].iloc[-1]
+                ma200 = self.data['MA200'].iloc[-1]
+                current = self.data['Close'].iloc[-1]
+                
+                if current > ma20 > ma50 > ma200:
+                    phase = "Markup Phase E (强势上涨)"
+                    confidence = 0.6
+                elif current > ma20 > ma50 and ma20 < ma200:
+                    phase = "Accumulation Phase D (可能在建仓末期)"
+                    confidence = 0.5
+                elif current < ma20 < ma50 < ma200:
+                    phase = "Markdown Phase E (强势下跌)"
+                    confidence = 0.6
+                elif current < ma20 < ma50 and ma20 > ma200:
+                    phase = "Distribution Phase D (可能在出货末期)"
+                    confidence = 0.5
                 else:
-                    return "Accumulation Phase D-E (准备突破)"
+                    phase = "Trending (趋势中)"
+                    confidence = 0.4
             else:
-                if position > 0.7:
-                    return "Distribution Phase B/C (可能在出货中)"
-                elif position > 0.3:
-                    return "Distribution Phase C-D (可能在假突破)"
+                position = tr_info['position']
+                vol_trend = tr_info['volume_trend']
+                
+                if vol_trend == 'decreasing':
+                    if position < 0.3:
+                        phase = "Accumulation Phase B/C (可能在建仓中)"
+                    elif position < 0.7:
+                        phase = "Accumulation Phase C-D (可能在震仓)"
+                    else:
+                        phase = "Accumulation Phase D-E (准备突破)"
+                    confidence = 0.5
                 else:
-                    return "Distribution Phase D-E (准备跌破)"
+                    if position > 0.7:
+                        phase = "Distribution Phase B/C (可能在出货中)"
+                    elif position > 0.3:
+                        phase = "Distribution Phase C-D (可能在假突破)"
+                    else:
+                        phase = "Distribution Phase D-E (准备跌破)"
+                    confidence = 0.5
+
+        # 步骤3：结合均线趋势确认
+        ma_confidence = self._check_ma_confirmation(phase)
+        
+        # 步骤4：结合成交量确认
+        vol_confidence = self._check_volume_confirmation(phase)
+        
+        final_confidence = confidence * 0.5 + ma_confidence * 0.3 + vol_confidence * 0.2
+        
+        return {
+            'phase': phase,
+            'confidence': min(final_confidence, 1.0),
+            'events_detected': events,
+            'ma_confidence': ma_confidence,
+            'vol_confidence': vol_confidence
+        }
+
+    def _determine_phase_from_events(self, events: Dict) -> Tuple[str, float]:
+        """根据事件序列判断阶段"""
+        if events['spring_upthrust'] and events.get('spring_upthrust', {}).get('detected'):
+            if events['sos_sow'] and events.get('sos_sow', {}).get('detected') and 'sos' in str(events['sos_sow']):
+                return 'Accumulation Phase D (积累期突破)', 0.85
+            else:
+                return 'Accumulation Phase C (积累期震仓)', 0.70
+                
+        elif events['secondary_test'] and events['secondary_test'].get('detected'):
+            if events['climax']['type'] == 'selling_climax':
+                return 'Accumulation Phase B (积累期测试)', 0.60
+            else:
+                return 'Distribution Phase B (派发期测试)', 0.60
+                
+        elif events['climax'] and events['climax'].get('detected') and events['automatic_reaction'] and events['automatic_reaction'].get('detected'):
+            if events['climax']['type'] == 'selling_climax':
+                return 'Accumulation Phase A (恐慌抛售停止)', 0.75
+            else:
+                return 'Distribution Phase A (买入高潮停止)', 0.75
+                
+        elif events['spring_upthrust'] and events.get('spring_upthrust', {}).get('detected') and 'upthrust' in str(events['spring_upthrust']):
+            if events['sos_sow'] and events.get('sos_sow', {}).get('detected') and 'sow' in str(events['sos_sow']):
+                return 'Distribution Phase D (派发期跌破)', 0.85
+            else:
+                return 'Distribution Phase C (派发期诱多)', 0.70
+                
+        return 'Unknown', 0.30
+
+    def _check_ma_confirmation(self, phase: str) -> float:
+        """检查均线是否确认阶段判断"""
+        ma20 = self.data['MA20'].iloc[-1]
+        ma50 = self.data['MA50'].iloc[-1]
+        ma200 = self.data['MA200'].iloc[-1]
+        current = self.data['Close'].iloc[-1]
+        
+        if 'Accumulation' in phase or 'Markup' in phase:
+            if current < ma200 and ma20 < ma50:
+                return 0.8
+            elif current < ma200:
+                return 0.6
+            else:
+                return 0.4
+        elif 'Distribution' in phase or 'Markdown' in phase:
+            if current > ma200 and ma20 > ma50:
+                return 0.8
+            elif current > ma200:
+                return 0.6
+            else:
+                return 0.4
+        return 0.5
+
+    def _check_volume_confirmation(self, phase: str) -> float:
+        """检查成交量是否确认阶段判断"""
+        df = self.data.tail(20)
+        up_days = df[df['Close'] > df['Close'].shift(1)]
+        down_days = df[df['Close'] < df['Close'].shift(1)]
+        
+        if len(up_days) == 0 or len(down_days) == 0:
+            return 0.5
+        
+        avg_up_vol = up_days['Volume'].mean()
+        avg_down_vol = down_days['Volume'].mean()
+        vol_ratio = avg_up_vol / avg_down_vol if avg_down_vol > 0 else 1
+        
+        if 'Accumulation' in phase or 'Markup' in phase:
+            if vol_ratio > 1.2:
+                return 0.8
+            elif vol_ratio > 1.0:
+                return 0.6
+            else:
+                return 0.4
+        elif 'Distribution' in phase or 'Markdown' in phase:
+            if vol_ratio < 0.8:
+                return 0.8
+            elif vol_ratio < 1.0:
+                return 0.6
+            else:
+                return 0.4
+        return 0.5
+
+    def identify_phase_multi_timeframe(self) -> Dict:
+        """多时间框架阶段确认"""
+        daily_phase = self.identify_phase()
+        weekly_trend = self._get_weekly_trend()
+        monthly_trend = self._get_monthly_trend()
+        
+        final_confidence = daily_phase['confidence']
+        phase_str = daily_phase['phase']
+        
+        if 'Accumulation' in phase_str or 'Markup' in phase_str:
+            if weekly_trend == 'bullish' and monthly_trend != 'bearish':
+                final_confidence *= 1.2
+            elif weekly_trend == 'bearish':
+                final_confidence *= 0.7
+        elif 'Distribution' in phase_str or 'Markdown' in phase_str:
+            if weekly_trend == 'bearish' and monthly_trend != 'bullish':
+                final_confidence *= 1.2
+            elif weekly_trend == 'bullish':
+                final_confidence *= 0.7
+                
+        return {
+            'phase': phase_str,
+            'confidence': min(final_confidence, 1.0),
+            'daily_phase': daily_phase,
+            'weekly_trend': weekly_trend,
+            'monthly_trend': monthly_trend,
+            'multi_timeframe_agreement': self._check_timeframe_agreement(phase_str, weekly_trend, monthly_trend)
+        }
+
+    def _get_weekly_trend(self) -> str:
+        """获取周线趋势"""
+        df = self.data.copy()
+        df['Week'] = df.index.isocalendar().week
+        df['Year'] = df.index.isocalendar().year
+        
+        weekly = df.groupby(['Year', 'Week']).agg({
+            'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+        })
+        
+        if len(weekly) < 20:
+            return 'unknown'
+            
+        weekly['MA10'] = weekly['Close'].rolling(10).mean()
+        weekly['MA20'] = weekly['Close'].rolling(20).mean()
+        
+        current_close = weekly['Close'].iloc[-1]
+        ma10 = weekly['MA10'].iloc[-1]
+        ma20 = weekly['MA20'].iloc[-1]
+        
+        if current_close > ma10 > ma20: return 'bullish'
+        elif current_close < ma10 < ma20: return 'bearish'
+        return 'neutral'
+
+    def _get_monthly_trend(self) -> str:
+        """获取月线趋势"""
+        df = self.data.copy()
+        df['Month'] = df.index.month
+        df['Year'] = df.index.year
+        
+        monthly = df.groupby(['Year', 'Month']).agg({
+            'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+        })
+        
+        if len(monthly) < 12:
+            return 'unknown'
+            
+        monthly['MA6'] = monthly['Close'].rolling(6).mean()
+        monthly['MA12'] = monthly['Close'].rolling(12).mean()
+        
+        current_close = monthly['Close'].iloc[-1]
+        ma6 = monthly['MA6'].iloc[-1]
+        ma12 = monthly['MA12'].iloc[-1]
+        
+        if current_close > ma6 > ma12: return 'bullish'
+        elif current_close < ma6 < ma12: return 'bearish'
+        return 'neutral'
+
+    def _check_timeframe_agreement(self, daily_phase: str, weekly_trend: str, monthly_trend: str) -> str:
+        """检查多时间框架是否一致"""
+        if 'Accumulation' in daily_phase or 'Markup' in daily_phase:
+            if weekly_trend == 'bullish' and monthly_trend == 'bullish': return 'strong_agreement'
+            elif weekly_trend == 'bullish' or monthly_trend == 'bullish': return 'moderate_agreement'
+            return 'disagreement'
+        elif 'Distribution' in daily_phase or 'Markdown' in daily_phase:
+            if weekly_trend == 'bearish' and monthly_trend == 'bearish': return 'strong_agreement'
+            elif weekly_trend == 'bearish' or monthly_trend == 'bearish': return 'moderate_agreement'
+            return 'disagreement'
+        return 'unknown'
+
+    def identify_phase_with_rs(self) -> Dict:
+        """结合相对强度的阶段识别"""
+        benchmark_symbol = self._get_baseline_index_symbol()
+        rs_data = self._calculate_relative_strength(benchmark_symbol)
+        
+        base_phase = self.identify_phase_multi_timeframe()
+        confidence = base_phase['confidence']
+        
+        if rs_data['rs_trend'] == 'rising':
+            if 'Accumulation' in base_phase['phase'] or 'Markup' in base_phase['phase']:
+                confidence *= 1.15
+            elif 'Distribution' in base_phase['phase'] or 'Markdown' in base_phase['phase']:
+                confidence *= 0.75
+        elif rs_data['rs_trend'] == 'falling':
+            if 'Distribution' in base_phase['phase'] or 'Markdown' in base_phase['phase']:
+                confidence *= 1.15
+            elif 'Accumulation' in base_phase['phase'] or 'Markup' in base_phase['phase']:
+                confidence *= 0.75
+                
+        base_phase['relative_strength'] = rs_data
+        base_phase['confidence'] = min(confidence, 1.0)
+        return base_phase
+
+    def _calculate_relative_strength(self, benchmark_symbol: str) -> Dict:
+        """计算相对强度"""
+        try:
+            benchmark_analyzer = WyckoffAnalyzer(benchmark_symbol, period=self.period, config=self.config)
+            if not benchmark_analyzer.fetch_data():
+                return {'rs_trend': 'unknown', 'rs_value': None}
+                
+            common_dates = self.data.index.intersection(benchmark_analyzer.data.index)
+            stock_data = self.data.loc[common_dates]
+            benchmark_data = benchmark_analyzer.data.loc[common_dates]
+            
+            rs = stock_data['Close'] / benchmark_data['Close']
+            rs_ma20 = rs.rolling(20).mean()
+            rs_ma50 = rs.rolling(50).mean()
+            
+            if rs_ma20.iloc[-1] > rs_ma50.iloc[-1]: rs_trend = 'rising'
+            elif rs_ma20.iloc[-1] < rs_ma50.iloc[-1]: rs_trend = 'falling'
+            else: rs_trend = 'flat'
+            
+            rs_change = (rs.iloc[-1] / rs.iloc[-20] - 1) * 100 if len(rs) > 20 else 0
+            
+            return {
+                'benchmark_used': benchmark_symbol,
+                'rs_value': rs.iloc[-1],
+                'rs_ma20': rs_ma20.iloc[-1],
+                'rs_ma50': rs_ma50.iloc[-1],
+                'rs_trend': rs_trend,
+                'rs_change_20d': rs_change
+            }
+        except Exception:
+            return {'rs_trend': 'unknown', 'rs_value': None}
 
     # ----------------------------------------------------------
     # 因果定律计算
@@ -874,17 +1355,18 @@ class WyckoffAnalyzer:
             return [self._round_floats(x) for x in obj]
         return obj
 
-    def calculate_signal_quality(self, market_phase: str) -> dict:
+    def calculate_signal_quality(self, market_phase) -> dict:
         """计算信号质量评分"""
         score = 0
         reasons = []
 
         if self.data is not None:
             vol_ratio = self.data['Volume'].iloc[-1] / self.data['Volume_MA20'].iloc[-1]
-            phase = self.identify_phase()
+            phase_res = self.identify_phase()
+            phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
             
             # 1. 技术确认度
-            if "Accumulation" in phase or "Markup" in phase:
+            if "Accumulation" in phase_str or "Markup" in phase_str:
                 if vol_ratio > 1.5:
                     score += 3
                     reasons.append("成交量强力确认 (放量上涨)")
@@ -913,14 +1395,15 @@ class WyckoffAnalyzer:
                 reasons.append("多时间框架一致 (长期空头排列)")
 
         # 3. 市场环境配合
-        if "Accumulation" in market_phase or "Markup" in market_phase:
-            if "Accumulation" in phase or "Markup" in phase:
+        market_phase_str = market_phase.get('phase', 'Unknown') if isinstance(market_phase, dict) else market_phase
+        if "Accumulation" in market_phase_str or "Markup" in market_phase_str:
+            if "Accumulation" in phase_str or "Markup" in phase_str:
                 score += 4
                 reasons.append("市场环境有利 (顺应大盘多头)")
             else:
                 reasons.append("逆势操作 (大盘看多，个股看空)")
         else:
-            if "Distribution" in phase or "Markdown" in phase:
+            if "Distribution" in phase_str or "Markdown" in phase_str:
                 score += 4
                 reasons.append("市场环境有利 (顺应大盘空头)")
             else:
@@ -945,8 +1428,9 @@ class WyckoffAnalyzer:
         high = tr.get("high", current_price * 1.1)
         low = tr.get("low", current_price * 0.9)
         
-        phase = self.identify_phase()
-        is_bullish = "Accumulation" in phase or "Markup" in phase
+        phase_res = self.identify_phase()
+        phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
+        is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
         
         if is_bullish:
             entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
@@ -977,7 +1461,7 @@ class WyckoffAnalyzer:
                 "moderate": "5%仓位",
                 "aggressive": "10%仓位"
             },
-            "holding_period": "中期（2-8周）" if "Markup" in phase or "Markdown" in phase else "短期（1-3周）",
+            "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周）",
             "atr_value": round(atr, 2)
         }
 
@@ -1219,8 +1703,15 @@ class WyckoffAnalyzer:
             return json.dumps({"error": f"无法获取数据: {self.symbol}"}, ensure_ascii=False)
             
         # 1. 基础事件分析
+        climax_res = self.detect_climax()
+        ar_res = self.detect_automatic_reaction(climax_res)
+        st_res = self.detect_secondary_test(climax_res, ar_res)
+        
         events = {
             "trading_range": self.detect_trading_range(),
+            "climax": climax_res,
+            "automatic_reaction": ar_res,
+            "secondary_test": st_res,
             "spring": self.detect_spring(),
             "upthrust": self.detect_upthrust(),
             "sos": self.detect_sos(),
@@ -1228,12 +1719,22 @@ class WyckoffAnalyzer:
             "lps": self.detect_lps(),
             "lpsy": self.detect_lpsy()
         }
-        phase = self.identify_phase()
+        
+        # 获取完整带多时间框架和RS的阶段
+        phase_dict = self.identify_phase_with_rs()
+        phase_str = phase_dict.get('phase', 'Unknown')
         
         result = {
             "symbol": self.symbol,
             "date": datetime.now().strftime('%Y-%m-%d'),
-            "phase": phase,
+            "phase": phase_str,
+            "phase_confidence": phase_dict.get('confidence', 0.0),
+            "multi_timeframe": {
+                "weekly_trend": phase_dict.get('weekly_trend', 'unknown'),
+                "monthly_trend": phase_dict.get('monthly_trend', 'unknown'),
+                "agreement": phase_dict.get('multi_timeframe_agreement', 'unknown')
+            },
+            "relative_strength": phase_dict.get('relative_strength', {}),
             "basic_data": {
                 "current_price": round(self.data['Close'].iloc[-1], 2),
                 "volume": int(self.data['Volume'].iloc[-1]),
@@ -1251,12 +1752,13 @@ class WyckoffAnalyzer:
         with open(os.devnull, 'w') as f, redirect_stdout(f):
             idx_success = idx_analyzer.fetch_data()
             
-        market_phase = "Unknown"
+        market_phase_str = "Unknown"
         if idx_success:
-            market_phase = idx_analyzer.identify_phase()
+            market_phase_dict = idx_analyzer.identify_phase()
+            market_phase_str = market_phase_dict.get('phase', 'Unknown')
             result["market_context"] = {
                 "index_symbol": index_symbol,
-                "phase": market_phase
+                "phase": market_phase_str
             }
         else:
             result["market_context"] = {
@@ -1265,14 +1767,14 @@ class WyckoffAnalyzer:
             }
             
         # 增加信号质量评分和交易计划
-        signal_quality = self.calculate_signal_quality(market_phase)
+        signal_quality = self.calculate_signal_quality(market_phase_str)
         trading_plan = self.generate_trading_plan()
         
         result["signal_quality"] = signal_quality
         result["trading_plan"] = trading_plan
         
         # 增加智能内容生成 (大模型剥离)
-        result["terminology_guide"] = self.get_relevant_terms(phase, events)
+        result["terminology_guide"] = self.get_relevant_terms(phase_str, events)
         result["risk_specific_advice"] = self.generate_risk_advice(signal_quality, trading_plan)
         result["interactive_qa"] = self.generate_interactive_qa(signal_quality, trading_plan)
         result["performance_tracking"] = self.get_signal_performance(events)

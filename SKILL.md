@@ -32,9 +32,11 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    - **大盘环境**: `[market_context.phase]` (顺风/逆风)
 
    **# 📊 详细分析 (Detailed Analysis)**
-   - **Wyckoff 阶段**: `[phase]`
+   - **Wyckoff 阶段**: `[phase]` (系统置信度: `[phase_confidence]`)
+   - **多级别共振**: 周线趋势 `[multi_timeframe.weekly_trend]`，月线趋势 `[multi_timeframe.monthly_trend]`
+   - **相对大盘强度**: 表现 `[relative_strength.rs_trend]` (近期变化 `[relative_strength.rs_change_20d]%`)
    - **量价印证**: 解释成交量比率与价格运动的关系，并列出 `[signal_quality.reasons]`。
-   - **关键事件**: 分析最新的 SOS/SOW、Spring/Upthrust，以及因果测算。
+   - **关键事件**: 分析最新的 CL/AR/ST、SOS/SOW、Spring/Upthrust，以及因果测算。
 
    **# 🛡️ 风险分层建议 (Risk-Specific Advice)**
    *(严格读取 `[risk_specific_advice]` 数据进行输出，不要自行编造)*
