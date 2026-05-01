@@ -369,6 +369,11 @@ class WyckoffAnalyzer:
         # 步骤2：确认支撑位（交易区间下边界）
         support_level = tr_low
         
+        # 获取股性波动率分类
+        volatility_class = self._classify_volatility()
+        threshold_map = {'low': 0.03, 'medium': 0.04, 'high': 0.05}
+        max_breakdown_pct = threshold_map.get(volatility_class, 0.04)
+        
         # 步骤3：寻找跌破支撑的情况
         search_start = max(0, len(df) - 30)  # 最近30天
         
@@ -379,26 +384,45 @@ class WyckoffAnalyzer:
             current_vol = df['Volume'].iloc[i]
             vol_ma = df['Volume_MA20'].iloc[i]
             
-            # 跌破支撑位（低于支撑位）
-            if current_low < support_level * 0.98:
-                # 步骤4：检查收盘价是否在支撑位上方（假跌破）
+            # 跌破支撑位且跌破幅度在允许的假跌破范围内
+            if current_low < support_level and current_low >= support_level * (1 - max_breakdown_pct):
+                # 步骤4：检查收盘价是否在支撑位上方（假跌破当天直接收回）
                 close_above_support = current_close >= support_level
                 
                 # 步骤5：检查恢复情况（1-3天内）
                 recovery_found = False
-                recovery_day = None
-                recovery_vol = 0
+                recovery_day = 0
+                recovery_vol = current_vol
+                recovery_close = current_close
+                recovery_high = df['High'].iloc[i]
+                recovery_low = current_low
                 
-                for j in range(1, 4):
-                    if i + j < len(df):
-                        if df['Close'].iloc[i + j] > support_level:
-                            recovery_found = True
-                            recovery_day = j
-                            recovery_vol = df['Volume'].iloc[i + j]
-                            break
+                if close_above_support:
+                    recovery_found = True
+                else:
+                    for j in range(1, 4):
+                        if i + j < len(df):
+                            if df['Close'].iloc[i + j] > support_level:
+                                recovery_found = True
+                                recovery_day = j
+                                recovery_vol = df['Volume'].iloc[i + j]
+                                recovery_close = df['Close'].iloc[i + j]
+                                recovery_high = df['High'].iloc[i + j]
+                                recovery_low = df['Low'].iloc[i + j]
+                                break
                 
                 if not recovery_found:
                     continue
+                    
+                # 收盘位置验证 (需在日内高位 70% 以上，加入除零保护)
+                daily_range = recovery_high - recovery_low
+                if daily_range > 0:
+                    close_position = (recovery_close - recovery_low) / daily_range
+                else:
+                    close_position = 1.0 if recovery_close >= support_level else 0.0
+                    
+                if close_position < 0.7:
+                    continue  # 动能不足，不视为有效 Spring
                 
                 # 步骤6：验证成交量模式
                 breakdown_vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1
@@ -416,7 +440,7 @@ class WyckoffAnalyzer:
                 is_spring = False
                 confidence = 0
                 
-                if close_above_support and recovery_found:
+                if close_above_support:
                     is_spring = True
                     confidence = 0.8
                 elif recovery_found and vol_pattern in ['bullish', 'mildly_bullish']:
@@ -432,7 +456,7 @@ class WyckoffAnalyzer:
                         'breakdown_price': current_low,
                         'support_level': support_level,
                         'recovery_day': recovery_day,
-                        'recovery_price': df['Close'].iloc[i + recovery_day],
+                        'recovery_price': recovery_close,
                         'close_above_support': close_above_support,
                         'vol_pattern': vol_pattern,
                         'breakdown_volume': current_vol,
@@ -584,7 +608,12 @@ class WyckoffAnalyzer:
             past_highs = df['High'].iloc[i-20:i]
             resistance_level = past_highs.max()
 
-            if current_high > resistance_level * 1.02:
+            volatility_class = self._classify_volatility()
+            threshold_map = {'low': 0.03, 'medium': 0.04, 'high': 0.05}
+            max_breakout_pct = threshold_map.get(volatility_class, 0.04)
+
+            # 突破阻力位，但在允许的假突破范围内
+            if resistance_level < current_high <= resistance_level * (1 + max_breakout_pct):
                 future_data = df.iloc[i:min(i+5, len(df))]
                 future_low = future_data['Low'].min()
                 rejection_days = (future_data['Low'].idxmin() - df.index[i]).days if len(future_data) > 1 else 0
@@ -593,12 +622,17 @@ class WyckoffAnalyzer:
                 rejection_vol = future_data['Volume'].mean()
                 vol_ma = df['Volume_MA20'].iloc[i]
 
-                close_from_high = (current_high - current_close) / current_high
+                # 收盘位置验证（需在日内低位，距高点 > 70%）
+                daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
+                if daily_range > 0:
+                    close_from_high = (current_high - current_close) / daily_range
+                else:
+                    close_from_high = 1.0 if current_close <= resistance_level else 0.0
 
                 is_upthrust = (
-                    future_low < resistance_level * 0.98 and
+                    future_low < resistance_level and
                     rejection_days <= 3 and
-                    close_from_high > 0.01 and
+                    close_from_high > 0.7 and
                     rejection_vol > breakout_vol * 1.2
                 )
 
@@ -627,6 +661,10 @@ class WyckoffAnalyzer:
         df = self.data.copy()
         sos_signals = []
 
+        volatility_class = self._classify_volatility()
+        threshold_map = {'low': 0.02, 'medium': 0.035, 'high': 0.05}
+        min_price_change = threshold_map.get(volatility_class, 0.035)
+
         for i in range(20, len(df)):
             current_close = df['Close'].iloc[i]
             current_vol = df['Volume'].iloc[i]
@@ -634,16 +672,23 @@ class WyckoffAnalyzer:
 
             past_high = df['High'].iloc[i-20:i].max()
 
-            if current_close > past_high * 1.03:
+            if current_close > past_high:
                 vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1
                 price_change = (current_close - df['Close'].iloc[i-1]) / df['Close'].iloc[i-1]
                 daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
-                close_position = (current_close - df['Low'].iloc[i]) / daily_range if daily_range > 0 else 0.5
+                
+                if daily_range > 0:
+                    close_position = (current_close - df['Low'].iloc[i]) / daily_range
+                else:
+                    close_position = 1.0 if price_change > 0 else 0.0
 
+                # 涨停板特殊处理 (A股涨幅 >= 9.5%)，涨停时成交量可能萎缩，免除量比要求
+                is_limit_up = price_change >= 0.095
+                
                 is_sos = (
-                    vol_ratio > 1.5 and
-                    price_change > 0.03 and
-                    close_position > 0.7
+                    price_change > min_price_change and
+                    close_position > 0.7 and
+                    (vol_ratio > 1.5 or is_limit_up)
                 )
 
                 if is_sos:
@@ -667,6 +712,10 @@ class WyckoffAnalyzer:
         df = self.data.copy()
         sow_signals = []
 
+        volatility_class = self._classify_volatility()
+        threshold_map = {'low': -0.02, 'medium': -0.035, 'high': -0.05}
+        max_price_drop = threshold_map.get(volatility_class, -0.035)
+
         for i in range(20, len(df)):
             current_close = df['Close'].iloc[i]
             current_vol = df['Volume'].iloc[i]
@@ -674,16 +723,23 @@ class WyckoffAnalyzer:
 
             past_low = df['Low'].iloc[i-20:i].min()
 
-            if current_close < past_low * 0.97:
+            if current_close < past_low:
                 vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1
                 price_change = (current_close - df['Close'].iloc[i-1]) / df['Close'].iloc[i-1]
                 daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
-                close_position = (df['High'].iloc[i] - current_close) / daily_range if daily_range > 0 else 0.5
+                
+                if daily_range > 0:
+                    close_position = (df['High'].iloc[i] - current_close) / daily_range
+                else:
+                    close_position = 1.0 if price_change < 0 else 0.0
+
+                # 跌停板特殊处理 (A股跌幅 <= -9.5%)，跌停时量比可能萎缩，免除量比要求
+                is_limit_down = price_change <= -0.095
 
                 is_sow = (
-                    vol_ratio > 1.5 and
-                    price_change < -0.03 and
-                    close_position > 0.7
+                    price_change < max_price_drop and
+                    close_position > 0.7 and
+                    (vol_ratio > 1.5 or is_limit_down)
                 )
 
                 if is_sow:
@@ -1112,6 +1168,72 @@ class WyckoffAnalyzer:
         except Exception:
             return {'rs_trend': 'unknown', 'rs_value': None}
 
+    def _classify_volatility(self) -> str:
+        """根据 ATR 占比分类股票股性（高/中/低波动）"""
+        if self.data is None or len(self.data) < 14:
+            return 'medium'
+            
+        current_price = self.data['Close'].iloc[-1]
+        atr = self.data['ATR'].iloc[-1]
+        atr_pct = atr / current_price if current_price > 0 else 0
+        
+        if atr_pct < 0.02:
+            return 'low'     # 大盘蓝筹
+        elif atr_pct > 0.04:
+            return 'high'    # 小盘活跃股
+        else:
+            return 'medium'  # 中等波动
+
+    def _analyze_market_environment(self) -> Dict:
+        """量化大盘环境（强牛/牛/弱牛/震荡/熊/强熊）"""
+        try:
+            import numpy as np
+            index_symbol = self._get_baseline_index_symbol()
+            idx_analyzer = WyckoffAnalyzer(index_symbol, self.period, self.config)
+            
+            import os, sys
+            from contextlib import redirect_stdout
+            with open(os.devnull, 'w') as f, redirect_stdout(f):
+                success = idx_analyzer.fetch_data()
+                
+            if not success or idx_analyzer.data is None or len(idx_analyzer.data) < 200:
+                return {'environment': 'unknown', 'index': index_symbol}
+                
+            df = idx_analyzer.data
+            close = df['Close'].iloc[-1]
+            ma20 = df['MA20'].iloc[-1]
+            ma50 = df['MA50'].iloc[-1]
+            ma200 = df['MA200'].iloc[-1]
+            
+            # 判断均线粘合 (震荡市特征)
+            ma_values = [ma20, ma50, ma200]
+            max_ma = max(ma_values)
+            min_ma = min(ma_values)
+            ma_spread_pct = (max_ma - min_ma) / min_ma
+            
+            if ma_spread_pct < 0.02:
+                environment = 'Range Bound (震荡)'
+            elif close > ma20 and ma20 > ma50 and ma50 > ma200:
+                environment = 'Strong Bull (强牛)'
+            elif close > ma50 and ma50 > ma200:
+                environment = 'Bull (牛)'
+            elif close > ma200 and ma20 < ma50:
+                environment = 'Weak Bull (弱牛)'
+            elif close < ma20 and ma20 < ma50 and ma50 < ma200:
+                environment = 'Strong Bear (强熊)'
+            elif close < ma50 and ma50 < ma200:
+                environment = 'Bear (熊)'
+            else:
+                environment = 'Range Bound (震荡)'
+                
+            return {
+                'environment': environment,
+                'index': index_symbol,
+                'ma_spread_pct': round(ma_spread_pct * 100, 2)
+            }
+        except Exception:
+            return {'environment': 'unknown', 'index': self._get_baseline_index_symbol()}
+
     # ----------------------------------------------------------
     # 因果定律计算
     # ----------------------------------------------------------
@@ -1395,19 +1517,26 @@ class WyckoffAnalyzer:
                 reasons.append("多时间框架一致 (长期空头排列)")
 
         # 3. 市场环境配合
-        market_phase_str = market_phase.get('phase', 'Unknown') if isinstance(market_phase, dict) else market_phase
-        if "Accumulation" in market_phase_str or "Markup" in market_phase_str:
+        market_env = market_phase.get('environment', 'Unknown') if isinstance(market_phase, dict) else "Unknown"
+        is_market_bullish = "Bull" in market_env or "牛" in market_env
+        is_market_bearish = "Bear" in market_env or "熊" in market_env
+        
+        if is_market_bullish:
             if "Accumulation" in phase_str or "Markup" in phase_str:
                 score += 4
                 reasons.append("市场环境有利 (顺应大盘多头)")
             else:
                 reasons.append("逆势操作 (大盘看多，个股看空)")
-        else:
+        elif is_market_bearish:
             if "Distribution" in phase_str or "Markdown" in phase_str:
                 score += 4
                 reasons.append("市场环境有利 (顺应大盘空头)")
             else:
                 reasons.append("逆势操作 (大盘看空，个股看多)")
+        else:
+            # 震荡市
+            score += 2
+            reasons.append("市场环境中性 (大盘震荡)")
 
         return {
             "score": score,
@@ -1471,22 +1600,82 @@ class WyckoffAnalyzer:
             elif sentiment == "extreme_fear" and ("Accumulation" in phase_str or "Markup" in phase_str):
                 dynamic_warning = "💡 黄金坑预警：大盘极度恐慌 + 个股筑底 = 绝佳击球区，请重点关注抗跌表现！"
 
+        # ATR 动态止损
+        atr_stop_loss = round(current_price - 1.5 * atr if is_bullish else current_price + 1.5 * atr, 2)
+        
+        # 分批建仓触发条件
+        if is_bullish:
+            scale_in_triggers = {
+                "entry_1_30pct": {
+                    "condition": "当前信号出现 (如 Spring/SOS)",
+                    "price": round(current_price, 2)
+                },
+                "entry_2_50pct": {
+                    "condition": "价格突破关键阻力位或回踩支撑不破",
+                    "price": round(high, 2)
+                },
+                "entry_3_20pct": {
+                    "condition": "创出新高或确认进入强势上涨阶段 (Phase E)",
+                    "price": round(high + atr, 2)
+                }
+            }
+        else:
+            scale_in_triggers = {
+                "entry_1_30pct": {
+                    "condition": "当前做空信号出现",
+                    "price": round(current_price, 2)
+                },
+                "entry_2_50pct": {
+                    "condition": "跌破关键支撑位或反抽阻力不破",
+                    "price": round(low, 2)
+                },
+                "entry_3_20pct": {
+                    "condition": "创出新低或确认进入强势下跌阶段 (Phase E)",
+                    "price": round(low - atr, 2)
+                }
+            }
+            
+        # 退出规则 (移动止损与时间止损)
+        exit_rules = [
+            {
+                "type": "trailing_stop",
+                "trigger": "1ATR_profit",
+                "description": f"浮盈达到1个ATR ({round(atr, 2)}元)",
+                "action": "move_to_cost"
+            },
+            {
+                "type": "trailing_stop",
+                "trigger": "2ATR_profit",
+                "description": f"浮盈达到2个ATR ({round(atr * 2, 2)}元)",
+                "action": "move_to_1ATR_profit"
+            },
+            {
+                "type": "time_stop",
+                "trigger": "5-8_days_no_profit",
+                "description": "建仓后 5-8 个交易日未脱离成本区",
+                "action": "exit_position"
+            }
+        ]
+
         return {
             "direction": "做多" if is_bullish else "做空",
             "entry_zone": entry_zone,
             "stop_loss": {
                 "conservative": stop_conservative,
-                "aggressive": stop_aggressive
+                "aggressive": stop_aggressive,
+                "atr_dynamic_stop": atr_stop_loss
             },
             "targets": {
                 "target_1": target_1,
                 "target_2": target_2
             },
             "position_sizing": {
-                "conservative": f"{round(pos_conservative, 1)}%仓位",
-                "moderate": f"{round(pos_moderate, 1)}%仓位",
-                "aggressive": f"{round(pos_aggressive, 1)}%仓位"
+                "conservative": f"{round(pos_conservative, 1)}%总仓",
+                "moderate": f"{round(pos_moderate, 1)}%总仓",
+                "aggressive": f"{round(pos_aggressive, 1)}%总仓"
             },
+            "scale_in_triggers": scale_in_triggers,
+            "exit_rules": exit_rules,
             "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周）",
             "atr_value": round(atr, 2),
             "dynamic_warning": dynamic_warning
@@ -1860,14 +2049,19 @@ class WyckoffAnalyzer:
         with open(os.devnull, 'w') as f, redirect_stdout(f):
             idx_success = idx_analyzer.fetch_data()
             
-        market_phase_str = "Unknown"
+        market_context_dict = {}
         if idx_success:
             market_phase_dict = idx_analyzer.identify_phase()
             market_phase_str = market_phase_dict.get('phase', 'Unknown')
-            result["market_context"] = {
+            env_dict = self._analyze_market_environment()
+            
+            market_context_dict = {
                 "index_symbol": index_symbol,
-                "phase": market_phase_str
+                "phase": market_phase_str,
+                "environment": env_dict.get("environment", "Unknown"),
+                "ma_spread_pct": env_dict.get("ma_spread_pct", 0)
             }
+            result["market_context"] = market_context_dict
         else:
             result["market_context"] = {
                 "index_symbol": index_symbol,
@@ -1878,8 +2072,8 @@ class WyckoffAnalyzer:
         global_sentiment = self.add_market_sentiment()
         result["global_sentiment"] = global_sentiment
         
-        # 增加信号质量评分和交易计划
-        signal_quality = self.calculate_signal_quality(market_phase_str)
+        # 增加信号质量评分和交易计划 (传入 market_context_dict 以便使用 environment)
+        signal_quality = self.calculate_signal_quality(market_context_dict)
         trading_plan = self.generate_trading_plan(global_sentiment, phase_str)
         
         result["signal_quality"] = signal_quality
