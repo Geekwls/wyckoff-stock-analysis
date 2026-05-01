@@ -22,12 +22,16 @@ import pandas as pd
 import numpy as np
 import json
 import os
+import logging
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from enum import Enum, auto
 from dataclasses import dataclass
 import warnings
 warnings.filterwarnings('ignore')
+
+# 模块级日志，默认不输出；调用方可以通过 logging.basicConfig() 开启
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -230,6 +234,7 @@ class WyckoffAnalyzer:
                 json.dump(cache, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"缓存更新失败: {e}")
+            logger.debug("缓存写入失败: %s", e)
 
     def fetch_data(self) -> bool:
         """获取股票数据（自动识别市场）"""
@@ -252,6 +257,7 @@ class WyckoffAnalyzer:
 
         except Exception as e:
             print(f"获取数据失败: {self.symbol} - {str(e)}")
+            logger.exception("获取数据异常 symbol=%s", self.symbol)
             return False
 
     def _fetch_a_stock_data(self, symbol: str) -> bool:
@@ -411,8 +417,11 @@ class WyckoffAnalyzer:
         threshold_map = {'low': 0.03, 'medium': 0.04, 'high': 0.05}
         max_breakdown_pct = threshold_map.get(volatility_class, 0.04)
         
-        # 步骤3：寻找跌破支撑的情况
-        search_start = max(0, len(df) - 30)  # 最近30天
+        # 步骤3：寻找跌破支撑的情况（之前固定30天，扩展至 45 天以覆盖更多延迟出现的 Spring）
+        search_start = max(0, len(df) - 45)  # 最近30天 → 45天
+
+        # 用于去重的日期集合（避免同一日期被重复检测）
+        seen_dates: set = set()
         
         springs = []
         for i in range(search_start, len(df)):
@@ -496,20 +505,23 @@ class WyckoffAnalyzer:
                     confidence = 0.5
                 
                 if is_spring:
-                    springs.append({
-                        'date': df.index[i],
-                        'breakdown_price': current_low,
-                        'support_level': support_level,
-                        'recovery_day': recovery_day,
-                        'recovery_price': recovery_close,
-                        'close_above_support': close_above_support,
-                        'vol_pattern': vol_pattern,
-                        'breakdown_volume': current_vol,
-                        'recovery_volume': recovery_vol,
-                        'volume_ma': vol_ma,
-                        'confidence': confidence,
-                        'price': current_low
-                    })
+                    date_key = df.index[i].strftime('%Y-%m-%d')
+                    if date_key not in seen_dates:   # 去重：同日期不重复添加
+                        seen_dates.add(date_key)
+                        springs.append({
+                            'date': df.index[i],
+                            'breakdown_price': current_low,
+                            'support_level': support_level,
+                            'recovery_day': recovery_day,
+                            'recovery_price': recovery_close,
+                            'close_above_support': close_above_support,
+                            'vol_pattern': vol_pattern,
+                            'breakdown_volume': current_vol,
+                            'recovery_volume': recovery_vol,
+                            'volume_ma': vol_ma,
+                            'confidence': confidence,
+                            'price': current_low
+                        })
         
         if springs:
             return {'detected': True, 'signals': springs, 'latest_spring': springs[-1]}
@@ -2231,56 +2243,82 @@ class WyckoffAnalyzer:
 # 批量扫描功能
 # ============================================================
 
-def batch_scan(symbols: List[str], period: str = "1y") -> List[Dict]:
+def batch_scan(symbols: List[str], period: str = "1y", use_json: bool = False) -> List[Dict]:
     """
-    批量扫描股票
+    批量扫描股票 - 升级版
+    升级：内部复用 generate_json 的计算结果，消除重复形态检测
 
     Args:
         symbols: 股票代码列表
         period: 数据周期
+        use_json: True 则完整解析 JSON 输出（较慢），False 则仅提取摘要
 
     Returns:
-        扫描结果列表
+        扫描结果列表，每项包含 symbol / phase / strength / signals
     """
     results = []
 
     for symbol in symbols:
         print(f"扫描 {symbol}...")
+        try:
+            analyzer = WyckoffAnalyzer(symbol, period)
 
-        analyzer = WyckoffAnalyzer(symbol, period)
+            if not analyzer.fetch_data():
+                print(f"  ❌ 获取数据失败")
+                logger.warning("batch_scan: 获取数据失败 symbol=%s", symbol)
+                continue
 
-        if analyzer.fetch_data():
-            phase = analyzer.identify_phase()
+            # 利用已有的 sos/sow 结果传入 lps/lpsy，避免每个再计算一次
+            phase_res  = analyzer.identify_phase()
+            sos_res    = analyzer.detect_sos()
+            sow_res    = analyzer.detect_sow()
+            spring_res = analyzer.detect_spring()
+            up_res     = analyzer.detect_upthrust()
+            lps_res    = analyzer.detect_lps(sos_result=sos_res)
+            lpsy_res   = analyzer.detect_lpsy(sow_result=sow_res)
 
-            signals = {
-                'symbol': symbol,
-                'phase': phase,
-                'has_spring': analyzer.detect_spring()['detected'],
-                'has_upthrust': analyzer.detect_upthrust()['detected'],
-                'has_sos': analyzer.detect_sos()['detected'],
-                'has_sow': analyzer.detect_sow()['detected'],
-                'has_lps': analyzer.detect_lps()['detected'],
-                'has_lpsy': analyzer.detect_lpsy()['detected'],
+            phase_str  = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else str(phase_res)
+
+            has_spring   = spring_res.get('detected', False)
+            has_upthrust = up_res.get('detected', False)
+            has_sos      = sos_res.get('detected', False)
+            has_sow      = sow_res.get('detected', False)
+            has_lps      = lps_res.get('detected', False)
+            has_lpsy     = lpsy_res.get('detected', False)
+
+            # 信号强度：各项汇总，最高 6 分
+            strength = sum([has_spring, has_upthrust, has_sos, has_sow, has_lps, has_lpsy])
+
+            entry = {
+                'symbol':       symbol,
+                'phase':        phase_str,
+                'confidence':   round(phase_res.get('confidence', 0.0) if isinstance(phase_res, dict) else 0.0, 2),
+                'has_spring':   has_spring,
+                'has_upthrust': has_upthrust,
+                'has_sos':      has_sos,
+                'has_sow':      has_sow,
+                'has_lps':      has_lps,
+                'has_lpsy':     has_lpsy,
+                'strength':     strength,
             }
 
-            signal_strength = sum([
-                signals['has_lps'],
-                signals['has_lpsy'],
-                signals['has_sos'],
-                signals['has_sow']
-            ])
+            results.append(entry)
 
-            signals['strength'] = signal_strength
-            results.append(signals)
+            if strength >= 1:
+                icons = []
+                if has_spring:   icons.append('Spring')
+                if has_lps:      icons.append('LPS ⬆')
+                if has_upthrust: icons.append('Upthrust')
+                if has_lpsy:     icons.append('LPSY ⬇')
+                if has_sos:      icons.append('SOS')
+                if has_sow:      icons.append('SOW')
+                print(f"  ✅ [{phase_str}] {' | '.join(icons)} (强度{strength}/6)")
+            else:
+                print(f"  — [{phase_str}] 无明显信号")
 
-            if signal_strength >= 1:
-                print(f"  ✅ {phase}")
-                if signals['has_lps']:
-                    print(f"     ⭐ 检测到LPS（做多机会）")
-                if signals['has_lpsy']:
-                    print(f"     ⭐ 检测到LPSY（做空机会）")
-        else:
-            print(f"  ❌ 获取数据失败")
+        except Exception as exc:
+            print(f"  ⚠️ 扫描异常: {exc}")
+            logger.exception("batch_scan exception for symbol=%s", symbol)
 
     return results
 
