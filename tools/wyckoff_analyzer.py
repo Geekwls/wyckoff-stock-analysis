@@ -118,6 +118,25 @@ class WyckoffAnalyzer:
         self.config = config or WyckoffConfig()
         self.data = None
         self.cache_file = os.path.join(os.path.dirname(__file__), "stock_cache.json")
+        self._index_analyzer_cache: Optional['WyckoffAnalyzer'] = None  # 大盘数据缓存，避免重复IO
+
+    def _get_cached_index_analyzer(self) -> Optional['WyckoffAnalyzer']:
+        """获取大盘分析器（带缓存，避免同一次分析中多次拉取大盘数据）"""
+        if self._index_analyzer_cache is not None:
+            return self._index_analyzer_cache
+
+        index_symbol = self._get_baseline_index_symbol()
+        idx_analyzer = WyckoffAnalyzer(index_symbol, self.period, self.config)
+
+        import os as _os
+        from contextlib import redirect_stdout
+        with open(_os.devnull, 'w') as f, redirect_stdout(f):
+            success = idx_analyzer.fetch_data()
+
+        if success and idx_analyzer.data is not None:
+            self._index_analyzer_cache = idx_analyzer
+
+        return self._index_analyzer_cache
 
     # ----------------------------------------------------------
     # 数据获取
@@ -309,7 +328,7 @@ class WyckoffAnalyzer:
     # ----------------------------------------------------------
 
     def detect_trading_range(self, window: int = 60) -> Dict:
-        """检测交易区间（积累/分布）"""
+        """检测交易区间（积累/分布），新增动态积累期持续时间计算"""
         if self.data is None or len(self.data) < window:
             return {}
 
@@ -321,10 +340,27 @@ class WyckoffAnalyzer:
 
         is_consolidation = range_pct < 0.3
 
-        vol_trend = 'decreasing' if df['Volume'].iloc[-20:].mean() < df['Volume'].iloc[-60:-20].mean() else 'increasing'
+        # 防止短数据导致的切片错误
+        recent_mean = df['Volume'].iloc[-20:].mean()
+        early_mean = df['Volume'].iloc[:-20].mean() if len(df) > 20 else recent_mean
+        vol_trend = 'decreasing' if recent_mean < early_mean else 'increasing'
 
         current_price = df['Close'].iloc[-1]
         position = (current_price - low_min) / (high_max - low_min) if high_max > low_min else 0.5
+
+        # 动态估算积累期持续时间（向前扫描同幅度区间）
+        consolidation_duration_days = window
+        if is_consolidation and len(self.data) > window:
+            extra_df = self.data.copy()
+            for extra_window in [90, 120, 180, 252]:
+                if len(extra_df) < extra_window:
+                    break
+                ext = extra_df.tail(extra_window)
+                ext_range = (ext['High'].max() - ext['Low'].min()) / ext['Low'].min()
+                if ext_range < 0.35:  # 稍微放宽阈值以覆盖更长时间
+                    consolidation_duration_days = extra_window
+                else:
+                    break
 
         return {
             'is_consolidation': is_consolidation,
@@ -332,6 +368,7 @@ class WyckoffAnalyzer:
             'low': low_min,
             'range_pct': range_pct,
             'duration_days': window,
+            'consolidation_duration_days': consolidation_duration_days,  # 动态估算积累持续时间
             'volume_trend': vol_trend,
             'position': position,
             'current_price': current_price
@@ -474,41 +511,42 @@ class WyckoffAnalyzer:
         """
         检测高潮（CL）
         威科夫高潮定义：成交量急剧放大（3-5倍平均成交量）+ 价格波动剧烈
+        收集所有高潮事件并返回最新的一次（而非历史最早的那次）
         """
         if self.data is None or len(self.data) < 20:
             return {'detected': False}
             
         df = self.data.copy()
+        avg_range_series = (df['High'] - df['Low']).rolling(20).mean()
+        climax_events = []
         
         for i in range(20, len(df)):
             current_vol = df['Volume'].iloc[i]
             vol_ma = df['Volume_MA20'].iloc[i]
             daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
-            avg_range = (df['High'] - df['Low']).rolling(20).mean().iloc[i]
+            avg_range = avg_range_series.iloc[i]
             
-            # 成交量急剧放大
             vol_spike = current_vol / vol_ma if vol_ma > 0 else 1
-            # 价格波动剧烈
             range_spike = daily_range / avg_range if avg_range > 0 else 1
             
-            # 高潮条件：成交量3倍以上 + 价格波动2倍以上 (A股考虑到涨跌停板，可能波动率不需要那么大)
+            # 高潮条件：成交量3倍以上 + 价格波动1.5倍以上
             if vol_spike >= 3.0 and range_spike >= 1.5:
                 price_change = df['Close'].iloc[i] - df['Close'].iloc[i-1]
+                climax_type = 'buying_climax' if price_change > 0 else 'selling_climax'
                 
-                if price_change > 0:
-                    climax_type = 'buying_climax'  # 顶部高潮
-                else:
-                    climax_type = 'selling_climax'  # 底部高潮
-                
-                return {
+                climax_events.append({
                     'detected': True,
                     'type': climax_type,
                     'date': df.index[i],
                     'price': df['Close'].iloc[i],
+                    'volume': current_vol,       # 原始量，供 LPS/ST 比较
                     'volume_ratio': vol_spike,
                     'range_ratio': range_spike
-                }
+                })
         
+        # 返回最新的高潮（最近发生的，对当前市场最有参考价值）
+        if climax_events:
+            return climax_events[-1]
         return {'detected': False}
 
     def detect_automatic_reaction(self, climax_event: Dict) -> Dict:
@@ -553,7 +591,9 @@ class WyckoffAnalyzer:
         return {'detected': False}
 
     def detect_secondary_test(self, climax_event: Dict, ar_event: Dict) -> Dict:
-        """检测二次测试（ST）"""
+        """检测二次测试（ST） - 修复版
+        修复：添加核心条件 - 成交量必须明显小于高潮（< 50%），避免误判
+        """
         if not climax_event.get('detected') or not ar_event.get('detected'):
             return {'detected': False}
         
@@ -563,34 +603,43 @@ class WyckoffAnalyzer:
         except KeyError:
             return {'detected': False}
         
+        # 使用原始高潮量（修复: 高潮事件现在包含 'volume' 字段）
+        climax_raw_volume = climax_event.get('volume', df['Volume'].iloc[climax_idx])
+        
         # 在AR后20天内寻找ST
         search_end = min(climax_idx + 25, len(df))
+        st_events = []
         
         for i in range(climax_idx + 2, search_end):
             current_vol = df['Volume'].iloc[i]
-            climax_vol = df['Volume'].iloc[climax_idx]
             
-            # 成交量应该低于高潮
-            if current_vol < climax_vol * 0.7:
-                if climax_event['type'] == 'buying_climax':
-                    if df['High'].iloc[i] > df['High'].iloc[climax_idx] * 0.95:
-                        return {
-                            'detected': True,
-                            'type': 'secondary_test',
-                            'date': df.index[i],
-                            'price': df['Close'].iloc[i],
-                            'test_level': 'high'
-                        }
-                else:
-                    if df['Low'].iloc[i] < df['Low'].iloc[climax_idx] * 1.05:
-                        return {
-                            'detected': True,
-                            'type': 'secondary_test',
-                            'date': df.index[i],
-                            'price': df['Close'].iloc[i],
-                            'test_level': 'low'
-                        }
+            # 核心修复：二次测试的成交量必须明显缩量 (< 高潮量的 50%)
+            if current_vol >= climax_raw_volume * 0.5:
+                continue  # 量太大，不是有效的二次测试
+            
+            if climax_event['type'] == 'buying_climax':
+                if df['High'].iloc[i] > df['High'].iloc[climax_idx] * 0.95:
+                    st_events.append({
+                        'detected': True,
+                        'type': 'secondary_test',
+                        'date': df.index[i],
+                        'price': df['Close'].iloc[i],
+                        'test_level': 'high',
+                        'volume_ratio_vs_climax': round(current_vol / climax_raw_volume, 2)
+                    })
+            else:
+                if df['Low'].iloc[i] < df['Low'].iloc[climax_idx] * 1.05:
+                    st_events.append({
+                        'detected': True,
+                        'type': 'secondary_test',
+                        'date': df.index[i],
+                        'price': df['Close'].iloc[i],
+                        'test_level': 'low',
+                        'volume_ratio_vs_climax': round(current_vol / climax_raw_volume, 2)
+                    })
         
+        if st_events:
+            return st_events[-1]  # 返回最近的二次测试
         return {'detected': False}
 
     def detect_upthrust(self, lookback: int = 20) -> Dict:
@@ -695,6 +744,7 @@ class WyckoffAnalyzer:
                     sos_signals.append({
                         'date': df.index[i],
                         'price': current_close,
+                        'volume': current_vol,       # 原始成交量，供 LPS 比较
                         'volume_ratio': vol_ratio,
                         'price_change': price_change,
                         'breakthrough_level': past_high
@@ -746,6 +796,7 @@ class WyckoffAnalyzer:
                     sow_signals.append({
                         'date': df.index[i],
                         'price': current_close,
+                        'volume': current_vol,       # 原始成交量，供 LPSY 比较
                         'volume_ratio': vol_ratio,
                         'price_change': price_change,
                         'breakdown_level': past_low
@@ -755,14 +806,17 @@ class WyckoffAnalyzer:
             return {'detected': True, 'signals': sow_signals, 'latest': sow_signals[-1]}
         return {'detected': False}
 
-    def detect_lps(self, days_since_sos: int = 10) -> Dict:
-        """检测LPS（Last Point of Support - 最后支撑点）"""
+    def detect_lps(self, days_since_sos: int = 20) -> Dict:
+        """检测 LPS（Last Point of Support - 最后支撑点） - 修复版
+        修复：使用原始成交量比较，不再使用量比（volume_ratio）与原始量混用
+        """
         sos_result = self.detect_sos()
-        if not sos_result['detected']:
+        if not sos_result.get('detected'):
             return {'detected': False}
 
         latest_sos = sos_result['latest']
         sos_date = latest_sos['date']
+        sos_raw_vol = latest_sos.get('volume', 0)  # 原始成交量
 
         mask = self.data.index >= sos_date
         df_after_sos = self.data[mask].tail(days_since_sos)
@@ -773,10 +827,10 @@ class WyckoffAnalyzer:
         lps_idx = df_after_sos['Low'].idxmin()
         lps_price = df_after_sos['Low'].min()
         lps_vol = df_after_sos.loc[lps_idx, 'Volume']
-        sos_vol = latest_sos.get('volume_ratio', 1)
 
+        # 修复：统一用原始成交量比较（缩量回调是 LPS 的核心特征）
         is_lps = (
-            lps_vol < sos_vol * 0.7 and
+            (sos_raw_vol == 0 or lps_vol < sos_raw_vol * 0.7) and
             lps_price > latest_sos['breakthrough_level'] * 0.95
         )
 
@@ -786,19 +840,22 @@ class WyckoffAnalyzer:
                 'date': lps_idx,
                 'price': lps_price,
                 'volume': lps_vol,
-                'sos_volume': sos_vol,
+                'sos_volume': sos_raw_vol,
                 'pullback_pct': (latest_sos['price'] - lps_price) / latest_sos['price']
             }
         return {'detected': False}
 
-    def detect_lpsy(self, days_since_sow: int = 10) -> Dict:
-        """检测LPSY（Last Point of Supply - 最后供应点）"""
+    def detect_lpsy(self, days_since_sow: int = 20) -> Dict:
+        """检测 LPSY（Last Point of Supply - 最后供应点） - 修复版
+        修复：使用原始成交量比较，将 days_since_sow 扩大到 20 以覆盖更完整的回测区
+        """
         sow_result = self.detect_sow()
-        if not sow_result['detected']:
+        if not sow_result.get('detected'):
             return {'detected': False}
 
         latest_sow = sow_result['latest']
         sow_date = latest_sow['date']
+        sow_raw_vol = latest_sow.get('volume', 0)  # 原始成交量
 
         mask = self.data.index >= sow_date
         df_after_sow = self.data[mask].tail(days_since_sow)
@@ -809,10 +866,10 @@ class WyckoffAnalyzer:
         lpsy_idx = df_after_sow['High'].idxmax()
         lpsy_price = df_after_sow['High'].max()
         lpsy_vol = df_after_sow.loc[lpsy_idx, 'Volume']
-        sow_vol = latest_sow.get('volume_ratio', 1)
 
+        # 修复：统一用原始成交量比较
         is_lpsy = (
-            lpsy_vol < sow_vol * 0.7 and
+            (sow_raw_vol == 0 or lpsy_vol < sow_raw_vol * 0.7) and
             lpsy_price < latest_sow['breakdown_level'] * 1.05
         )
 
@@ -822,7 +879,7 @@ class WyckoffAnalyzer:
                 'date': lpsy_idx,
                 'price': lpsy_price,
                 'volume': lpsy_vol,
-                'sow_volume': sow_vol,
+                'sow_volume': sow_raw_vol,
                 'rally_pct': (lpsy_price - latest_sow['price']) / latest_sow['price']
             }
         return {'detected': False}
@@ -973,21 +1030,49 @@ class WyckoffAnalyzer:
         return 'Unknown', 0.30
 
     def _check_ma_confirmation(self, phase: str) -> float:
-        """检查均线是否确认阶段判断"""
+        """检查均线是否确认阶段判断
+        修复: 原逻辑完全倒置。
+          - Markup 上涨期: 价格应在 MA200 上方，且均线多头排列才给高分
+          - Accumulation 积累期: 价格在底部区域，MA20 开始好转
+          - Markdown 下跌期: 价格应在 MA200 下方，均线空头排列给高分
+          - Distribution 派发期: 价格在高位，MA20 开始向下
+        """
         ma20 = self.data['MA20'].iloc[-1]
         ma50 = self.data['MA50'].iloc[-1]
         ma200 = self.data['MA200'].iloc[-1]
         current = self.data['Close'].iloc[-1]
-        
-        if 'Accumulation' in phase or 'Markup' in phase:
-            if current < ma200 and ma20 < ma50:
+
+        if 'Markup' in phase:
+            # 上涨期: 价格高于 MA200，且均线多头排列，得高分
+            if current > ma200 and ma20 > ma50 > ma200:
+                return 0.9
+            elif current > ma200 and ma20 > ma50:
+                return 0.7
+            elif current > ma200:
+                return 0.5
+            else:
+                return 0.3
+        elif 'Accumulation' in phase:
+            # 积累期: 价格仍在底部 (< MA200)，但 MA20 已开始好转向上
+            if current < ma200 and ma20 > ma50:
                 return 0.8
             elif current < ma200:
-                return 0.6
+                return 0.5
             else:
                 return 0.4
-        elif 'Distribution' in phase or 'Markdown' in phase:
-            if current > ma200 and ma20 > ma50:
+        elif 'Markdown' in phase:
+            # 下跌期: 价格低于 MA200，均线空头排列给高分
+            if current < ma200 and ma20 < ma50 < ma200:
+                return 0.9
+            elif current < ma200 and ma20 < ma50:
+                return 0.7
+            elif current < ma200:
+                return 0.5
+            else:
+                return 0.3
+        elif 'Distribution' in phase:
+            # 派发期: 价格仍在高位 (> MA200)，但 MA20 开始向下
+            if current > ma200 and ma20 < ma50:
                 return 0.8
             elif current > ma200:
                 return 0.6
@@ -1139,9 +1224,13 @@ class WyckoffAnalyzer:
     def _calculate_relative_strength(self, benchmark_symbol: str) -> Dict:
         """计算相对强度"""
         try:
-            benchmark_analyzer = WyckoffAnalyzer(benchmark_symbol, period=self.period, config=self.config)
-            if not benchmark_analyzer.fetch_data():
-                return {'rs_trend': 'unknown', 'rs_value': None}
+            # 若基准就是大盘指数，直接用缓存
+            if benchmark_symbol == self._get_baseline_index_symbol():
+                benchmark_analyzer = self._get_cached_index_analyzer()
+            else:
+                benchmark_analyzer = WyckoffAnalyzer(benchmark_symbol, period=self.period, config=self.config)
+                if not benchmark_analyzer.fetch_data():
+                    return {'rs_trend': 'unknown', 'rs_value': None}
                 
             common_dates = self.data.index.intersection(benchmark_analyzer.data.index)
             stock_data = self.data.loc[common_dates]
@@ -1185,18 +1274,12 @@ class WyckoffAnalyzer:
             return 'medium'  # 中等波动
 
     def _analyze_market_environment(self) -> Dict:
-        """量化大盘环境（强牛/牛/弱牛/震荡/熊/强熊）"""
+        """量化大盘环境（强牛/牛/弱牛/震荡/熊/强熊）- 使用缓存避免重复 IO"""
         try:
-            import numpy as np
             index_symbol = self._get_baseline_index_symbol()
-            idx_analyzer = WyckoffAnalyzer(index_symbol, self.period, self.config)
-            
-            import os, sys
-            from contextlib import redirect_stdout
-            with open(os.devnull, 'w') as f, redirect_stdout(f):
-                success = idx_analyzer.fetch_data()
+            idx_analyzer = self._get_cached_index_analyzer()
                 
-            if not success or idx_analyzer.data is None or len(idx_analyzer.data) < 200:
+            if idx_analyzer is None or idx_analyzer.data is None or len(idx_analyzer.data) < 200:
                 return {'environment': 'unknown', 'index': index_symbol}
                 
             df = idx_analyzer.data
@@ -2041,20 +2124,16 @@ class WyckoffAnalyzer:
             "cause_effect": self.calculate_cause_effect()
         }
         
-        # 获取大盘基准
+        # 获取大盘基准 (使用缓存，避免重复 IO)
         index_symbol = self._get_baseline_index_symbol()
-        idx_analyzer = WyckoffAnalyzer(index_symbol, self.period, self.config)
-        import os, sys
-        from contextlib import redirect_stdout
-        with open(os.devnull, 'w') as f, redirect_stdout(f):
-            idx_success = idx_analyzer.fetch_data()
-            
+        idx_analyzer = self._get_cached_index_analyzer()
+
         market_context_dict = {}
-        if idx_success:
+        if idx_analyzer is not None:
             market_phase_dict = idx_analyzer.identify_phase()
             market_phase_str = market_phase_dict.get('phase', 'Unknown')
             env_dict = self._analyze_market_environment()
-            
+
             market_context_dict = {
                 "index_symbol": index_symbol,
                 "phase": market_phase_str,
