@@ -125,9 +125,12 @@ class WyckoffAnalyzer:
 
     def _is_a_stock(self, symbol: str) -> bool:
         """判断是否为A股"""
+        symbol_upper = symbol.upper()
         if symbol.isdigit():
             return True
-        if symbol.endswith(('.SH', '.SZ')):
+        if symbol_upper.endswith(('.SH', '.SZ')):
+            return True
+        if symbol_upper.startswith(('SH.', 'SZ.')):
             return True
         return False
 
@@ -147,6 +150,24 @@ class WyckoffAnalyzer:
             self._update_cache(name, code)
             return code
         return None
+
+    def _get_baseline_index_symbol(self) -> str:
+        """获取大盘基准指数代码"""
+        symbol = self.symbol.upper()
+        if self._is_a_stock(symbol):
+            code = symbol.split('.')[-1] if '.' in symbol else symbol
+            if code.startswith('6'):
+                return "sh.000001"  # 上交所 - 上证指数
+            elif code.startswith('3'):
+                return "sz.399006"  # 创业板 - 创业板指
+            elif code.startswith('0'):
+                return "sz.399001"  # 深交所 - 深证成指
+            else:
+                return "sh.000001"
+        elif symbol.endswith('.HK'):
+            return "^HSI"  # 港股 - 恒生指数
+        else:
+            return "SPY"  # 美股/其他 - 标普500
 
     def _search_from_baostock(self, keyword: str) -> Optional[str]:
         """从 baostock 搜索股票"""
@@ -195,7 +216,8 @@ class WyckoffAnalyzer:
         """获取股票数据（自动识别市场）"""
         try:
             symbol = self.symbol
-            if not symbol.replace('.', '').isdigit() and not symbol.isalpha():
+            # 检查是否包含中文字符
+            if any('\u4e00' <= char <= '\u9fff' for char in symbol):
                 resolved = self._resolve_stock_name(symbol)
                 if resolved:
                     symbol = resolved
@@ -842,6 +864,16 @@ class WyckoffAnalyzer:
 
         return report
 
+    def _round_floats(self, obj):
+        """递归遍历字典/列表，将浮点数截断至3位小数"""
+        if isinstance(obj, float):
+            return round(obj, 3)
+        elif isinstance(obj, dict):
+            return {k: self._round_floats(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._round_floats(x) for x in obj]
+        return obj
+
     def generate_json(self) -> str:
         """生成JSON格式的分析报告（供AI Agent读取）"""
         if not self.fetch_data():
@@ -867,6 +899,27 @@ class WyckoffAnalyzer:
             },
             "cause_effect": self.calculate_cause_effect()
         }
+        
+        # 获取大盘基准
+        index_symbol = self._get_baseline_index_symbol()
+        idx_analyzer = WyckoffAnalyzer(index_symbol, self.period, self.config)
+        import os, sys
+        from contextlib import redirect_stdout
+        with open(os.devnull, 'w') as f, redirect_stdout(f):
+            idx_success = idx_analyzer.fetch_data()
+            
+        if idx_success:
+            result["market_context"] = {
+                "index_symbol": index_symbol,
+                "phase": idx_analyzer.identify_phase()
+            }
+        else:
+            result["market_context"] = {
+                "index_symbol": index_symbol,
+                "error": "无法获取大盘数据"
+            }
+            
+        result = self._round_floats(result)
         
         # 转换 datetime 和特殊类型以便序列化
         def default_serializer(obj):
@@ -959,7 +1012,11 @@ if __name__ == "__main__":
     if args.symbol:
         analyzer = WyckoffAnalyzer(args.symbol)
         if args.json:
-            print(analyzer.generate_json())
+            import os, sys
+            from contextlib import redirect_stdout
+            with open(os.devnull, 'w') as f, redirect_stdout(f):
+                result_json = analyzer.generate_json()
+            print(result_json)
         else:
             print(analyzer.generate_report())
     elif args.batch:
