@@ -1,4 +1,4 @@
-# Wyckoff Stock Analysis Skill v3.9.0
+# Wyckoff Stock Analysis Skill v4.0.0
 
 > 一个专为 AI Agent（如 Claude Code, Cursor, MCP 客户端）打造的威科夫股票分析标准组件。
 
@@ -6,7 +6,7 @@
 
 ---
 
-## 🌟 核心特性 (v3.9.0 架构)
+## 🌟 核心特性 (v4.0.0 架构)
 
 本项目已经超越了单纯的“提示词模板”，进化为一个平台无关的 Agent 技能包：
 
@@ -17,6 +17,7 @@
 3. **全平台兼容**：完美支持 Cursor、Windsurf、Claude Code、ChatGPT Plus、Dify 等各类现代 AI 工作流生态。
 4. **内置 A 股适配**：特殊的规则约束，防止 AI 误判 A 股“一字涨跌停”等极端量价形态。
 5. **高性能架构**：通过 Pandas 向量化运算与内存级结果缓存，分析速度提升 5-10 倍；集成 Pydantic 进行严格的配置校验与错误处理。
+6. **原生 MCP 支持**：提供标准 Model Context Protocol Server (`tools/mcp_server.py`)，支持 Claude Desktop、Cursor 等工具一键接入。
 
 ---
 
@@ -106,6 +107,11 @@ wyckoff-stock-analysis/
 ---
 
 ## 🔄 更新日志
+
+### v4.0.0 (2026-05-02) - 架构全面升级与 MCP 支持 (P0)
+- 🔌 **标准 MCP Server**：新增 `tools/mcp_server.py`，使用 FastMCP 实现标准化接口，支持 Claude Desktop 与主流 IDE 一键无缝集成。
+- 🛡️ **Pydantic 输出架构**：重构 `generate_json()` 底层逻辑，接入严格的 `ReportModel` Schema，彻底消除 AI 在反序列化时的结构幻觉。
+- ⚡ **生态扩充**：依赖项新增 `mcp` 支持，重构底层组件规范化输出以备接下来的全量异步 IO 并发改造。
 
 ### v3.9.0 (2026-05-02) - 性能起飞与架构升级 (P0)
 - 🚀 **全面向量化 (Vectorization)**：重写 `Spring`、`Climax`、`ST` 等核心检测算法，利用 NumPy/Pandas 向量化替代逐行循环，在大规模 `batch_scan` 时速度提升显著。

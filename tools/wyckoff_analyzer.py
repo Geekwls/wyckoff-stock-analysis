@@ -3678,7 +3678,7 @@ class WyckoffAnalyzer:
         
         result = self._round_floats(result)
         
-        # 转换 datetime 和特殊类型以便序列化
+        # 转换 datetime 和特殊类型以便序列化，然后使用 Pydantic 验证
         def default_serializer(obj):
             if isinstance(obj, (pd.Timestamp, datetime)):
                 return obj.strftime('%Y-%m-%d')
@@ -3690,7 +3690,16 @@ class WyckoffAnalyzer:
                 return obj.tolist()
             return str(obj)
             
-        return json.dumps(result, ensure_ascii=False, default=default_serializer, indent=2)
+        # 先转换为纯 Python 字典
+        clean_result = json.loads(json.dumps(result, default=default_serializer))
+        
+        try:
+            from .schemas import ReportModel
+            report = ReportModel(**clean_result)
+            return report.model_dump_json(indent=2, exclude_none=True)
+        except ImportError:
+            # Fallback
+            return json.dumps(clean_result, ensure_ascii=False, indent=2)
 
 
 # ============================================================

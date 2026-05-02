@@ -46,10 +46,21 @@
   2. 如果需要量化数据，可以将 `tools/wyckoff_analyzer.py` 上传给大模型。
 - **背后原理**：利用大模型自带的代码解释器 (Code Interpreter / Advanced Data Analysis) 运行脚本，精准输出分析结论。
 
-### 🔌 MCP 兼容平台 (Claude Desktop 等)
+### 🔌 MCP 兼容平台 (Claude Desktop / Cursor)
 
-- **进阶玩法**：`tools/wyckoff_analyzer.py` 已经支持标准 CLI 传参和 JSON 响应。您可以非常轻松地编写少量代码，将其封装为 **MCP (Model Context Protocol)** Server。
-- **效果**：封装后，Claude 桌面版会原生地调用一个叫作 `analyze_stock_wyckoff` 的内建工具，实现无缝衔接。
+- **进阶玩法**：本项目内置了原生的 MCP Server。你只需要将 `tools/mcp_server.py` 挂载到兼容 MCP 的客户端即可。
+- **Claude Desktop 配置示例** (`claude_desktop_config.json`):
+  ```json
+  {
+    "mcpServers": {
+      "wyckoff_analyzer": {
+        "command": "python",
+        "args": ["/绝对路径/到/wyckoff-stock-analysis/tools/mcp_server.py"]
+      }
+    }
+  }
+  ```
+- **效果**：封装后，客户端会原生地调用 `analyze_stock_wyckoff` 和 `batch_analyze_sector` 工具，实现无缝衔接，且入参出参自带 Schema 验证。
 
 ### ⚙️ Dify / FastGPT 等工作流引擎
 

@@ -3,7 +3,7 @@
 """
 威科夫分析工具包
 """
-__version__ = "3.9.0"
+__version__ = "4.0.0"
 
 from .wyckoff_analyzer import WyckoffAnalyzer, WyckoffConfig, batch_scan
 from .exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError
