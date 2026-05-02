@@ -40,7 +40,6 @@ try:
     from .core.pattern_detector import WyckoffPatternDetector
     from .core.law_analyzer import WyckoffLawAnalyzer
     from .core.report_generator import WyckoffReportGenerator
-    from .core.report_generator import WyckoffReportGenerator
 except ImportError:
     # 当直接运行脚本时，使用绝对导入
     import sys
@@ -53,7 +52,7 @@ except ImportError:
     from tools.core.pattern_detector import WyckoffPatternDetector
     from tools.core.law_analyzer import WyckoffLawAnalyzer
     from tools.core.report_generator import WyckoffReportGenerator
-    from tools.core.report_generator import WyckoffReportGenerator
+
 
 # 模块级日志，默认不输出；调用方可以通过 logging.basicConfig() 开启
 logger = logging.getLogger(__name__)

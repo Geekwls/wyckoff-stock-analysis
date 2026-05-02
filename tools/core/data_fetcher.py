@@ -96,8 +96,8 @@ class WyckoffDataFetcher:
                 return True
             logger.warning(f"baostock登录失败: {lg.error_msg}")
             return False
-        except Exception:
-            logger.exception("baostock登录异常")
+        except (ConnectionError, OSError) as e:
+            logger.exception(f"baostock登录网络异常: {e}")
             return False
 
     @classmethod
@@ -105,7 +105,7 @@ class WyckoffDataFetcher:
         if cls._bs_logged_in:
             try:
                 bs.logout()
-            except Exception:
+            except (ConnectionError, OSError):
                 pass
             cls._bs_logged_in = False
 
@@ -123,8 +123,8 @@ class WyckoffDataFetcher:
                 match = df[df['code_name'].str.contains(keyword, na=False)]
                 if not match.empty:
                     return match.iloc[0]['code']
-        except Exception:
-            logger.exception(f"baostock查询异常 keyword={keyword}")
+        except (ConnectionError, OSError) as e:
+            logger.exception(f"baostock查询网络异常 keyword={keyword}: {e}")
         return None
 
     def _update_cache(self, name: str, code: str):
