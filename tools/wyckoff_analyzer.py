@@ -3830,6 +3830,10 @@ def batch_scan(symbols: List[str], period: str = "1y", use_json: bool = False,
 if __name__ == "__main__":
     import argparse
     import sys
+    import io
+    
+    if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
     parser = argparse.ArgumentParser(description="威科夫股票分析工具")
     parser.add_argument("symbol", nargs="?", help="股票代码 (如 AAPL, 600519)")
