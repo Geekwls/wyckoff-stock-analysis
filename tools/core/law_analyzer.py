@@ -328,24 +328,76 @@ class WyckoffLawAnalyzer:
             }
 
     def _detect_preliminary_support(self) -> dict:
-        """检测初步支撑（积累期Phase A特征）"""
-        # 实现初步支撑检测逻辑
-        return {"detected": False, "description": "需要实现初步支撑检测"}
+        """检测初步支撑（积累期Phase A特征）- 价格急跌后出现大量接盘"""
+        if self.data is None or len(self.data) < 20:
+            return {"detected": False}
+        df = self.data.tail(60)
+        price_dropped = df['Close'].pct_change(5).min() < -0.08
+        high_vol_on_low = (
+            (df['Volume'] > df['Volume_MA20'] * 1.5) &
+            (df['Close'] < df['Close'].rolling(20).mean())
+        ).any()
+        detected = bool(price_dropped and high_vol_on_low)
+        return {
+            "detected": detected,
+            "description": "检测到初步支撑：急跌后出现放量承接" if detected else "未检测到明显初步支撑"
+        }
 
     def _detect_preliminary_supply(self) -> dict:
-        """检测初步阻力（派发期Phase A特征）"""
-        # 实现初步阻力检测逻辑
-        return {"detected": False, "description": "需要实现初步阻力检测"}
+        """检测初步阻力（派发期Phase A特征）- 价格急涨后出现大量抛压"""
+        if self.data is None or len(self.data) < 20:
+            return {"detected": False}
+        df = self.data.tail(60)
+        price_rallied = df['Close'].pct_change(5).max() > 0.08
+        high_vol_on_high = (
+            (df['Volume'] > df['Volume_MA20'] * 1.5) &
+            (df['Close'] > df['Close'].rolling(20).mean())
+        ).any()
+        detected = bool(price_rallied and high_vol_on_high)
+        return {
+            "detected": detected,
+            "description": "检测到初步阻力：急涨后出现放量抛售" if detected else "未检测到明显初步阻力"
+        }
 
     def _analyze_absorption_pattern(self) -> dict:
-        """分析吸筹模式"""
-        # 实现吸筹模式分析
-        return {"pattern": "unknown", "strength": "medium"}
+        """分析吸筹模式：缩量横盘 + 下跌时缩量、上涨时放量"""
+        if self.data is None or len(self.data) < 40:
+            return {"pattern": "unknown", "strength": "unknown"}
+        df = self.data.tail(40)
+        up_days = df[df['Close'] > df['Close'].shift(1)]
+        down_days = df[df['Close'] < df['Close'].shift(1)]
+        if up_days.empty or down_days.empty:
+            return {"pattern": "insufficient_data", "strength": "unknown"}
+        avg_up_vol = up_days['Volume'].mean()
+        avg_down_vol = down_days['Volume'].mean()
+        ratio = avg_up_vol / avg_down_vol if avg_down_vol > 0 else 1.0
+        if ratio > 1.4:
+            pattern, strength = "absorption", "strong"
+        elif ratio > 1.1:
+            pattern, strength = "mild_absorption", "medium"
+        else:
+            pattern, strength = "no_absorption", "weak"
+        return {"pattern": pattern, "strength": strength, "up_down_vol_ratio": round(ratio, 2)}
 
     def _analyze_exhaustion_pattern(self) -> dict:
-        """分析耗散模式"""
-        # 实现耗散模式分析
-        return {"pattern": "unknown", "strength": "medium"}
+        """分析耗散模式：价格新高但成交量萎缩"""
+        if self.data is None or len(self.data) < 40:
+            return {"pattern": "unknown", "strength": "unknown"}
+        df = self.data.tail(40)
+        recent_high = df['High'].max()
+        older_high = self.data.iloc[-80:-40]['High'].max() if len(self.data) >= 80 else recent_high * 0.95
+        new_high = recent_high > older_high
+        recent_vol = df['Volume'].mean()
+        older_vol = self.data.iloc[-80:-40]['Volume'].mean() if len(self.data) >= 80 else recent_vol
+        vol_declining = recent_vol < older_vol * 0.85
+        if new_high and vol_declining:
+            pattern, strength = "exhaustion", "strong"
+        elif vol_declining:
+            pattern, strength = "mild_exhaustion", "medium"
+        else:
+            pattern, strength = "no_exhaustion", "weak"
+        return {"pattern": pattern, "strength": strength,
+                "new_high": new_high, "volume_declining": vol_declining}
 
     def _calculate_breakout_probability(self, phase: str, direction: str) -> str:
         """计算突破概率"""

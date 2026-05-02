@@ -27,3 +27,9 @@ Thumbs.db
 
 # Project cache
 tools/stock_cache.json
+
+# Scratch / temp refactor scripts
+scratch/
+
+# Local env secrets
+.env
