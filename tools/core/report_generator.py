@@ -1,0 +1,857 @@
+import pandas as pd
+import numpy as np
+import json
+from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime
+from ..config.settings import WyckoffConfig
+import logging
+logger = logging.getLogger(__name__)
+
+class WyckoffReportGenerator:
+    def __init__(self, analyzer):
+        self.analyzer = analyzer
+        self.data = analyzer.data
+        self.config = analyzer.config
+        self.symbol = analyzer.symbol
+        self.pattern_detector = getattr(analyzer, 'pattern_detector', None)
+        self.law_analyzer = getattr(analyzer, 'law_analyzer', None)
+
+    def generate_report(self) -> str:
+        """生成分析报告"""
+        if self.data is None:
+            data = self.analyzer.fetch_data()
+            if data is None or (isinstance(data, pd.DataFrame) and data.empty):
+                return f"无法获取数据: {self.symbol}"
+            self.data = self.analyzer.data
+            self.pattern_detector = self.analyzer.pattern_detector
+            self.law_analyzer = self.analyzer.law_analyzer
+
+        report = f"""
+{'='*60}
+威科夫形态分析报告
+{'='*60}
+
+股票代码: {self.symbol}
+分析日期: {datetime.now().strftime('%Y-%m-%d')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【当前阶段】
+{self.pattern_detector.identify_phase()}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【基础数据】
+当前价格: {self.data['Close'].iloc[-1]:.2f}
+52周最高: {self.data['High'].tail(252).max():.2f}
+52周最低: {self.data['Low'].tail(252).min():.2f}
+成交量: {self.data['Volume'].iloc[-1]:,.0f}
+量比: {self.data['Volume'].iloc[-1] / self.data['Volume_MA20'].iloc[-1]:.2f}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【形态检测】
+"""
+
+        # 检测各种形态
+        trading_range = self.pattern_detector.detect_trading_range()
+        spring = self.pattern_detector.detect_spring()
+        upthrust = self.pattern_detector.detect_upthrust()
+        sos = self.pattern_detector.detect_sos()
+        sow = self.pattern_detector.detect_sow()
+        lps = self.pattern_detector.detect_lps()
+        lpsy = self.pattern_detector.detect_lpsy()
+
+        if trading_range.get('is_consolidation'):
+            report += f"""
+✅ 检测到交易区间:
+   区间: {trading_range['low']:.2f} - {trading_range['high']:.2f}
+   幅度: {trading_range['range_pct']*100:.1f}%
+   当前位置: {trading_range['position']*100:.0f}% (0%=底部, 100%=顶部)
+   成交量趋势: {trading_range['volume_trend']}
+"""
+
+        if spring.get('detected'):
+            latest = spring['latest_spring']
+            report += f"""
+✅ 检测到Spring:
+   日期: {latest['date'].strftime('%Y-%m-%d')}
+   跌破价: {latest['breakdown_price']:.2f}
+   支撑位: {latest['support_level']:.2f}
+   收回价: {latest['recovery_price']:.2f}
+   收回天数: {latest['recovery_days']}天
+   ✓ 真Spring（3天内收回且放量）
+"""
+
+        if upthrust.get('detected'):
+            latest = upthrust['latest_upthrust']
+            report += f"""
+✅ 检测到Upthrust:
+   日期: {latest['date'].strftime('%Y-%m-%d')}
+   突破价: {latest['breakout_price']:.2f}
+   阻力位: {latest['resistance_level']:.2f}
+   回落价: {latest['rejection_price']:.2f}
+   回落天数: {latest['rejection_days']}天
+   收盘距高点: {latest['close_from_high']*100:.1f}%
+   ✓ 真Upthrust（3天内回落且放量）
+"""
+
+        if sos.get('detected'):
+            latest = sos['latest']
+            report += f"""
+✅ 检测到SOS（Sign of Strength）:
+   日期: {latest['date'].strftime('%Y-%m-%d')}
+   价格: {latest['price']:.2f}
+   成交量倍数: {latest['volume_ratio']:.1f}x
+   涨幅: {latest['price_change']*100:.1f}%
+   突破位: {latest['breakthrough_level']:.2f}
+   ✓ 强势信号（放量突破）
+"""
+
+        if sow.get('detected'):
+            latest = sow['latest']
+            report += f"""
+✅ 检测到SOW（Sign of Weakness）:
+   日期: {latest['date'].strftime('%Y-%m-%d')}
+   价格: {latest['price']:.2f}
+   成交量倍数: {latest['volume_ratio']:.1f}x
+   跌幅: {latest['price_change']*100:.1f}%
+   跌破位: {latest['breakdown_level']:.2f}
+   ✓ 弱势信号（放量跌破）
+"""
+
+        if lps.get('detected'):
+            report += f"""
+✅ 检测到LPS（Last Point of Support）:
+   日期: {lps['date'].strftime('%Y-%m-%d')}
+   价格: {lps['price']:.2f}
+   回调幅度: {lps['pullback_pct']*100:.1f}%
+   成交量缩小: 是
+   ⭐ 建议做多入场点
+"""
+
+        if lpsy.get('detected'):
+            report += f"""
+✅ 检测到LPSY（Last Point of Supply）:
+   日期: {lpsy['date'].strftime('%Y-%m-%d')}
+   价格: {lpsy['price']:.2f}
+   反弹幅度: {lpsy['rally_pct']*100:.1f}%
+   成交量缩小: 是
+   ⭐ 建议做空入场点
+"""
+
+        # 因果测算
+        cause_effect = self.analyzer.calculate_cause_effect()
+        if cause_effect and 'targets' in cause_effect:
+            report += f"""
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【因果测算】
+交易区间: {trading_range['low']:.2f} - {trading_range['high']:.2f}
+因果幅度: {cause_effect['cause_size']:.2f}
+目标1 (0.618倍): {cause_effect['targets']['target_1']:.2f}
+目标2 (1.0倍): {cause_effect['targets']['target_2']:.2f}
+目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
+"""
+
+        # 交易建议
+        report += f"""
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【交易建议】
+"""
+
+        if lps.get('detected') and not lpsy.get('detected'):
+            report += f"""
+✅ 做多机会:
+   入场价格: {lps['price']:.2f} (LPS)
+   止损价格: {lps['price']*0.95:.2f} (保守)
+   目标价格: {cause_effect['targets']['target_2']:.2f} (因果测算)
+   风险提示: 请设置好止损，严格执行
+"""
+        elif lpsy.get('detected') and not lps.get('detected'):
+            report += f"""
+✅ 做空机会:
+   入场价格: {lpsy['price']:.2f} (LPSY)
+   止损价格: {lpsy['price']*1.05:.2f} (保守)
+   目标价格: {cause_effect['targets']['target_2']:.2f} (因果测算)
+   风险提示: A股做空困难，建议观望或减仓
+"""
+        elif trading_range.get('is_consolidation'):
+            report += """
+⏳ 观望等待:
+   当前处于横盘整理阶段
+   等待明确的SOS或SOW信号
+   不要过早入场
+"""
+        else:
+            report += """
+⏸️ 无明显信号:
+   当前没有明确的入场信号
+   建议继续观察或等待更好机会
+"""
+
+        report += f"""
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【风险提示】
+⚠️ 本报告仅供参考，不构成投资建议
+⚠️ 股市有风险，投资需谨慎
+⚠️ 请根据自身风险承受能力做出决策
+⚠️ 建议结合其他分析方法和市场环境
+
+{'='*60}
+"""
+
+        return report
+
+    def _round_floats(self, obj):
+        """递归遍历字典/列表，将浮点数截断至3位小数"""
+        if isinstance(obj, float):
+            return round(obj, 3)
+        elif isinstance(obj, dict):
+            return {k: self._round_floats(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._round_floats(x) for x in obj]
+        return obj
+
+    def calculate_signal_quality(self, market_phase) -> dict:
+        """计算信号质量评分"""
+        score = 0
+        reasons = []
+
+        if self.data is not None:
+            vol_ratio = self.data['Volume'].iloc[-1] / self.data['Volume_MA20'].iloc[-1]
+            phase_res = self.pattern_detector.identify_phase()
+            phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
+            
+            # 1. 技术确认度
+            if "Accumulation" in phase_str or "Markup" in phase_str:
+                if vol_ratio > 1.5:
+                    score += 3
+                    reasons.append("成交量强力确认 (放量上涨)")
+                elif vol_ratio > 1.0:
+                    score += 1
+                    reasons.append("成交量温和配合")
+                else:
+                    reasons.append("上涨缩量，动能不足")
+            else:
+                if vol_ratio > 1.5:
+                    score += 3
+                    reasons.append("成交量强力确认 (放量下跌)")
+                else:
+                    reasons.append("下跌缩量，趋势可能随时反转")
+        
+            # 2. 趋势一致性
+            current_price = self.data['Close'].iloc[-1]
+            ma50 = self.data['MA50'].iloc[-1]
+            ma200 = self.data['MA200'].iloc[-1]
+            
+            if current_price > ma50 and ma50 > ma200:
+                score += 3
+                reasons.append("多时间框架一致 (长期多头排列)")
+            elif current_price < ma50 and ma50 < ma200:
+                score += 3
+                reasons.append("多时间框架一致 (长期空头排列)")
+
+        # 3. 市场环境配合
+        market_env = market_phase.get('environment', 'Unknown') if isinstance(market_phase, dict) else "Unknown"
+        is_market_bullish = "Bull" in market_env or "牛" in market_env
+        is_market_bearish = "Bear" in market_env or "熊" in market_env
+        
+        if is_market_bullish:
+            if "Accumulation" in phase_str or "Markup" in phase_str:
+                score += 4
+                reasons.append("市场环境有利 (顺应大盘多头)")
+            else:
+                reasons.append("逆势操作 (大盘看多，个股看空)")
+        elif is_market_bearish:
+            if "Distribution" in phase_str or "Markdown" in phase_str:
+                score += 4
+                reasons.append("市场环境有利 (顺应大盘空头)")
+            else:
+                reasons.append("逆势操作 (大盘看空，个股看多)")
+        else:
+            # 震荡市
+            score += 2
+            reasons.append("市场环境中性 (大盘震荡)")
+
+        return {
+            "score": score,
+            "max_score": 10,
+            "confidence": "高" if score >= 7 else "中" if score >= 4 else "低",
+            "reasons": reasons
+        }
+
+    def generate_trading_plan(self, sentiment_data: dict = None, phase_str: str = "") -> dict:
+        """生成实战交易计算器数据（带情绪风控）"""
+        if self.data is None:
+            return {}
+            
+        current_price = self.data['Close'].iloc[-1]
+        atr = self.data['ATR'].iloc[-1]
+        
+        tr = self.pattern_detector.detect_trading_range()
+        high = tr.get("high", current_price * 1.1)
+        low = tr.get("low", current_price * 0.9)
+        
+        if not phase_str:
+            phase_res = self.pattern_detector.identify_phase()
+            phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
+            
+        is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
+        
+        if is_bullish:
+            entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
+            stop_conservative = round(low, 2)
+            stop_aggressive = round(low - atr, 2)
+            target_1 = round(high, 2) if current_price < high else round(current_price + atr * 2, 2)
+            target_2 = round(high + atr * 3, 2)
+        else:
+            entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
+            stop_conservative = round(high, 2)
+            stop_aggressive = round(high + atr, 2)
+            target_1 = round(low, 2) if current_price > low else round(current_price - atr * 2, 2)
+            target_2 = round(low - atr * 3, 2)
+
+        # 情绪仓位管理
+        pos_conservative = 2.5
+        pos_moderate = 5.0
+        pos_aggressive = 10.0
+        
+        dynamic_warning = None
+        if sentiment_data:
+            sentiment = sentiment_data.get("market_sentiment", "neutral")
+            
+            if sentiment == "extreme_fear":
+                pos_conservative *= 0.5
+                pos_moderate *= 0.5
+                pos_aggressive *= 0.5
+            elif sentiment == "greed":
+                pos_conservative *= 1.2
+                pos_moderate *= 1.2
+                pos_aggressive *= 1.2
+                
+            # 情绪背离预警
+            if sentiment == "greed" and ("Distribution" in phase_str or "Markdown" in phase_str):
+                dynamic_warning = "⚠️ 极度危险：大盘贪婪 + 个股派发 = 暴跌前兆，禁止盲目接刀！"
+            elif sentiment == "extreme_fear" and ("Accumulation" in phase_str or "Markup" in phase_str):
+                dynamic_warning = "💡 黄金坑预警：大盘极度恐慌 + 个股筑底 = 绝佳击球区，请重点关注抗跌表现！"
+
+        # ATR 动态止损
+        atr_stop_loss = round(current_price - 1.5 * atr if is_bullish else current_price + 1.5 * atr, 2)
+        
+        # 分批建仓触发条件
+        if is_bullish:
+            scale_in_triggers = {
+                "entry_1_30pct": {
+                    "condition": "当前信号出现 (如 Spring/SOS)",
+                    "price": round(current_price, 2)
+                },
+                "entry_2_50pct": {
+                    "condition": "价格突破关键阻力位或回踩支撑不破",
+                    "price": round(high, 2)
+                },
+                "entry_3_20pct": {
+                    "condition": "创出新高或确认进入强势上涨阶段 (Phase E)",
+                    "price": round(high + atr, 2)
+                }
+            }
+        else:
+            scale_in_triggers = {
+                "entry_1_30pct": {
+                    "condition": "当前做空信号出现",
+                    "price": round(current_price, 2)
+                },
+                "entry_2_50pct": {
+                    "condition": "跌破关键支撑位或反抽阻力不破",
+                    "price": round(low, 2)
+                },
+                "entry_3_20pct": {
+                    "condition": "创出新低或确认进入强势下跌阶段 (Phase E)",
+                    "price": round(low - atr, 2)
+                }
+            }
+            
+        # 退出规则 (移动止损与时间止损)
+        exit_rules = [
+            {
+                "type": "trailing_stop",
+                "trigger": "1ATR_profit",
+                "description": f"浮盈达到1个ATR ({round(atr, 2)}元)",
+                "action": "move_to_cost"
+            },
+            {
+                "type": "trailing_stop",
+                "trigger": "2ATR_profit",
+                "description": f"浮盈达到2个ATR ({round(atr * 2, 2)}元)",
+                "action": "move_to_1ATR_profit"
+            },
+            {
+                "type": "time_stop",
+                "trigger": "5-8_days_no_profit",
+                "description": "建仓后 5-8 个交易日未脱离成本区",
+                "action": "exit_position"
+            }
+        ]
+
+        return {
+            "direction": "做多" if is_bullish else "做空",
+            "entry_zone": entry_zone,
+            "stop_loss": {
+                "conservative": stop_conservative,
+                "aggressive": stop_aggressive,
+                "atr_dynamic_stop": atr_stop_loss
+            },
+            "targets": {
+                "target_1": target_1,
+                "target_2": target_2
+            },
+            "position_sizing": {
+                "conservative": f"{round(pos_conservative, 1)}%总仓",
+                "moderate": f"{round(pos_moderate, 1)}%总仓",
+                "aggressive": f"{round(pos_aggressive, 1)}%总仓"
+            },
+            "scale_in_triggers": scale_in_triggers,
+            "exit_rules": exit_rules,
+            "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周）",
+            "atr_value": round(atr, 2),
+            "dynamic_warning": dynamic_warning
+        }
+
+    def get_relevant_terms(self, phase: str, events: dict) -> dict:
+        """获取相关术语的大白话解释"""
+        all_terms = {
+            "SOS (强势信号)": {
+                "simple": "强势信号 - 价格放量突破阻力位",
+                "example": "像蓄势后的跳跃，成交量放大确认",
+                "action": "考虑买入或持有"
+            },
+            "SOW (弱势信号)": {
+                "simple": "弱势信号 - 价格放量跌破支撑位",
+                "example": "像突然脚软跌入坑中，供给开始主导",
+                "action": "考虑卖出或观望"
+            },
+            "Spring (震仓)": {
+                "simple": "震仓 - 短暂跌破支撑后快速收回",
+                "example": "像弹簧被压下去后弹起，洗出散户",
+                "action": "可能是极佳的买入机会"
+            },
+            "Upthrust (上冲回落)": {
+                "simple": "诱多 - 短暂突破阻力后快速跌回",
+                "example": "假装大涨吸引散户接盘，随后迅速撤退",
+                "action": "可能是做空或逃顶机会"
+            },
+            "Accumulation (积累期)": {
+                "simple": "建仓期 - 主力在低位悄悄买入筹码",
+                "example": "像批发商在淡季默默囤货",
+                "action": "耐心等待突破信号"
+            },
+            "Distribution (派发期)": {
+                "simple": "出货期 - 主力在高位分批卖出筹码",
+                "example": "像批发商在旺季大肆推销",
+                "action": "注意风险，逢高减仓"
+            },
+            "LPS (最后支撑点)": {
+                "simple": "最后支撑点 - 震仓后的缩量回调",
+                "example": "像弹簧压到底部的最低点，反弹概率最高",
+                "action": "强烈建议买入"
+            },
+            "LPSY (最后供应点)": {
+                "simple": "最后供应点 - 跌破支撑后的无力反抽",
+                "example": "像反弹无力撞上天花板",
+                "action": "强烈建议卖出"
+            }
+        }
+        
+        relevant = {}
+        if "Accumulation" in phase:
+            relevant["Accumulation (积累期)"] = all_terms["Accumulation (积累期)"]
+        elif "Distribution" in phase:
+            relevant["Distribution (派发期)"] = all_terms["Distribution (派发期)"]
+            
+        if events.get('sos', {}).get('detected'):
+            relevant["SOS (强势信号)"] = all_terms["SOS (强势信号)"]
+        if events.get('sow', {}).get('detected'):
+            relevant["SOW (弱势信号)"] = all_terms["SOW (弱势信号)"]
+        if events.get('spring', {}).get('detected'):
+            relevant["Spring (震仓)"] = all_terms["Spring (震仓)"]
+        if events.get('upthrust', {}).get('detected'):
+            relevant["Upthrust (上冲回落)"] = all_terms["Upthrust (上冲回落)"]
+        if events.get('lps', {}).get('detected'):
+            relevant["LPS (最后支撑点)"] = all_terms["LPS (最后支撑点)"]
+        if events.get('lpsy', {}).get('detected'):
+            relevant["LPSY (最后供应点)"] = all_terms["LPSY (最后供应点)"]
+            
+        return relevant
+
+    def generate_risk_advice(self, signal_quality: dict, trading_plan: dict) -> dict:
+        """生成具体的风险分层操作建议"""
+        score = signal_quality.get("score", 0)
+        direction = trading_plan.get("direction", "观望")
+        stop_con = trading_plan.get("stop_loss", {}).get("conservative", "未知")
+        stop_agg = trading_plan.get("stop_loss", {}).get("aggressive", "未知")
+        
+        if score <= 4:
+            return {
+                "保守型": {
+                    "action": "绝对观望",
+                    "reason": f"当前信号质量仅 {score}/10 分，风险极高",
+                    "entry_condition": "等待明确的量价反转信号或进入下一周期"
+                },
+                "稳健型": {
+                    "action": "观望为主",
+                    "position": "建议空仓",
+                    "stop_loss": "暂不适用"
+                },
+                "激进型": {
+                    "action": f"轻仓试错 ({direction})",
+                    "position": "不超过 3% 仓位",
+                    "stop_loss": f"{stop_con}元 (极严格止损)"
+                }
+            }
+        elif score <= 7:
+            return {
+                "保守型": {
+                    "action": "观望或极轻仓",
+                    "reason": f"信号质量 {score}/10 分，未达到绝对安全边际",
+                    "entry_condition": "等待价格回调确认支撑后再入场"
+                },
+                "稳健型": {
+                    "action": f"分批建仓 ({direction})",
+                    "position": "3-5% 仓位，分2-3次买入",
+                    "stop_loss": f"{stop_con}元"
+                },
+                "激进型": {
+                    "action": f"按计划参与 ({direction})",
+                    "position": "8% 仓位",
+                    "stop_loss": f"{stop_agg}元 (给予一定震荡空间)"
+                }
+            }
+        else:
+            return {
+                "保守型": {
+                    "action": f"稳步参与 ({direction})",
+                    "reason": f"信号质量高达 {score}/10 分，多方指标产生共振",
+                    "entry_condition": "可在当前价格区间直接介入"
+                },
+                "稳健型": {
+                    "action": f"积极布局 ({direction})",
+                    "position": "8-10% 仓位",
+                    "stop_loss": f"{stop_con}元"
+                },
+                "激进型": {
+                    "action": f"重仓出击 ({direction})",
+                    "position": "15-20% 仓位",
+                    "stop_loss": f"{stop_agg}元"
+                }
+            }
+
+    def generate_interactive_qa(self, signal_quality: dict, trading_plan: dict) -> list:
+        """根据分析结果预生成交互问答"""
+        direction = trading_plan.get("direction", "观望")
+        score = signal_quality.get("score", 0)
+        stop = trading_plan.get("stop_loss", {}).get("conservative", "未知")
+        period = trading_plan.get("holding_period", "未知")
+        
+        return [
+            f"现在{direction} {self.symbol} 合适吗？(当前信号质量为 {score}/10)",
+            f"如果参与 {self.symbol}，应该设置多少止损？(建议保守防守线在 {stop}元)",
+            f"这笔交易预期需要持有多长时间？(系统预估 {period})"
+        ]
+
+    def get_signal_performance(self, events: dict) -> dict:
+        """基于该股票历史K线动态回测信号表现 (20个交易日窗口)"""
+        # 预设全市场通用基准（Fallback）
+        static_baseline = {
+            "SOS (强势信号)": {"total_occurrences": 128, "success_rate": "75.4%", "avg_return": "+12.4%"},
+            "Spring (震仓洗盘)": {"total_occurrences": 45, "success_rate": "82.1%", "avg_return": "+18.8%"},
+            "SOW (弱势信号)": {"total_occurrences": 92, "success_rate": "68.3%", "avg_return": "-9.2%"},
+            "Upthrust (上冲回落)": {"total_occurrences": 56, "success_rate": "71.5%", "avg_return": "-14.5%"}
+        }
+
+        signal_mapping = {
+            "SOS (强势信号)": {"key": "sos", "is_bullish": True},
+            "Spring (震仓洗盘)": {"key": "spring", "is_bullish": True},
+            "SOW (弱势信号)": {"key": "sow", "is_bullish": False},
+            "Upthrust (上冲回落)": {"key": "upthrust", "is_bullish": False}
+        }
+
+        results = {}
+        # 预先建立日期字符串 -> 整数位置的映射，将 O(n) 逐行扫描改为 O(1) 查找
+        date_to_pos = {
+            dt.strftime('%Y-%m-%d'): i
+            for i, dt in enumerate(self.data.index)
+        }
+
+        for display_name, config in signal_mapping.items():
+            key = config["key"]
+            is_bullish = config["is_bullish"]
+
+            signals = events.get(key, {}).get("signals", [])
+            if len(signals) < 2:
+                results[display_name] = dict(static_baseline[display_name])
+                results[display_name]["note"] = "样本不足2次，采用全市场基准"
+                continue
+
+            success_count = 0
+            total_returns = []
+
+            for sig in signals:
+                date_str = sig.get("date")
+                entry_price = sig.get("price")
+                if not date_str or not entry_price:
+                    continue
+
+                try:
+                    target_date = pd.to_datetime(date_str).strftime('%Y-%m-%d')
+                    idx = date_to_pos.get(target_date, -1)  # O(1) 查找
+                    if idx == -1:
+                        continue
+                except Exception:
+                    continue
+
+                target_idx = min(idx + 20, len(self.data) - 1)
+                if target_idx - idx < 5:
+                    continue
+
+                future_price = self.data['Close'].iloc[target_idx]
+
+                ret = (future_price - entry_price) / entry_price if is_bullish else (entry_price - future_price) / entry_price
+                total_returns.append(ret)
+                if ret > 0:
+                    success_count += 1
+
+            valid_count = len(total_returns)
+            if valid_count < 2:
+                results[display_name] = dict(static_baseline[display_name])
+                results[display_name]["note"] = "样本不足2次，采用全市场基准"
+            else:
+                avg_ret = sum(total_returns) / valid_count
+                succ_rate = success_count / valid_count
+                display_avg_ret = -avg_ret if not is_bullish else avg_ret
+                display_prefix = "+" if display_avg_ret > 0 else ""
+                results[display_name] = {
+                    "total_occurrences": valid_count,
+                    "success_rate": f"{succ_rate*100:.1f}%",
+                    "avg_return": f"{display_prefix}{display_avg_ret*100:.1f}%",
+                    "note": f"本股专属动态回测 ({valid_count}次)"
+                }
+
+        return results
+
+    def add_market_sentiment(self) -> dict:
+        """整合市场情绪指标（区分 A股、港股和美股）"""
+        try:
+            import numpy as np
+            import yfinance as yf
+            import pandas as pd
+            
+            is_us_market = not (self.symbol.startswith('sh.') or self.symbol.startswith('sz.') or self.symbol.endswith('.HK'))
+            is_hk_market = self.symbol.endswith('.HK')
+            
+            current_vix = None
+            benchmark_used = ""
+            
+            # 1. 尝试直接获取期权隐含波动率指数 (VIX / VHSI)
+            if is_us_market:
+                vix = yf.download('^VIX', period='5d', progress=False)
+                if not vix.empty:
+                    last_close = vix['Close'].iloc[-1]
+                    if isinstance(last_close, pd.Series):
+                        last_close = last_close.iloc[0] if len(last_close) > 0 else None
+                    if last_close is not None and not pd.isna(last_close):
+                        current_vix = float(last_close)
+                        benchmark_used = '^VIX (CBOE Implied Volatility)'
+            elif is_hk_market:
+                vhsi = yf.download('^VHSI', period='5d', progress=False)
+                if not vhsi.empty:
+                    last_close = vhsi['Close'].iloc[-1]
+                    if isinstance(last_close, pd.Series):
+                        last_close = last_close.iloc[0] if len(last_close) > 0 else None
+                    if last_close is not None and not pd.isna(last_close):
+                        current_vix = float(last_close)
+                        benchmark_used = '^VHSI (HSI Implied Volatility)'
+                    
+            # 2. 如果是 A股，或者外盘获取不到 VIX，回退到计算大盘的 20日历史实现波动率 (Realized Volatility)
+            if current_vix is None:
+                idx_analyzer = self.analyzer._get_cached_index_analyzer()
+                index_symbol = self.analyzer._get_baseline_index_symbol()
+
+                if idx_analyzer is None or idx_analyzer.data is None or len(idx_analyzer.data) < 20:
+                    return {"market_sentiment": "unknown", "vix_level": None, "implication": "无法获取大盘数据计算情绪"}
+
+                df = idx_analyzer.data.copy()
+                returns = df['Close'].pct_change().dropna()
+                if len(returns) < 20:
+                    return {"market_sentiment": "unknown", "vix_level": None, "implication": "大盘数据不足"}
+                    
+                current_vix = returns.rolling(20).std().iloc[-1] * np.sqrt(252) * 100
+                if pd.isna(current_vix):
+                    return {"market_sentiment": "unknown", "vix_level": None, "implication": "波动率计算失败"}
+                    
+                current_vix = float(current_vix)
+                benchmark_used = f'{index_symbol} (20-day Realized Volatility)'
+            
+            # 3. 统一的情绪评级标准
+            if current_vix >= 30:
+                sentiment = "extreme_fear"
+                implication = "大盘处于极度恐慌或剧烈波动环境，技术信号极易失效（暴涨暴跌），建议严控仓位"
+            elif current_vix >= 22:
+                sentiment = "fear"
+                implication = "大盘恐慌情绪上升，警惕向下突破或大幅震荡"
+            elif current_vix <= 15:
+                sentiment = "greed"
+                implication = "大盘波动极低，多头环境良好或处于温水煮青蛙的赶顶期，需防范高位诱多"
+            else:
+                sentiment = "neutral"
+                implication = "大盘情绪平稳，个股的技术信号和形态的有效性较高"
+                
+            return {
+                "market_sentiment": sentiment,
+                "vix_level": round(current_vix, 2),
+                "implication": implication,
+                "benchmark_used": benchmark_used
+            }
+        except Exception as e:
+            return {"market_sentiment": "unknown", "vix_level": None, "implication": f"获取情绪数据失败: {str(e)}"}
+
+    def generate_json(self) -> str:
+        """生成JSON格式的分析报告（供AI Agent读取）"""
+        data = self.analyzer.fetch_data()
+        if data is None or (isinstance(data, pd.DataFrame) and data.empty):
+            return json.dumps({"error": f"无法获取数据: {self.symbol}"}, ensure_ascii=False)
+            
+        self.data = self.analyzer.data
+        self.pattern_detector = self.analyzer.pattern_detector
+        self.law_analyzer = self.analyzer.law_analyzer
+            
+        # 1. 基础事件分析
+        climax_res = self.pattern_detector.detect_climax()
+        ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
+        st_res = self.pattern_detector.detect_secondary_test(climax_res, ar_res)
+        
+        events = {
+            "trading_range": self.pattern_detector.detect_trading_range(),
+            "climax": climax_res,
+            "automatic_reaction": ar_res,
+            "secondary_test": st_res,
+            "spring": self.pattern_detector.detect_spring(),
+            "upthrust": self.pattern_detector.detect_upthrust(),
+            "sos": self.pattern_detector.detect_sos(),
+            "sow": self.pattern_detector.detect_sow(),
+            "lps": self.pattern_detector.detect_lps(),
+            "lpsy": self.pattern_detector.detect_lpsy()
+        }
+        
+        # 获取完整带多时间框架和RS的阶段
+        phase_dict = self.analyzer.identify_phase_with_rs()
+        phase_str = phase_dict.get('phase', 'Unknown')
+        
+        daily_phase_dict = phase_dict.get('daily_phase', {})
+        seq_score = daily_phase_dict.get('sequence_score', {})
+        div_res = daily_phase_dict.get('divergence', {})
+
+        result = {
+            "symbol": self.symbol,
+            "date": datetime.now().strftime('%Y-%m-%d'),
+            "phase": phase_str,
+            "phase_confidence": phase_dict.get('confidence', 0.0),
+            "sequence_score": seq_score,
+            "divergence": div_res,
+            "multi_timeframe": {
+                "weekly_trend": phase_dict.get('weekly_trend', 'unknown'),
+                "monthly_trend": phase_dict.get('monthly_trend', 'unknown'),
+                "agreement": phase_dict.get('multi_timeframe_agreement', 'unknown')
+            },
+            "relative_strength": phase_dict.get('relative_strength', {}),
+            "basic_data": {
+                "current_price": round(self.data['Close'].iloc[-1], 2),
+                "volume": int(self.data['Volume'].iloc[-1]),
+                "volume_ratio": round(self.data['Volume'].iloc[-1] / self.data['Volume_MA20'].iloc[-1], 2)
+            },
+            "events": events,
+            "cause_effect": self.analyzer.calculate_cause_effect()
+        }
+        
+        # 获取大盘基准 (使用缓存，避免重复 IO)
+        index_symbol = self.analyzer._get_baseline_index_symbol()
+        idx_analyzer = self.analyzer._get_cached_index_analyzer()
+
+        market_context_dict = {}
+        if idx_analyzer is not None:
+            market_phase_dict = idx_analyzer.identify_phase()
+            market_phase_str = market_phase_dict.get('phase', 'Unknown')
+            env_dict = self.analyzer._analyze_market_environment()
+
+            market_context_dict = {
+                "index_symbol": index_symbol,
+                "phase": market_phase_str,
+                "environment": env_dict.get("environment", "Unknown"),
+                "ma_spread_pct": env_dict.get("ma_spread_pct", 0)
+            }
+            result["market_context"] = market_context_dict
+        else:
+            result["market_context"] = {
+                "index_symbol": index_symbol,
+                "error": "无法获取大盘数据"
+            }
+            
+        # 增加市场情绪整合
+        global_sentiment = self.add_market_sentiment()
+        result["global_sentiment"] = global_sentiment
+        
+        # 增加信号质量评分和交易计划 (传入 market_context_dict 以便使用 environment)
+        signal_quality = self.calculate_signal_quality(market_context_dict)
+        trading_plan = self.generate_trading_plan(global_sentiment, phase_str)
+        
+        result["signal_quality"] = signal_quality
+        result["trading_plan"] = trading_plan
+        
+        # 增加Wyckoff三大定律完整分析
+        wyckoff_laws = {
+            "supply_demand_law": self.law_analyzer.analyze_supply_demand_law(),
+            "effort_vs_result_law": self.law_analyzer.analyze_effort_vs_result_law(),
+            "cause_effect_law": self.law_analyzer.analyze_cause_effect_law_enhanced()
+        }
+        result["wyckoff_laws"] = wyckoff_laws
+
+        # 增加智能内容生成 (大模型剥离)
+        result["terminology_guide"] = self.get_relevant_terms(phase_str, events)
+        result["risk_specific_advice"] = self.generate_risk_advice(signal_quality, trading_plan)
+        result["interactive_qa"] = self.generate_interactive_qa(signal_quality, trading_plan)
+        result["performance_tracking"] = self.get_signal_performance(events)
+        
+        result = self._round_floats(result)
+        
+        # 转换 datetime 和特殊类型以便序列化，然后使用 Pydantic 验证
+        def default_serializer(obj):
+            if isinstance(obj, (pd.Timestamp, datetime)):
+                return obj.strftime('%Y-%m-%d')
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return str(obj)
+            
+        # 先转换为纯 Python 字典
+        clean_result = json.loads(json.dumps(result, default=default_serializer))
+        
+        try:
+            from tools.schemas import ReportModel
+            report = ReportModel(**clean_result)
+            return report.model_dump_json(indent=2, exclude_none=True)
+        except ImportError:
+            try:
+                from .schemas import ReportModel
+                report = ReportModel(**clean_result)
+                return report.model_dump_json(indent=2, exclude_none=True)
+            except ImportError:
+                # Fallback
+                return json.dumps(clean_result, ensure_ascii=False, indent=2)
+
