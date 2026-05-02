@@ -1,4 +1,4 @@
-# Wyckoff Stock Analysis Skill v4.0.0
+# Wyckoff Stock Analysis Skill v4.1.0
 
 > 一个专为 AI Agent（如 Claude Code, Cursor, MCP 客户端）打造的威科夫股票分析标准组件。
 
@@ -6,7 +6,7 @@
 
 ---
 
-## 🌟 核心特性 (v4.0.0 架构)
+## 🌟 核心特性 (v4.1.0 架构)
 
 本项目已经超越了单纯的“提示词模板”，进化为一个平台无关的 Agent 技能包：
 
