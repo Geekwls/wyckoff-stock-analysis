@@ -71,14 +71,31 @@ python tools/wyckoff_analyzer.py AAPL --json
 
 ```text
 wyckoff-stock-analysis/
-├── SKILL.md                          # 核心：AI Agent 系统提示词/路由规则
+├── SKILL.md                          # 核心：AI Agent 系统提示词/路由规则 (v4.0.0)
 ├── README.md                         # 本说明文件
 ├── HOW_TO_USE.md                     # 多平台 AI 接入使用指南
+├── .env.example                      # 环境变量配置模板
 │
-├── requirements.txt                  # Python 环境依赖包
+├── requirements.txt                  # Python 环境依赖包（含版本上限）
+├── tests/                            # 单元测试
+│   ├── conftest.py                   # 共享测试夹具（模拟 OHLCV 数据生成器）
+│   ├── test_config.py                # WyckoffConfig 配置校验测试
+│   ├── test_data_fetcher.py          # ATR计算 + 数据预处理测试
+│   └── test_pattern_detector.py      # 形态检测全套测试
+│
 ├── tools/                            # 本地量化工具库
-│   ├── wyckoff_analyzer.py           # 核心引擎：数据获取、阶段检测、JSON 输出
-│   └── wyckoff_utils.py              # 辅助工具：批量筛选、报告生成
+│   ├── wyckoff_analyzer.py           # 核心调度器：Facade 模式入口
+│   ├── wyckoff_utils.py              # 批量筛选器：WyckoffScreener
+│   ├── exceptions.py                 # 自定义异常层级
+│   ├── schemas.py                    # Pydantic 输出结构定义
+│   ├── mcp_server.py                 # MCP 协议接口（供 AI Agent 调用）
+│   ├── config/
+│   │   └── settings.py               # 全局配置与阈值（Pydantic 校验）
+│   └── core/
+│       ├── data_fetcher.py           # 数据获取（A股/美股/港股）
+│       ├── pattern_detector.py       # 形态检测（Spring/SOS/SOW/Climax等）
+│       ├── law_analyzer.py           # 三大定律分析
+│       └── report_generator.py       # 报告生成（文字报告 + JSON）
 │
 ├── references/                       # 威科夫理论知识库 (供 AI 检索 RAG)
 │   ├── wyckoff-theory-full.md        # 完整理论与量化标准
@@ -107,6 +124,34 @@ wyckoff-stock-analysis/
 ---
 
 ## 🔄 更新日志
+
+### v4.1.0 (2026-05-02) - 架构解耦 · 质量加固 · 测试覆盖 (P0/P1)
+
+#### 🏗️ 架构重构（单一职责原则，God Class 彻底拆解）
+- **`WyckoffDataFetcher`** → `tools/core/data_fetcher.py`：数据获取、A股/美股适配、Baostock 缓存管理完全独立。
+- **`WyckoffPatternDetector`** → `tools/core/pattern_detector.py`：Spring / Upthrust / Climax / SOS / SOW / LPS / LPSY 所有形态检测方法全部迁出。
+- **`WyckoffLawAnalyzer`** → `tools/core/law_analyzer.py`：威科夫三大定律（供求、努力与结果、因果）完整实现。
+- **`WyckoffReportGenerator`** → `tools/core/report_generator.py`：文字报告与 JSON 结构化输出逻辑独立封装。
+- `wyckoff_analyzer.py` 精简为纯 **Facade 调度器**，从 ~3900 行压缩至 ~900 行，降幅 77%。
+
+#### 🧪 单元测试（零 → 31 个，全部通过）
+- `tests/conftest.py`：共享 OHLCV 测试夹具，支持 flat / uptrend / downtrend / spring 多种市场场景。
+- `tests/test_config.py`：Pydantic 配置校验（边界值、非法值拒绝等 9 个用例）。
+- `tests/test_data_fetcher.py`：ATR 计算 + `prepare_data` 指标生成（8 个用例）。
+- `tests/test_pattern_detector.py`：交易区间、SOS、SOW、Spring、Climax 检测（14 个用例）。
+
+#### 🔧 代码质量修复
+- **消除重复导入**：移除 `wyckoff_analyzer.py` 中两处多余的 `from ... import WyckoffReportGenerator`。
+- **硬编码阈值统一**：`pattern_detector.py` 中 `0.3` / `0.35` 两处魔法数字改为读取 `self.config.spring_range_threshold`。
+- **精确异常捕获**：baostock 相关 `except Exception` 改为 `except (ConnectionError, OSError)`，防止吞掉非网络异常。
+- **长方法拆分**：`_detect_spring_impl`（~180行）拆分为 `_check_spring_preconditions` / `_find_spring_breakdowns` / `_verify_spring_recoveries` 三个职责单一的方法。
+- **实现桩函数**：`law_analyzer.py` 中 4 个 TODO 占位方法（初步支撑/阻力检测、吸筹/耗散模式）完成真实向量化实现。
+
+#### 📁 工程规范
+- `.gitignore` 新增 `scratch/`、`.env`，防止临时脚本和密钥文件意外提交。
+- `requirements.txt` 为 `yfinance` 补加 `<1.0.0` 上限，防止破坏性更新。
+- `.env.example` 重写为项目真正可用的 `WYCKOFF_*` 配置模板。
+- 版本号全项目同步：`SKILL.md`（4.0.0 → 4.0.0）、`HOW_TO_USE.md` 新增版本标注。
 
 ### v4.0.0 (2026-05-02) - 架构全面升级与 MCP 支持 (P0)
 - 🔌 **标准 MCP Server**：新增 `tools/mcp_server.py`，使用 FastMCP 实现标准化接口，支持 Claude Desktop 与主流 IDE 一键无缝集成。
