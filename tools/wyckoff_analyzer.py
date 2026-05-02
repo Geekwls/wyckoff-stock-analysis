@@ -35,13 +35,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # 智能导入：尝试相对导入，失败则用绝对导入
 try:
     from .exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError
+    from .config.settings import WyckoffConfig, WyckoffThresholds
+    from .core.data_fetcher import WyckoffDataFetcher
 except ImportError:
     # 当直接运行脚本时，使用绝对导入
     import sys
-    current_dir = os.path.dirname(__file__)
-    if current_dir not in sys.path:
-        sys.path.insert(0, current_dir)
-    from exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    from tools.exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError
+    from tools.config.settings import WyckoffConfig, WyckoffThresholds
+    from tools.core.data_fetcher import WyckoffDataFetcher
 
 # 模块级日志，默认不输出；调用方可以通过 logging.basicConfig() 开启
 logger = logging.getLogger(__name__)
@@ -91,85 +95,7 @@ class SpringResult(TypedDict):
     latest_spring: Optional[SpringSignal]
 
 
-class WyckoffConfig(BaseModel):
-    """威科夫分析配置（带验证）"""
-    confidence_threshold: float = Field(0.85, ge=0.0, le=1.0)
-    min_data_length: int = Field(60, ge=20, le=1000)
-    atr_period: int = Field(14, ge=5, le=50)
-    atr_multiplier: float = Field(1.5, ge=0.5, le=5.0)
-    volume_ma_period: int = Field(20, ge=5, le=100)
-    
-    # Spring检测参数
-    spring_lookback: int = Field(120, ge=30, le=252)
-    spring_max_recovery_days: int = Field(3, ge=1, le=10)
-    spring_range_threshold: float = Field(0.30, ge=0.1, le=0.5)
-    
-    # 高潮检测参数
-    climax_vol_multiplier: float = Field(3.0, ge=2.0, le=10.0)
-    climax_range_multiplier: float = Field(1.5, ge=1.0, le=5.0)
-    
-    @field_validator('min_data_length')
-    @classmethod
-    def validate_data_length(cls, v):
-        if v < 20:
-            raise ValueError('数据长度至少20天')
-        return v
-    
-    model_config = ConfigDict(
-        env_prefix="WYCKOFF_",
-        populate_by_name=True
-    )
 
-
-# ============================================================
-# 技术指标计算
-# ============================================================
-
-def calculate_atr(data: pd.DataFrame, period: int = 14) -> pd.Series:
-    """计算ATR（Average True Range）"""
-    high = pd.to_numeric(data['High'], errors='coerce')
-    low = pd.to_numeric(data['Low'], errors='coerce')
-    close = pd.to_numeric(data['Close'], errors='coerce').shift(1)
-
-    tr1 = high - low
-    tr2 = (high - close).abs()
-    tr3 = (low - close).abs()
-
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(window=period, min_periods=1).mean()
-
-    return pd.Series(atr, index=data.index, name='ATR')
-
-
-def prepare_data(data: pd.DataFrame, config: WyckoffConfig = None) -> pd.DataFrame:
-    """预计算常用指标"""
-    cfg = config or WyckoffConfig()
-    df = data.copy()
-
-    # 确保数值类型
-    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
-
-    # 计算均线
-    df['MA20'] = df['Close'].rolling(20, min_periods=1).mean()
-    df['MA50'] = df['Close'].rolling(50, min_periods=1).mean()
-    df['MA200'] = df['Close'].rolling(200, min_periods=1).mean()
-    df['Volume_MA20'] = df['Volume'].rolling(cfg.volume_ma_period, min_periods=1).mean()
-
-    # 计算ATR
-    df['ATR'] = calculate_atr(df, cfg.atr_period)
-
-    # 计算RSI
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
-    rs = gain / loss.replace(0, np.nan)
-    df['RSI'] = 100 - (100 / (1 + rs.fillna(0)))
-
-    return df
 
 
 @dataclass
@@ -199,8 +125,6 @@ class AnalysisCache:
 class WyckoffAnalyzer:
     """威科夫分析器"""
 
-    _bs_logged_in: bool = False  # 类级别 baostock 登录状态，避免重复登录
-
     def __init__(self, symbol: str, period: str = "1y", config: WyckoffConfig = None):
         """
         初始化分析器
@@ -213,8 +137,8 @@ class WyckoffAnalyzer:
         self.symbol = symbol
         self.period = period
         self.config = config or WyckoffConfig()
+        self.data_fetcher = WyckoffDataFetcher(self.config)
         self.data = None
-        self.cache_file = os.path.join(os.path.dirname(__file__), "stock_cache.json")
         self._index_analyzer_cache: Optional['WyckoffAnalyzer'] = None  # 大盘数据缓存，避免重复IO
         self._analysis_cache = AnalysisCache()
 
@@ -240,33 +164,16 @@ class WyckoffAnalyzer:
     # 数据获取
     # ----------------------------------------------------------
 
+    def fetch_data(self) -> pd.DataFrame:
+        """获取股票数据（自动识别市场）"""
+        self._analysis_cache.invalidate()
+        symbol, data = self.data_fetcher.fetch_data(self.symbol, self.period)
+        self.symbol = symbol
+        self.data = data
+        return self.data
+
     def _is_a_stock(self, symbol: str) -> bool:
-        """判断是否为A股"""
-        symbol_upper = symbol.upper()
-        if symbol.isdigit():
-            return True
-        if symbol_upper.endswith(('.SH', '.SZ')):
-            return True
-        if symbol_upper.startswith(('SH.', 'SZ.')):
-            return True
-        return False
-
-    def _resolve_stock_name(self, name: str) -> Optional[str]:
-        """中文名称 → 股票代码"""
-        if os.path.exists(self.cache_file):
-            try:
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    cache = json.load(f)
-                if name in cache:
-                    return cache[name]
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning("读取股票缓存失败: %s", e)
-
-        code = self._search_from_baostock(name)
-        if code:
-            self._update_cache(name, code)
-            return code
-        return None
+        return self.data_fetcher._is_a_stock(symbol)
 
     def _get_baseline_index_symbol(self) -> str:
         """获取大盘基准指数代码"""
@@ -285,156 +192,6 @@ class WyckoffAnalyzer:
             return "^HSI"  # 港股 - 恒生指数
         else:
             return "SPY"  # 美股/其他 - 标普500
-
-    def _ensure_bs_login(self) -> bool:
-        """确保 baostock 已登录（类级别，只登录一次）"""
-        if WyckoffAnalyzer._bs_logged_in:
-            return True
-        try:
-            lg = bs.login()
-            if lg.error_code == '0':
-                WyckoffAnalyzer._bs_logged_in = True
-                return True
-            logger.warning("baostock登录失败: %s", lg.error_msg)
-            return False
-        except Exception:
-            logger.exception("baostock登录异常")
-            return False
-
-    @classmethod
-    def logout_baostock(cls):
-        """显式登出 baostock（可选，通常在程序退出时调用）"""
-        if cls._bs_logged_in:
-            try:
-                bs.logout()
-            except Exception:
-                pass
-            cls._bs_logged_in = False
-
-    def _search_from_baostock(self, keyword: str) -> Optional[str]:
-        """从 baostock 搜索股票"""
-        if not self._ensure_bs_login():
-            return None
-
-        try:
-            rs = bs.query_stock_basic()
-            data_list = []
-            while (rs.error_code == '0') & rs.next():
-                data_list.append(rs.get_row_data())
-
-            if data_list:
-                df = pd.DataFrame(data_list, columns=rs.fields)
-                match = df[df['code_name'].str.contains(keyword, na=False)]
-                if not match.empty:
-                    return match.iloc[0]['code']
-        except Exception:
-            logger.exception("baostock查询异常 keyword=%s", keyword)
-            return None
-
-        return None
-
-    def _update_cache(self, name: str, code: str):
-        """更新本地缓存"""
-        cache = {}
-        if os.path.exists(self.cache_file):
-            try:
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    cache = json.load(f)
-            except Exception:
-                pass
-
-        cache[name] = code
-
-        try:
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
-                json.dump(cache, f, ensure_ascii=False, indent=2)
-        except (OSError, TypeError) as e:
-            logger.warning("缓存写入失败: %s", e)
-
-    def fetch_data(self) -> pd.DataFrame:
-        """获取股票数据（自动识别市场）"""
-        self._analysis_cache.invalidate()
-        try:
-            symbol = self.symbol
-            # 检查是否包含中文字符
-            if any('\u4e00' <= char <= '\u9fff' for char in symbol):
-                resolved = self._resolve_stock_name(symbol)
-                if resolved:
-                    symbol = resolved
-                    self.symbol = symbol
-                else:
-                    raise DataFetchError(self.symbol, f"无法识别股票名称: {self.symbol}")
-
-            if self._is_a_stock(symbol):
-                data = self._fetch_a_stock_data(symbol)
-            else:
-                data = self._fetch_global_stock_data(symbol)
-            
-            if data is None or len(data) < self.config.min_data_length:
-                raise InsufficientDataError(
-                    self.symbol, 
-                    self.config.min_data_length, 
-                    len(data) if data is not None else 0
-                )
-            
-            self.data = prepare_data(data, self.config)
-            return self.data
-
-        except WyckoffError:
-            raise
-        except Exception as e:
-            logger.exception("获取数据异常 symbol=%s", self.symbol)
-            raise DataFetchError(self.symbol, str(e)) from e
-
-    def _fetch_a_stock_data(self, symbol: str) -> pd.DataFrame:
-        """baostock 获取A股数据"""
-        if '.' in symbol:
-            parts = symbol.split('.')
-            code = f"{parts[1].lower()}.{parts[0]}"
-        else:
-            prefix = 'sh' if symbol.startswith('6') else 'sz'
-            code = f"{prefix}.{symbol}"
-
-        end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
-        period_days = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
-        days = period_days.get(self.period, 365)
-        start_date = (pd.Timestamp.now() - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
-
-        if not self._ensure_bs_login():
-            raise DataFetchError(symbol, "baostock登录失败")
-
-        rs = bs.query_history_k_data_plus(
-            code, "date,open,high,low,close,volume,amount",
-            start_date=start_date, end_date=end_date,
-            frequency="d", adjustflag="3"
-        )
-
-        data_list = []
-        while (rs.error_code == '0') & rs.next():
-            data_list.append(rs.get_row_data())
-
-        if not data_list:
-            raise DataFetchError(symbol, "未获取到数据")
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
-        df = df.rename(columns={
-            'date': 'Date', 'open': 'Open', 'high': 'High',
-            'low': 'Low', 'close': 'Close', 'volume': 'Volume'
-        })
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.set_index('Date')
-        df = df.astype(float)
-        return df
-
-    def _fetch_global_stock_data(self, symbol: str) -> pd.DataFrame:
-        """yfinance 获取其他市场数据"""
-        stock = yf.Ticker(symbol)
-        data = stock.history(period=self.period)
-
-        if data.empty:
-            raise DataFetchError(symbol, "未获取到数据")
-
-        return data
 
     # ----------------------------------------------------------
     # 形态检测
@@ -3694,12 +3451,17 @@ class WyckoffAnalyzer:
         clean_result = json.loads(json.dumps(result, default=default_serializer))
         
         try:
-            from .schemas import ReportModel
+            from tools.schemas import ReportModel
             report = ReportModel(**clean_result)
             return report.model_dump_json(indent=2, exclude_none=True)
         except ImportError:
-            # Fallback
-            return json.dumps(clean_result, ensure_ascii=False, indent=2)
+            try:
+                from .schemas import ReportModel
+                report = ReportModel(**clean_result)
+                return report.model_dump_json(indent=2, exclude_none=True)
+            except ImportError:
+                # Fallback
+                return json.dumps(clean_result, ensure_ascii=False, indent=2)
 
 
 # ============================================================

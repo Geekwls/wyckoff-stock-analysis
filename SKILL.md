@@ -68,6 +68,20 @@ Your internal prompt context is deliberately kept small. If you are unsure about
 3. **Never Invent Data**: If you cannot find a clear Spring or Upthrust, explicitly state "No Phase C shakeout detected". Do NOT hallucinate support levels.
 4. **Adaptive Verbosity**: If the user asks a simple question (e.g., "What phase is AAPL in?"), provide a 1-2 sentence direct answer. Only provide a full, structured 8-part report if requested or if performing a "full analysis".
 
+## 🛡️ Error Handling
+
+If the Python tool fails or returns an error:
+1. **Check network connectivity** and explicitly mention this to the user.
+2. **Verify symbol format** (e.g., ensure A-shares use "sh.600519" or "sz.000001" format).
+3. **Fall back to manual analysis** ONLY IF the user provides raw OHLCV data, but include clear disclaimers.
+4. **Never hallucinate quantitative data** if the fetch fails.
+
+## ⚙️ Compatibility
+
+- **Minimum Claude Version**: 3.5 (Sonnet/Opus)
+- **Required Tools**: Python 3.8+, pandas>=1.5.0
+- **Tested Platforms**: Cursor, Claude Code, Windsurf, ChatGPT Plus, Claude Desktop (via MCP)
+
 ## 🛠️ Tooling
 
 To get quantitative analysis, run:
