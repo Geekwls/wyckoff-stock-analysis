@@ -1,7 +1,7 @@
 ---
 name: wyckoff-stock-analysis
 description: This skill acts as an expert Wyckoff trading analyst and system router. Use it to analyze stocks, interpret market phases, and identify key events based on Richard D. Wyckoff's theory.
-version: 3.9.0
+version: 4.0.0
 ---
 
 # Wyckoff Stock Analysis - Expert System Router
