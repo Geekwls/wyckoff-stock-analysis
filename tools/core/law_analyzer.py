@@ -3,7 +3,7 @@ import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from ..config.settings import WyckoffConfig
-from .utils import PhaseClassifier
+from .utils import PhaseAdapter
 from ..exceptions import InsufficientDataError, LawAnalysisError
 import logging
 logger = logging.getLogger(__name__)
@@ -21,11 +21,11 @@ class WyckoffLawAnalyzer:
 
         df = self.data.copy()
 
-        # 1. 识别当前处于积累期还是派发期 (使用 PhaseClassifier)
+        # 1. 识别当前处于积累期还是派发期 (使用 PhaseAdapter)
         phase_result = self.pattern_detector.identify_phase()
-        phase_str = phase_result.get('phase', 'Unknown')
-        is_accumulation = PhaseClassifier.is_accumulation(phase_str)
-        is_distribution = PhaseClassifier.is_distribution(phase_str)
+        phase_obj = phase_result.get('phase_enum') or phase_result.get('phase', 'Unknown')
+        is_accumulation = PhaseAdapter.is_accumulation(phase_obj)
+        is_distribution = PhaseAdapter.is_distribution(phase_obj)
 
         # 2. 检测交易区间
         trading_range = self.pattern_detector.detect_trading_range()
@@ -44,7 +44,7 @@ class WyckoffLawAnalyzer:
 
         # 5. 供求分析
         supply_demand_analysis = {
-            "current_phase": phase_str,
+            "current_phase": phase_obj,
             "trading_range_status": "in_consolidation" if in_range else "trending",
             "volume_analysis": {
                 "current_volume_ratio": round(current_vol / max(vol_ma20, 1), 2),

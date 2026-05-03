@@ -132,20 +132,34 @@ class SowModel(BaseModel):
     latest: Optional[SowSignalModel] = Field(default=None, description="最新SOW")
 
 
+class LpsSignalModel(BaseModel):
+    """LPS信号详情"""
+    date: Any = Field(description="信号日期")
+    price: float = Field(description="价格")
+    volume_ratio: float = Field(description="量比")
+    support_level: float = Field(description="支撑位")
+
 class LpsModel(BaseModel):
     """LPS事件"""
     detected: bool = Field(description="是否检测到")
-    date: Any = Field(default=None, description="日期")
-    price: Optional[float] = Field(default=None, description="价格")
-    volume: Optional[float] = Field(default=None, description="成交量")
+    error: Optional[str] = Field(default=None, description="错误信息")
+    signals: Optional[List[LpsSignalModel]] = Field(default=None, description="信号列表")
+    latest: Optional[LpsSignalModel] = Field(default=None, description="最新LPS")
 
+
+class LpsySignalModel(BaseModel):
+    """LPSY信号详情"""
+    date: Any = Field(description="信号日期")
+    price: float = Field(description="价格")
+    volume_ratio: float = Field(description="量比")
+    resistance_level: float = Field(description="阻力位")
 
 class LpsyModel(BaseModel):
     """LPSY事件"""
     detected: bool = Field(description="是否检测到")
-    date: Any = Field(default=None, description="日期")
-    price: Optional[float] = Field(default=None, description="价格")
-    volume: Optional[float] = Field(default=None, description="成交量")
+    error: Optional[str] = Field(default=None, description="错误信息")
+    signals: Optional[List[LpsySignalModel]] = Field(default=None, description="信号列表")
+    latest: Optional[LpsySignalModel] = Field(default=None, description="最新LPSY")
 
 
 class EventsModel(BaseModel):

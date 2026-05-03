@@ -121,12 +121,9 @@ class WyckoffPatternDetector:
         return events
 
     def detect_lps(self, sos_result: Dict = None) -> Dict:
-        """检测 LPS (代理)"""
-        # 此处简化，实际逻辑可进一步下放
-        if self.data is None: return {'detected': False}
-        return {'detected': False} # TODO: 迁移 LPS 逻辑
+        """检测 LPS (Last Point of Support)"""
+        return self.sw_detector.detect_lps()
 
     def detect_lpsy(self, sow_result: Dict = None) -> Dict:
-        """检测 LPSY (代理)"""
-        if self.data is None: return {'detected': False}
-        return {'detected': False} # TODO: 迁移 LPSY 逻辑
+        """检测 LPSY (Last Point of Supply)"""
+        return self.sw_detector.detect_lpsy()

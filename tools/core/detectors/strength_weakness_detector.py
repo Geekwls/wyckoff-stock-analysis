@@ -60,6 +60,66 @@ class StrengthWeaknessDetector:
             }
         return {'detected': False}
 
+    def detect_lps(self, window: int = 30) -> Dict:
+        """检测 LPS (Last Point of Support)"""
+        if self.data is None or len(self.data) < 60:
+            return {'detected': False}
+        
+        df = self.data.tail(window).copy()
+        vol_ma = self.data['Volume_MA20'].reindex(df.index)
+        
+        # 逻辑：价格在 MA20 之上，且回踩缩量，低点抬高
+        lps_signals = []
+        for i in range(5, len(df)):
+            current = df.iloc[i]
+            prev = df.iloc[i-1]
+            
+            # 回调缩量条件
+            is_pullback = (current['Low'] < df.iloc[i-5:i]['High'].max()) and (current['Close'] > df['MA20'].iloc[i])
+            low_volume = current['Volume'] < vol_ma.iloc[i] * self.thresholds.VOLUME_CONFIRMATION['weak']
+            higher_low = current['Low'] > df.iloc[i-20:i-5]['Low'].min()
+            
+            if is_pullback and low_volume and higher_low:
+                lps_signals.append({
+                    'date': df.index[i],
+                    'price': current['Close'],
+                    'volume_ratio': round(current['Volume'] / vol_ma.iloc[i], 2),
+                    'support_level': df['MA20'].iloc[i]
+                })
+        
+        if lps_signals:
+            return {'detected': True, 'signals': lps_signals, 'latest': lps_signals[-1]}
+        return {'detected': False}
+
+    def detect_lpsy(self, window: int = 30) -> Dict:
+        """检测 LPSY (Last Point of Supply)"""
+        if self.data is None or len(self.data) < 60:
+            return {'detected': False}
+            
+        df = self.data.tail(window).copy()
+        vol_ma = self.data['Volume_MA20'].reindex(df.index)
+        
+        lpsy_signals = []
+        for i in range(5, len(df)):
+            current = df.iloc[i]
+            
+            # 逻辑：价格在 MA20 之下，反弹无力（缩量），高点降低
+            is_rebound = (current['High'] > df.iloc[i-5:i]['Low'].min()) and (current['Close'] < df['MA20'].iloc[i])
+            low_volume = current['Volume'] < vol_ma.iloc[i] * self.thresholds.VOLUME_CONFIRMATION['weak']
+            lower_high = current['High'] < df.iloc[i-20:i-5]['High'].max()
+            
+            if is_rebound and low_volume and lower_high:
+                lpsy_signals.append({
+                    'date': df.index[i],
+                    'price': current['Close'],
+                    'volume_ratio': round(current['Volume'] / vol_ma.iloc[i], 2),
+                    'resistance_level': df['MA20'].iloc[i]
+                })
+                
+        if lpsy_signals:
+            return {'detected': True, 'signals': lpsy_signals, 'latest': lpsy_signals[-1]}
+        return {'detected': False}
+
     def detect_sos_variants(self) -> Dict:
         return self._detect_variants(is_bullish=True)
 
