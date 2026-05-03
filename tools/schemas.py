@@ -52,6 +52,7 @@ class TradingRangeModel(BaseModel):
 class ClimaxModel(BaseModel):
     """高潮事件"""
     detected: bool = Field(description="是否检测到")
+    error: Optional[str] = Field(default=None, description="错误信息")
     type: Optional[str] = Field(default=None, description="高潮类型")
     date: Any = Field(default=None, description="日期")
     price: Optional[float] = Field(default=None, description="价格")
@@ -109,6 +110,7 @@ class SosSignalModel(BaseModel):
 class SosModel(BaseModel):
     """SOS事件"""
     detected: bool = Field(description="是否检测到")
+    error: Optional[str] = Field(default=None, description="错误信息")
     signals: Optional[List[SosSignalModel]] = Field(default=None, description="信号列表")
     latest: Optional[SosSignalModel] = Field(default=None, description="最新SOS")
 
@@ -125,6 +127,7 @@ class SowSignalModel(BaseModel):
 class SowModel(BaseModel):
     """SOW事件"""
     detected: bool = Field(description="是否检测到")
+    error: Optional[str] = Field(default=None, description="错误信息")
     signals: Optional[List[SowSignalModel]] = Field(default=None, description="信号列表")
     latest: Optional[SowSignalModel] = Field(default=None, description="最新SOW")
 
@@ -365,3 +368,17 @@ class ReportModel(BaseModel):
     risk_specific_advice: RiskAdviceModel = Field(description="风险建议")
     interactive_qa: List[str] = Field(default_factory=list, description="交互问答")
     performance_tracking: Dict[str, Any] = Field(default_factory=dict, description="历史表现")
+
+
+# ============================================================
+# 错误响应模型 (Phase 2A 兼容性)
+# ============================================================
+
+class ErrorResponseModel(BaseModel):
+    """标准化错误响应 (保持向后兼容)"""
+    error_code: str = Field(description="标准化错误码")
+    error: str = Field(description="错误描述 (旧字段兼容)")
+    type: str = Field(description="错误类型 (旧字段兼容)")
+    retriable: bool = Field(default=False, description="是否可重试")
+    trace_id: Optional[str] = Field(default=None, description="追踪ID")
+    details: Optional[Dict[str, Any]] = Field(default=None, description="详细信息")

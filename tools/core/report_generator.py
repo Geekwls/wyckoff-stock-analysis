@@ -701,5 +701,18 @@ class WyckoffReportGenerator:
             performance_tracking=performance_tracking
         )
         
-        return report.model_dump_json(indent=2, exclude_none=True)
+        # 使用自定义序列化器处理numpy类型
+        def default_serializer(obj):
+            import numpy as np
+            if isinstance(obj, (np.integer, np.int64)):
+                return int(obj)
+            if isinstance(obj, (np.floating, np.float64)):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, pd.Timestamp):
+                return obj.isoformat()
+            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+        
+        return report.model_dump_json(indent=2, exclude_none=True, fallback=default_serializer)
 
