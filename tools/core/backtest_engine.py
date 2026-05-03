@@ -3,8 +3,10 @@
 从report_generator.py中提取，负责信号历史表现回测
 """
 import pandas as pd
-from typing import Dict, List, Any
+import numpy as np
+from typing import Dict, List, Any, Optional
 import logging
+from ..config.settings import WyckoffThresholds
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +33,19 @@ class BacktestEngine:
         "Upthrust (上冲回落)": {"key": "upthrust", "is_bullish": False}
     }
     
-    def __init__(self, data: pd.DataFrame, lookforward_days: int = 20, min_samples: int = 2):
+    def __init__(self, data: pd.DataFrame, thresholds: WyckoffThresholds = None, 
+                 lookforward_days: int = 20, min_samples: int = 3):
         """
         初始化回测引擎
         
         Args:
             data: 历史K线数据
+            thresholds: 包含成本参数的阈值配置
             lookforward_days: 前瞻天数（默认20天）
             min_samples: 最小样本量（低于此数量使用基准数据）
         """
         self.data = data
+        self.thresholds = thresholds or WyckoffThresholds()
         self.lookforward_days = lookforward_days
         self.min_samples = min_samples
         
@@ -84,61 +89,70 @@ class BacktestEngine:
     
     def _backtest_signal(self, signals: List[Dict[str, Any]], is_bullish: bool) -> Dict[str, Any]:
         """
-        回测单个信号
-        
-        Args:
-            signals: 信号列表
-            is_bullish: 是否为看涨信号
-            
-        Returns:
-            回测结果，如果样本不足返回None
+        回测单个信号，加入成本与滑点建模
         """
-        success_count = 0
-        total_returns = []
+        total_net_returns = []
+        max_drawdowns = []
+        winning_trades = 0
+        
+        cost = self.thresholds.COMMISSION_RATE + self.thresholds.SLIPPAGE_RATE + self.thresholds.IMPACT_COST_RATE
         
         for sig in signals:
             date_str = sig.get("date")
             entry_price = sig.get("price")
+            if not date_str or not entry_price: continue
             
-            if not date_str or not entry_price:
-                continue
-            
-            # 获取入场位置
             entry_idx = self._get_date_index(date_str)
-            if entry_idx == -1:
-                continue
+            if entry_idx == -1: continue
             
-            # 获取前瞻位置
             target_idx = min(entry_idx + self.lookforward_days, len(self.data) - 1)
-            if target_idx - entry_idx < 5:
-                continue
+            if target_idx - entry_idx < 5: continue
             
-            # 计算收益
+            # 计算区间最高/最低以估算回撤
+            window_df = self.data.iloc[entry_idx:target_idx+1]
             future_price = self.data['Close'].iloc[target_idx]
-            if is_bullish:
-                ret = (future_price - entry_price) / entry_price
-            else:
-                ret = (entry_price - future_price) / entry_price
             
-            total_returns.append(ret)
-            if ret > 0:
-                success_count += 1
+            # 基础收益
+            raw_ret = (future_price - entry_price) / entry_price if is_bullish else (entry_price - future_price) / entry_price
+            
+            # 扣除双边交易成本
+            net_ret = raw_ret - (cost * 2)
+            total_net_returns.append(net_ret)
+            
+            if net_ret > 0: winning_trades += 1
+            
+            # 简单最大回撤估算
+            if is_bullish:
+                low_price = window_df['Low'].min()
+                mdd = (low_price - entry_price) / entry_price
+            else:
+                high_price = window_df['High'].max()
+                mdd = (entry_price - high_price) / entry_price
+            max_drawdowns.append(mdd)
+            
+        valid_count = len(total_net_returns)
+        if valid_count < 1: return None
         
-        valid_count = len(total_returns)
-        if valid_count < self.min_samples:
-            return None
+        # 计算置信度等级
+        # A: >= 10个样本, B: 5-9个, C: < 5个
+        grade = "A" if valid_count >= 10 else "B" if valid_count >= 5 else "C"
         
-        # 计算统计指标
-        avg_ret = sum(total_returns) / valid_count
-        succ_rate = success_count / valid_count
-        display_avg_ret = avg_ret if is_bullish else -avg_ret
-        display_prefix = "+" if display_avg_ret > 0 else ""
+        avg_net_ret = sum(total_net_returns) / valid_count
+        win_rate = winning_trades / valid_count
+        
+        # 计算盈亏比
+        pos_rets = [r for r in total_net_returns if r > 0]
+        neg_rets = [abs(r) for r in total_net_returns if r < 0]
+        pl_ratio = (sum(pos_rets)/len(pos_rets)) / (sum(neg_rets)/len(neg_rets)) if pos_rets and neg_rets else 2.0
         
         return {
             "total_occurrences": valid_count,
-            "success_rate": f"{succ_rate*100:.1f}%",
-            "avg_return": f"{display_prefix}{display_avg_ret*100:.1f}%",
-            "note": f"本股专属动态回测 ({valid_count}次)"
+            "success_rate": f"{win_rate*100:.1f}%",
+            "avg_return": f"{'+' if avg_net_ret > 0 else ''}{avg_net_ret*100:.1f}%",
+            "pl_ratio": round(pl_ratio, 2),
+            "max_drawdown": f"{min(max_drawdowns)*100:.1f}%",
+            "confidence_grade": grade,
+            "note": f"动态回测 (级:{grade}, 样:{valid_count})"
         }
     
     def _get_date_index(self, date_str: str) -> int:

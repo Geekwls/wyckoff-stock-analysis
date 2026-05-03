@@ -113,6 +113,24 @@ class WyckoffThresholds(BaseModel):
     LIMIT_UP_THRESHOLD: float = Field(0.095, description="涨停阈值")
     LIMIT_DOWN_THRESHOLD: float = Field(-0.095, description="跌停阈值")
     
+    # ── 高级评分权重 ──────────────────────────────────────
+    QUALITY_WEIGHTS: Dict[str, float] = Field(
+        default={
+            'volume_ratio': 0.3,
+            'price_pct': 0.3,
+            'confidence': 0.2,
+            'confirmation': 0.2
+        },
+        description="信号质量分项权重"
+    )
+    TIME_DECAY_HALF_LIFE: int = Field(20, description="信号强度随时间衰减的半衰期（天）")
+    CONFLICT_PENALTY: float = Field(30.0, description="多空冲突时的扣分")
+    
+    # ── 交易成本与滑点 ──────────────────────────────────
+    COMMISSION_RATE: float = Field(0.0003, description="佣金率 (万三)")
+    SLIPPAGE_RATE: float = Field(0.001, description="双边滑点 (10 BP)")
+    IMPACT_COST_RATE: float = Field(0.0005, description="冲击成本 (5 BP)")
+    
     # ── 评分与仓位配置 ──────────────────────────────────────
     SCORING: ScoringConfig = Field(default_factory=ScoringConfig)
     POSITION_SIZING: PositionSizingConfig = Field(default_factory=PositionSizingConfig)

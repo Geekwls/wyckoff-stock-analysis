@@ -693,7 +693,7 @@ class WyckoffReportGenerator:
         )
         
         # 使用BacktestEngine获取历史表现
-        backtest_engine = BacktestEngine(self.data)
+        backtest_engine = BacktestEngine(self.data, self.pattern_detector.thresholds)
         performance_tracking = backtest_engine.calculate_signal_performance(events.model_dump())
         
         # 构建完整报告

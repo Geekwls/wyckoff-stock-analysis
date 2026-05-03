@@ -148,18 +148,15 @@ class ScreenerService:
             # 提取信号
             signals = SignalExtractor.extract_signals(phase_res)
             strength = SignalExtractor.calculate_signal_strength(signals)
+            weighted_score = SignalExtractor.calculate_weighted_score(phase_res, analyzer.thresholds)
             
             return {
                 'symbol': symbol,
                 'phase': phase_str,
                 'confidence': round((phase_res.get('confidence') or 0.0) if isinstance(phase_res, dict) else 0.0, 2),
-                'has_spring': signals['has_spring'],
-                'has_upthrust': signals['has_upthrust'],
-                'has_sos': signals['has_sos'],
-                'has_sow': signals['has_sow'],
-                'has_lps': signals['has_lps'],
-                'has_lpsy': signals['has_lpsy'],
                 'strength': strength,
+                'weighted_score': weighted_score,
+                'is_entry': SignalExtractor.is_entry_phase(phase_res.get('phase_enum'))
             }
             
         except Exception as exc:
@@ -178,63 +175,99 @@ class ScreenerService:
                 logger.warning("加载 %s 失败: %s", symbol, e)
     
     def _screen_accumulation(self) -> List[Dict]:
-        """筛选处于积累期的股票"""
+        """筛选处于积累期（特别是 C/D 阶段）的股票"""
         results = []
         
         for symbol, analyzer in self._analyzers.items():
             phase_res = analyzer.identify_phase_with_rs()
             phase_str = SignalExtractor.get_phase_string(phase_res)
+            phase_enum = phase_res.get('phase_enum')
             
             if not SignalExtractor.is_accumulation_phase(phase_str):
                 continue
             
-            signals = SignalExtractor.extract_accumulation_signals(phase_res)
-            score = SignalExtractor.calculate_signal_strength(signals)
+            # 个股加权分
+            stock_score = SignalExtractor.calculate_weighted_score(phase_res, self.config.THRESHOLDS)
             
-            if score >= 3:
-                trading_range = analyzer.pattern_detector.detect_trading_range()
-                results.append({
-                    'symbol': symbol,
-                    'phase': phase_str,
-                    'score': score,
-                    'has_spring': signals['has_spring'],
-                    'has_sos': signals['has_sos'],
-                    'has_lps': signals['has_lps'],
-                    'trading_range': trading_range,
-                    'current_price': analyzer.data['Close'].iloc[-1]
-                })
+            # 市场门控
+            market_data = analyzer.get_market_regime()
+            industry_mult = analyzer.get_industry_multiplier()
+            
+            final_score = stock_score * market_data['multiplier'] * industry_mult
+            
+            # 过滤：必须是突破/震仓阶段 (C/D) 或分数极高
+            is_entry = SignalExtractor.is_entry_phase(phase_enum)
+            if final_score < 40 and not is_entry:
+                continue
+                
+            # 计算可执行性得分
+            tr = analyzer.pattern_detector.detect_trading_range()
+            exec_score = SignalExtractor.get_execution_score(
+                analyzer.data['Close'].iloc[-1], tr['low'], tr['high'], "做多"
+            )
+            
+            results.append({
+                'symbol': symbol,
+                'phase': phase_str,
+                'phase_detail': phase_enum.name if phase_enum else 'Unknown',
+                'raw_score': stock_score,
+                'final_score': round(final_score, 2),
+                'market_regime': market_data['regime'],
+                'is_entry_stage': is_entry,
+                'execution_score': exec_score,
+                'trading_range': tr,
+                'current_price': analyzer.data['Close'].iloc[-1],
+                'confidence': phase_res.get('confidence', 0)
+            })
         
-        results.sort(key=lambda x: x['score'], reverse=True)
+        # 按最终得分 * 可执行性综合排序
+        results.sort(key=lambda x: x['final_score'] * (x['execution_score']/100 + 0.5), reverse=True)
         return results
     
     def _screen_distribution(self) -> List[Dict]:
-        """筛选处于分布期的股票"""
+        """筛选处于派发期（特别是 C/D 阶段）的股票"""
         results = []
         
         for symbol, analyzer in self._analyzers.items():
             phase_res = analyzer.identify_phase_with_rs()
             phase_str = SignalExtractor.get_phase_string(phase_res)
+            phase_enum = phase_res.get('phase_enum')
             
             if not SignalExtractor.is_distribution_phase(phase_str):
                 continue
             
-            signals = SignalExtractor.extract_distribution_signals(phase_res)
-            score = SignalExtractor.calculate_signal_strength(signals)
+            # 个股加权分
+            stock_score = SignalExtractor.calculate_weighted_score(phase_res, analyzer.thresholds)
             
-            if score >= 3:
-                trading_range = analyzer.pattern_detector.detect_trading_range()
-                results.append({
-                    'symbol': symbol,
-                    'phase': phase_str,
-                    'score': score,
-                    'has_upthrust': signals['has_upthrust'],
-                    'has_sow': signals['has_sow'],
-                    'has_lpsy': signals['has_lpsy'],
-                    'trading_range': trading_range,
-                    'current_price': analyzer.data['Close'].iloc[-1]
-                })
+            # 市场门控 (Risk-Off 时派发信号更有效)
+            market_data = analyzer.get_market_regime()
+            multiplier = 1.2 if market_data['regime'] == 'risk-off' else 0.8 if market_data['regime'] == 'risk-on' else 1.0
+            
+            final_score = stock_score * multiplier
+            
+            # 过滤
+            is_entry = SignalExtractor.is_entry_phase(phase_enum)
+            if final_score < 40 and not is_entry:
+                continue
+            
+            tr = analyzer.pattern_detector.detect_trading_range()
+            exec_score = SignalExtractor.get_execution_score(
+                analyzer.data['Close'].iloc[-1], tr['low'], tr['high'], "做空"
+            )
+            
+            results.append({
+                'symbol': symbol,
+                'phase': phase_str,
+                'phase_detail': phase_enum.name if phase_enum else 'Unknown',
+                'raw_score': stock_score,
+                'final_score': round(final_score, 2),
+                'is_entry_stage': is_entry,
+                'execution_score': exec_score,
+                'trading_range': tr,
+                'current_price': analyzer.data['Close'].iloc[-1]
+            })
         
-        results.sort(key=lambda x: x['score'], reverse=True)
+        results.sort(key=lambda x: x['final_score'], reverse=True)
         return results
     
     def _screen_lps_entries(self) -> List[Dict]:
@@ -292,7 +325,12 @@ class ScreenerService:
         if result.get('has_sow'):      icons.append('SOW')
         
         if icons:
-            print(f"  [OK] {result['symbol']}: [{result['phase']}] {' | '.join(icons)} (强度{result['strength']}/6)")
+            strength_str = f"强度{result['strength']}/6"
+            if 'weighted_score' in result:
+                strength_str = f"综合评分:{result['weighted_score']}"
+            
+            entry_tag = " [ENTRY]" if result.get('is_entry') else ""
+            print(f"  [OK] {result['symbol']}: [{result['phase']}] {' | '.join(icons)} ({strength_str}){entry_tag}")
     
     def _print_summary(self, results: List[Dict], failed_symbols: List[str], symbols: List[str]):
         """显示统计信息"""
@@ -302,11 +340,12 @@ class ScreenerService:
             print(f"  失败: {len(failed_symbols)} ({', '.join(failed_symbols[:5])}{'...' if len(failed_symbols) > 5 else ''})")
         
         # 按信号强度排序
-        top_signals = sorted(results, key=lambda x: x.get('strength', 0), reverse=True)[:5]
-        if top_signals and top_signals[0].get('strength', 0) > 0:
+        top_signals = sorted(results, key=lambda x: x.get('weighted_score', x.get('strength', 0)), reverse=True)[:5]
+        if top_signals and (top_signals[0].get('strength', 0) > 0 or top_signals[0].get('weighted_score', 0) > 0):
             print(f"\n[TOP] 信号强度 TOP 5:")
             for i, stock in enumerate(top_signals, 1):
-                print(f"  {i}. {stock['symbol']} - {stock['phase']} (强度{stock['strength']}/6)")
+                score_str = f"评分:{stock['weighted_score']}" if 'weighted_score' in stock else f"强度{stock['strength']}/6"
+                print(f"  {i}. {stock['symbol']} - {stock['phase']} ({score_str})")
 
 
 # 预定义股票池已迁移至 tools/wyckoff_utils.py

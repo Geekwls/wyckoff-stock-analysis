@@ -80,6 +80,7 @@ class WyckoffAnalyzer:
         self.symbol = symbol
         self.period = period
         self.config = config or WyckoffConfig()
+        self.thresholds = WyckoffThresholds()
         self.data_fetcher = WyckoffDataFetcher(self.config)
         self.data = None
         self.pattern_detector = None
@@ -163,6 +164,34 @@ class WyckoffAnalyzer:
             return "^HSI"  # 港股 - 恒生指数
         else:
             return "SPY"  # 美股/其他 - 标普500
+
+    def get_market_regime(self) -> Dict[str, Any]:
+        """
+        获取大盘状态门控 (Market Regime Gating)
+        识别 Risk-On / Risk-Off 状态
+        """
+        idx_analyzer = self._get_cached_index_analyzer()
+        if not idx_analyzer or idx_analyzer.data is None:
+            return {'regime': 'neutral', 'multiplier': 1.0}
+            
+        df = idx_analyzer.data
+        ma20 = df['MA20'].iloc[-1]
+        ma200 = df['MA200'].iloc[-1]
+        current = df['Close'].iloc[-1]
+        
+        # 简单逻辑：收盘在 MA200 之上且 MA20 在 MA200 之上为 Risk-On
+        if current > ma200 and ma20 > ma200:
+            return {'regime': 'risk-on', 'multiplier': 1.2, 'description': '大盘多头环境，积极筛选'}
+        elif current < ma200:
+            return {'regime': 'risk-off', 'multiplier': 0.6, 'description': '大盘空头环境，严格准入'}
+        return {'regime': 'neutral', 'multiplier': 1.0, 'description': '大盘震荡环境，标准筛选'}
+
+    def get_industry_multiplier(self) -> float:
+        """
+        获取行业相对强弱系数 (Placeholder)
+        """
+        # TODO: 接入板块/行业数据后实现
+        return 1.0
 
     # ----------------------------------------------------------
     # 形态检测（委托给 WyckoffPatternDetector，通过 pattern_detector 属性访问）
