@@ -66,8 +66,9 @@ class BacktestEngine:
             key = config["key"]
             is_bullish = config["is_bullish"]
             
-            signals = events.get(key, {}).get("signals", [])
-            if len(signals) < self.min_samples:
+            event_data = events.get(key) or {}
+            signals = event_data.get("signals") or []
+            if not isinstance(signals, list) or len(signals) < self.min_samples:
                 results[display_name] = dict(self.STATIC_BASELINE[display_name])
                 results[display_name]["note"] = f"样本不足{self.min_samples}次，采用全市场基准"
                 continue

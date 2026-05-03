@@ -328,7 +328,21 @@ class WyckoffAnalyzer:
 
         tr_info = self.pattern_detector.detect_trading_range()
         if not tr_info.get('is_consolidation'):
-            raise PatternDetectionError("交易区间", "无法识别有效的交易区间")
+            # 无法识别交易区间时返回基于ATR的默认值
+            current_price = self.data['Close'].iloc[-1]
+            atr = self.data['ATR'].iloc[-1] if 'ATR' in self.data.columns else current_price * 0.02
+            return {
+                'cause_size': round(atr * 5, 2),
+                'breakout_point': current_price,
+                'targets': {
+                    'target_1': round(current_price + atr * 3, 2),
+                    'target_2': round(current_price + atr * 5, 2),
+                    'target_3': round(current_price + atr * 8, 2)
+                },
+                'current_position': 0.5,
+                'consolidation_duration_days': 0,
+                'note': '未识别到有效交易区间，使用ATR估算'
+            }
 
         cause_size = tr_info['high'] - tr_info['low']
         current_price = tr_info['current_price']

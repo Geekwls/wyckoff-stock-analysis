@@ -31,7 +31,7 @@ class MultiTimeframeModel(BaseModel):
 class WyckoffEventModel(BaseModel):
     """威科夫事件基础模型"""
     detected: bool = Field(description="是否检测到")
-    date: Optional[str] = Field(default=None, description="事件日期")
+    date: Any = Field(default=None, description="事件日期")
     price: Optional[float] = Field(default=None, description="事件价格")
     volume: Optional[float] = Field(default=None, description="事件成交量")
 
@@ -53,7 +53,7 @@ class ClimaxModel(BaseModel):
     """高潮事件"""
     detected: bool = Field(description="是否检测到")
     type: Optional[str] = Field(default=None, description="高潮类型")
-    date: Optional[str] = Field(default=None, description="日期")
+    date: Any = Field(default=None, description="日期")
     price: Optional[float] = Field(default=None, description="价格")
     volume: Optional[float] = Field(default=None, description="成交量")
     volume_ratio: Optional[float] = Field(default=None, description="量比")
@@ -132,7 +132,7 @@ class SowModel(BaseModel):
 class LpsModel(BaseModel):
     """LPS事件"""
     detected: bool = Field(description="是否检测到")
-    date: Optional[str] = Field(default=None, description="日期")
+    date: Any = Field(default=None, description="日期")
     price: Optional[float] = Field(default=None, description="价格")
     volume: Optional[float] = Field(default=None, description="成交量")
 
@@ -140,7 +140,7 @@ class LpsModel(BaseModel):
 class LpsyModel(BaseModel):
     """LPSY事件"""
     detected: bool = Field(description="是否检测到")
-    date: Optional[str] = Field(default=None, description="日期")
+    date: Any = Field(default=None, description="日期")
     price: Optional[float] = Field(default=None, description="价格")
     volume: Optional[float] = Field(default=None, description="成交量")
 
@@ -211,7 +211,7 @@ class TradingPlanModel(BaseModel):
 
 class RiskAdviceItem(BaseModel):
     """风险建议项"""
-    action: str = Field(description="建议操作")
+    action: Optional[str] = Field(default=None, description="建议操作")
     reason: Optional[str] = Field(default=None, description="原因")
     position: Optional[str] = Field(default=None, description="仓位")
     stop_loss: Optional[str] = Field(default=None, description="止损")
@@ -251,7 +251,7 @@ class GlobalSentimentModel(BaseModel):
 
 class SupplyDemandLawModel(BaseModel):
     """供求法则"""
-    current_phase: Dict[str, Any] = Field(description="当前阶段")
+    current_phase: Any = Field(description="当前阶段")
     trading_range_status: str = Field(description="交易区间状态")
     volume_analysis: Dict[str, Any] = Field(description="成交量分析")
 
@@ -297,7 +297,8 @@ class RelativeStrengthModel(BaseModel):
 class SequenceScoreModel(BaseModel):
     """序列评分"""
     completeness: float = Field(description="完整度")
-    score: float = Field(description="得分")
+    score: Optional[float] = Field(default=None, description="得分")
+    adjustment_factor: Optional[float] = Field(default=None, description="调整因子")
     rating: str = Field(description="评级")
     missing_events: List[str] = Field(default_factory=list, description="缺失事件")
 
