@@ -153,7 +153,7 @@ class ClassicPatternDetector:
                 r_idx = later_recoveries[0]
                 days_to_recover = (df.index.get_indexer([r_idx])[0] - df.index.get_indexer([b_idx])[0])
                 
-                if days_to_recover <= self.config.spring_recovery_days:
+                if days_to_recover <= self.config.spring_max_recovery_days:
                     b_vol = df.loc[b_idx, 'Volume']
                     r_vol = df.loc[r_idx, 'Volume']
                     
@@ -363,13 +363,28 @@ class ClassicPatternDetector:
         res = {'no_supply': {'detected': False}, 'no_demand': {'detected': False}, 'stopping_vol': {'detected': False}}
         if no_supply_mask.any():
             idx = df[no_supply_mask].index[-1]
-            res['no_supply'] = {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2)}
+            res['no_supply'] = {
+                'detected': True, 
+                'date': idx, 
+                'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2),
+                'description': '无供应 - 缩量下跌，卖盘枯竭'
+            }
         if no_demand_mask.any():
             idx = df[no_demand_mask].index[-1]
-            res['no_demand'] = {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2)}
+            res['no_demand'] = {
+                'detected': True, 
+                'date': idx, 
+                'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2),
+                'description': '无需求 - 缩量上涨，买盘不足'
+            }
         if stopping_mask.any():
             idx = df[stopping_mask].index[-1]
-            res['stopping_vol'] = {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2)}
+            res['stopping_vol'] = {
+                'detected': True, 
+                'date': idx, 
+                'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2),
+                'description': '停止量 - 放量窄幅，主力吸筹'
+            }
         return res
 
     # --- Divergence & Confirmation ---

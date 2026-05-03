@@ -83,7 +83,8 @@ class PhaseIdentifier:
         count = 0
         checks = ['climax', 'automatic_reaction', 'secondary_test', 'spring_upthrust', 'sos_sow']
         for c in checks:
-            if events.get(c, {}).get('detected'): count += 1
+            event = events.get(c) or {}
+            if event.get('detected'): count += 1
         completeness = (count / len(checks)) * 100
         factor = 1.0 if completeness >= 80 else 0.8 if completeness >= 60 else 0.6
         return {'completeness': completeness, 'adjustment_factor': factor, 'rating': 'S' if completeness >= 80 else 'B'}
