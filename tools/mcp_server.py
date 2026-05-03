@@ -15,6 +15,7 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from tools.wyckoff_analyzer import WyckoffAnalyzer, batch_scan
+from tools.exceptions import WyckoffError
 
 mcp = FastMCP("Wyckoff Stock Analyzer")
 
@@ -30,11 +31,13 @@ def analyze_stock_wyckoff(symbol: str, period: str = "1y") -> str:
         period: Time period to analyze (default: '1y').
     """
     try:
-        analyzer = WyckoffAnalyzer(symbol, period=period)
-        json_result = analyzer.generate_json()
-        return json_result
+        with WyckoffAnalyzer(symbol, period=period) as analyzer:
+            json_result = analyzer.generate_json()
+            return json_result
+    except WyckoffError as e:
+        return json.dumps({"error": str(e), "type": type(e).__name__})
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": str(e), "type": "UnknownError"})
 
 @mcp.tool()
 def batch_analyze_sector(symbols: list[str], period: str = "1y") -> str:
@@ -48,8 +51,10 @@ def batch_analyze_sector(symbols: list[str], period: str = "1y") -> str:
     try:
         results = batch_scan(symbols, period=period, show_progress=False)
         return json.dumps(results, ensure_ascii=False, indent=2)
+    except WyckoffError as e:
+        return json.dumps({"error": str(e), "type": type(e).__name__})
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": str(e), "type": "UnknownError"})
 
 if __name__ == "__main__":
     mcp.run()

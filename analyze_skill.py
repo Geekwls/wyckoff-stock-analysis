@@ -22,16 +22,17 @@ class SkillAuditor:
 
     def analyze_all(self) -> Dict:
         """执行全面审核"""
-        return {
+        analysis_results = {
             "skill_structure": self.analyze_skill_structure(),
             "code_implementation": self.analyze_code_implementation(),
             "user_experience": self.analyze_user_experience(),
             "platform_compatibility": self.analyze_platform_compatibility(),
             "reliability": self.analyze_reliability(),
             "documentation": self.analyze_documentation(),
-            "integration": self.analyze_integration(),
-            "overall": self.calculate_overall_score()
+            "integration": self.analyze_integration()
         }
+        analysis_results["overall"] = self.calculate_overall_score(analysis_results)
+        return analysis_results
 
     def analyze_skill_structure(self) -> Dict:
         """分析SKILL.md结构"""
@@ -74,11 +75,24 @@ class SkillAuditor:
 
     def analyze_code_implementation(self) -> Dict:
         """分析代码实现完整性"""
-        if not os.path.exists(self.analyzer_path):
-            return {"error": "wyckoff_analyzer.py not found"}
+        # 检查整个tools目录
+        tools_path = os.path.join(self.project_path, "tools")
+        if not os.path.exists(tools_path):
+            return {"error": "tools directory not found"}
 
-        with open(self.analyzer_path, 'r', encoding='utf-8') as f:
-            code = f.read()
+        # 读取所有Python文件
+        all_code = ""
+        for root, dirs, files in os.walk(tools_path):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            all_code += f.read() + "\n"
+                    except Exception as e:
+                        print(f"Warning: Could not read {file_path}: {e}")
+
+        code = all_code
 
         implementations = {
             "json_output": "def generate_json" in code,
@@ -227,7 +241,18 @@ class SkillAuditor:
         total_words = 0
 
         for doc_name, doc_path in doc_files.items():
-            if os.path.exists(doc_path):
+            if os.path.isdir(doc_path):
+                # 目录，检查文件数量
+                try:
+                    files = [f for f in os.listdir(doc_path) if f.endswith('.md')]
+                    docs_status[doc_name] = {
+                        "exists": True,
+                        "type": "directory",
+                        "file_count": len(files)
+                    }
+                except PermissionError:
+                    docs_status[doc_name] = {"exists": False, "error": "Permission denied"}
+            elif os.path.exists(doc_path):
                 with open(doc_path, 'r', encoding='utf-8') as f:
                     content = f.read()
                 word_count = len(content.split())
@@ -235,14 +260,6 @@ class SkillAuditor:
                 docs_status[doc_name] = {
                     "exists": True,
                     "words": word_count
-                }
-            elif os.path.isdir(doc_path):
-                # 目录，检查文件数量
-                files = [f for f in os.listdir(doc_path) if f.endswith('.md')]
-                docs_status[doc_name] = {
-                    "exists": True,
-                    "type": "directory",
-                    "file_count": len(files)
                 }
             else:
                 docs_status[doc_name] = {"exists": False}
@@ -282,18 +299,27 @@ class SkillAuditor:
             "integration_checks": integration_checks
         }
 
-    def calculate_overall_score(self) -> Dict:
+    def calculate_overall_score(self, analysis_results: Dict = None) -> Dict:
         """计算总体评分"""
-        analysis = self.analyze_all()
+        if analysis_results is None:
+            analysis_results = {
+                "skill_structure": self.analyze_skill_structure(),
+                "code_implementation": self.analyze_code_implementation(),
+                "user_experience": self.analyze_user_experience(),
+                "platform_compatibility": self.analyze_platform_compatibility(),
+                "reliability": self.analyze_reliability(),
+                "documentation": self.analyze_documentation(),
+                "integration": self.analyze_integration()
+            }
 
         scores = {
-            "skill_structure": analysis["skill_structure"].get("score", 0),
-            "code_implementation": analysis["code_implementation"].get("score", 0),
-            "user_experience": analysis["user_experience"].get("score", 0),
-            "platform_compatibility": analysis["platform_compatibility"].get("score", 0),
-            "reliability": analysis["reliability"].get("score", 0),
-            "documentation": analysis["documentation"].get("documentation_coverage", 0),
-            "integration": analysis["integration"].get("score", 0)
+            "skill_structure": analysis_results["skill_structure"].get("score", 0),
+            "code_implementation": analysis_results["code_implementation"].get("score", 0),
+            "user_experience": analysis_results["user_experience"].get("score", 0),
+            "platform_compatibility": analysis_results["platform_compatibility"].get("score", 0),
+            "reliability": analysis_results["reliability"].get("score", 0),
+            "documentation": analysis_results["documentation"].get("documentation_coverage", 0),
+            "integration": analysis_results["integration"].get("score", 0)
         }
 
         total_score = sum(scores.values()) / len(scores)

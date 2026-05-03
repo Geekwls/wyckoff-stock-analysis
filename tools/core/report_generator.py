@@ -4,6 +4,21 @@ import json
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from ..config.settings import WyckoffConfig
+from ..exceptions import DataFetchError
+from ..schemas import (
+    ReportModel, BasicDataModel, MultiTimeframeModel, EventsModel,
+    TradingRangeModel, ClimaxModel, SpringModel, UpthrustModel,
+    SosModel, SowModel, LpsModel, LpsyModel, WyckoffEventModel,
+    SignalQualityModel, TradingPlanModel, StopLossModel, TargetsModel,
+    PositionSizingModel, RiskAdviceModel, RiskAdviceItem,
+    MarketContextModel, GlobalSentimentModel, WyckoffLawsModel,
+    SupplyDemandLawModel, EffortVsResultModel, CauseEffectModel,
+    RelativeStrengthModel, SequenceScoreModel, DivergenceModel,
+    CauseEffectAnalysisModel
+)
+from .backtest_engine import BacktestEngine
+from .sentiment_analyzer import SentimentAnalyzer
+from .trading_plan_generator import TradingPlanGenerator
 import logging
 logger = logging.getLogger(__name__)
 
@@ -26,6 +41,23 @@ class WyckoffReportGenerator:
             self.pattern_detector = self.analyzer.pattern_detector
             self.law_analyzer = self.analyzer.law_analyzer
 
+        # ── 提前计算阶段信息，供报告头部和交易建议共用 ──────────
+        phase_result = self.pattern_detector.identify_phase()
+        phase_str    = phase_result.get('phase', 'Unknown')
+        phase_conf   = phase_result.get('confidence', 0.0)
+        seq_score    = phase_result.get('sequence_score', {})
+        seq_rating   = seq_score.get('rating', '')
+        ma_conf      = phase_result.get('ma_confidence', 0)
+        vol_conf     = phase_result.get('vol_confidence', 0)
+
+        # 阶段置信度颜色标记
+        if phase_conf >= 0.75:
+            conf_icon = '🟢'
+        elif phase_conf >= 0.50:
+            conf_icon = '🟡'
+        else:
+            conf_icon = '🔴'
+
         report = f"""
 {'='*60}
 威科夫形态分析报告
@@ -37,7 +69,9 @@ class WyckoffReportGenerator:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【当前阶段】
-{self.pattern_detector.identify_phase()}
+{conf_icon} {phase_str}
+   置信度: {phase_conf*100:.0f}%  (均线确认: {ma_conf*100:.0f}% | 量能确认: {vol_conf*100:.0f}%)
+   信号评级: {seq_rating}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -46,7 +80,7 @@ class WyckoffReportGenerator:
 52周最高: {self.data['High'].tail(252).max():.2f}
 52周最低: {self.data['Low'].tail(252).min():.2f}
 成交量: {self.data['Volume'].iloc[-1]:,.0f}
-量比: {self.data['Volume'].iloc[-1] / self.data['Volume_MA20'].iloc[-1]:.2f}
+量比: {self.data['Volume'].iloc[-1] / max(self.data['Volume_MA20'].iloc[-1], 1):.2f}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -79,7 +113,7 @@ class WyckoffReportGenerator:
    跌破价: {latest['breakdown_price']:.2f}
    支撑位: {latest['support_level']:.2f}
    收回价: {latest['recovery_price']:.2f}
-   收回天数: {latest['recovery_days']}天
+   收回天数: {latest['recovery_day']}天
    ✓ 真Spring（3天内收回且放量）
 """
 
@@ -140,7 +174,74 @@ class WyckoffReportGenerator:
    ⭐ 建议做空入场点
 """
 
+        # ── 新威科夫操盘法信号 (孟洪涛) ──────────────────────────
+        joc = self.pattern_detector.detect_joc()
+        fti = self.pattern_detector.detect_fti()
+        vsa = self.pattern_detector.detect_vsa_signals()
+
+        if joc.get('detected') or fti.get('detected') or any(
+            vsa.get(k, {}).get('detected') for k in ('no_supply', 'no_demand', 'stopping_vol')
+        ):
+            report += """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【新威科夫信号（孟洪涛）】
+"""
+        if joc.get('detected'):
+            joc_date = joc['date'].strftime('%Y-%m-%d') if hasattr(joc['date'], 'strftime') else str(joc['date'])
+            test_info = ""
+            if joc.get('test_detected') and joc.get('test_date') is not None:
+                td = joc['test_date'].strftime('%Y-%m-%d') if hasattr(joc['test_date'], 'strftime') else str(joc['test_date'])
+                test_info = f"\n   回测确认: {td}（缩量{joc.get('test_vol_ratio', 0):.2f}x） ✓"
+            else:
+                test_info = "\n   回测确认: 等待回测（Test of JOC）中"
+            report += f"""
+🚀 检测到JOC（跃过小溪 / Jump Across the Creek）:
+   日期: {joc_date}
+   小溪阻力位: {joc['creek_level']:.2f}
+   突破收盘: {joc['close_price']:.2f} (+{joc['breakout_pct']:.1f}%)
+   成交量: {joc['volume_ratio']:.1f}x 均量{test_info}
+   置信度: {joc['confidence']*100:.0f}%
+   ⭐ 趋势跟踪买入信号（等待缩量回测 JOC 位入场）
+"""
+
+        if fti.get('detected'):
+            fti_date = fti['date'].strftime('%Y-%m-%d') if hasattr(fti['date'], 'strftime') else str(fti['date'])
+            test_info = ""
+            if fti.get('test_detected') and fti.get('test_date') is not None:
+                td = fti['test_date'].strftime('%Y-%m-%d') if hasattr(fti['test_date'], 'strftime') else str(fti['test_date'])
+                test_info = f"\n   回测确认: {td}（无需求反弹 {fti.get('test_vol_ratio', 0):.2f}x） ✓ 最佳做空点"
+            else:
+                test_info = "\n   回测确认: 等待无需求反弹（Test of Ice）中"
+            report += f"""
+🔻 检测到FTI（跌破冰层 / Fall Through the Ice）:
+   日期: {fti_date}
+   冰层支撑位: {fti['ice_level']:.2f}
+   跌破收盘: {fti['close_price']:.2f} ({fti['breakdown_pct']:.1f}%)
+   成交量: {fti['volume_ratio']:.1f}x 均量{test_info}
+   置信度: {fti['confidence']*100:.0f}%
+   ⚠️  做空警示信号（等待缩量回测冰层位入场）
+"""
+
+        # VSA 辅助信号
+        vsa_lines = []
+        ns = vsa.get('no_supply', {})
+        nd = vsa.get('no_demand', {})
+        sv = vsa.get('stopping_vol', {})
+        if ns.get('detected'):
+            ns_date = ns['date'].strftime('%Y-%m-%d') if hasattr(ns.get('date'), 'strftime') else str(ns.get('date', ''))
+            vsa_lines.append(f"   🟢 No Supply（无供应）: {ns_date} 缩量{ns.get('vol_ratio', 0):.2f}x 回调 → 买入辅助确认")
+        if nd.get('detected'):
+            nd_date = nd['date'].strftime('%Y-%m-%d') if hasattr(nd.get('date'), 'strftime') else str(nd.get('date', ''))
+            vsa_lines.append(f"   🔴 No Demand（无需求）: {nd_date} 缩量{nd.get('vol_ratio', 0):.2f}x 反弹 → 做空辅助确认")
+        if sv.get('detected'):
+            sv_date = sv['date'].strftime('%Y-%m-%d') if hasattr(sv.get('date'), 'strftime') else str(sv.get('date', ''))
+            vsa_lines.append(f"   🟡 Stopping Volume（停止行为）: {sv_date} 放量{sv.get('vol_ratio', 0):.2f}x 窄幅 → 主力吸收供应")
+        if vsa_lines:
+            report += "\n📊 VSA辅助信号（量价微观分析）:\n" + "\n".join(vsa_lines) + "\n"
+
         # 因果测算
+
         cause_effect = self.analyzer.calculate_cause_effect()
         if cause_effect and 'targets' in cause_effect:
             report += f"""
@@ -155,35 +256,73 @@ class WyckoffReportGenerator:
 目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
 """
 
-        # 交易建议
-        report += f"""
+        # ── 交易建议决策树（优先级：JOC > LPS > FTI > LPSY > 区间/观望）──
+        current_price = self.data['Close'].iloc[-1]
+        targets_ok = cause_effect and 'targets' in cause_effect
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-【交易建议】
-"""
-
-        if lps.get('detected') and not lpsy.get('detected'):
+        # 最高优先级：JOC + 回测确认 → 趋势跟踪买入
+        if joc.get('detected') and joc.get('test_detected'):
+            joc_entry = joc.get('creek_level', current_price)
+            stop_price = round(joc_entry * 0.96, 2)
+            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
             report += f"""
-✅ 做多机会:
+🚀 趋势跟踪买入（JOC 突破确认）:
+   信号: JOC（跃过小溪）+ 缩量回测确认
+   参考入场区间: {joc_entry:.2f} ~ {round(joc_entry * 1.02, 2):.2f}（回测阻力位附近）
+   止损: {stop_price:.2f}（阻力位下方 4%）
+   目标1: {(cause_effect['targets']['target_1'] if targets_ok else round(current_price*1.08, 2)):.2f}
+   目标2: {target2:.2f}
+   策略: 等待回调至 JOC 突破位（{joc_entry:.2f}）附近缩量后分批买入
+"""
+        # 次优先级：LPS 确认（传统威科夫）
+        elif lps.get('detected') and not lpsy.get('detected') and not fti.get('detected'):
+            stop_price = round(lps['price'] * 0.95, 2)
+            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
+            report += f"""
+✅ 做多机会（LPS 最后支撑）:
    入场价格: {lps['price']:.2f} (LPS)
-   止损价格: {lps['price']*0.95:.2f} (保守)
-   目标价格: {cause_effect['targets']['target_2']:.2f} (因果测算)
+   止损价格: {stop_price:.2f}（支撑位下方 5%）
+   目标价格: {target2:.2f} (因果测算)
    风险提示: 请设置好止损，严格执行
 """
-        elif lpsy.get('detected') and not lps.get('detected'):
+        # 做空：FTI + 回测确认 → 趋势跟踪做空
+        elif fti.get('detected') and fti.get('test_detected'):
+            fti_entry = fti.get('ice_level', current_price)
+            stop_price = round(fti_entry * 1.04, 2)
+            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
             report += f"""
-✅ 做空机会:
+🔻 做空警示（FTI 跌破冰层确认）:
+   信号: FTI（跌破冰层）+ 无需求回弹确认
+   参考入场区间: {fti_entry:.2f} ~ {round(fti_entry * 0.98, 2):.2f}（回测冰层附近）
+   止损: {stop_price:.2f}（冰层上方 4%）
+   目标: {target2:.2f}
+   风险提示: A股做空困难，建议观望或减仓/止损已有多仓
+"""
+        # LPSY（传统派发尾声）
+        elif lpsy.get('detected') and not lps.get('detected'):
+            stop_price = round(lpsy['price'] * 1.05, 2)
+            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
+            report += f"""
+✅ 做空机会（LPSY 最后供应）:
    入场价格: {lpsy['price']:.2f} (LPSY)
-   止损价格: {lpsy['price']*1.05:.2f} (保守)
-   目标价格: {cause_effect['targets']['target_2']:.2f} (因果测算)
+   止损价格: {stop_price:.2f}（阻力位上方 5%）
+   目标价格: {target2:.2f} (因果测算)
    风险提示: A股做空困难，建议观望或减仓
+"""
+        # JOC 检测到但回测尚未确认 → 候场等待
+        elif joc.get('detected') and not joc.get('test_detected'):
+            joc_entry = joc.get('creek_level', current_price)
+            report += f"""
+⏳ 候场等待（JOC 已突破，等待回测确认）:
+   JOC 突破位: {joc_entry:.2f}
+   操作: 等待价格回调至 {joc_entry:.2f} 附近且出现缩量（No Supply）后买入
+   切忌追高，突破后的第一次缩量回踩才是最佳入场点
 """
         elif trading_range.get('is_consolidation'):
             report += """
 ⏳ 观望等待:
    当前处于横盘整理阶段
-   等待明确的SOS或SOW信号
+   等待明确的 JOC 突破或 Spring 震仓信号
    不要过早入场
 """
         else:
@@ -222,9 +361,10 @@ class WyckoffReportGenerator:
         """计算信号质量评分"""
         score = 0
         reasons = []
+        phase_str = 'Unknown'  # 初始化，防止data为None时NameError
 
         if self.data is not None:
-            vol_ratio = self.data['Volume'].iloc[-1] / self.data['Volume_MA20'].iloc[-1]
+            vol_ratio = self.data['Volume'].iloc[-1] / max(self.data['Volume_MA20'].iloc[-1], 1)
             phase_res = self.pattern_detector.identify_phase()
             phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
             
@@ -284,142 +424,6 @@ class WyckoffReportGenerator:
             "max_score": 10,
             "confidence": "高" if score >= 7 else "中" if score >= 4 else "低",
             "reasons": reasons
-        }
-
-    def generate_trading_plan(self, sentiment_data: dict = None, phase_str: str = "") -> dict:
-        """生成实战交易计算器数据（带情绪风控）"""
-        if self.data is None:
-            return {}
-            
-        current_price = self.data['Close'].iloc[-1]
-        atr = self.data['ATR'].iloc[-1]
-        
-        tr = self.pattern_detector.detect_trading_range()
-        high = tr.get("high", current_price * 1.1)
-        low = tr.get("low", current_price * 0.9)
-        
-        if not phase_str:
-            phase_res = self.pattern_detector.identify_phase()
-            phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
-            
-        is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
-        
-        if is_bullish:
-            entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
-            stop_conservative = round(low, 2)
-            stop_aggressive = round(low - atr, 2)
-            target_1 = round(high, 2) if current_price < high else round(current_price + atr * 2, 2)
-            target_2 = round(high + atr * 3, 2)
-        else:
-            entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
-            stop_conservative = round(high, 2)
-            stop_aggressive = round(high + atr, 2)
-            target_1 = round(low, 2) if current_price > low else round(current_price - atr * 2, 2)
-            target_2 = round(low - atr * 3, 2)
-
-        # 情绪仓位管理
-        pos_conservative = 2.5
-        pos_moderate = 5.0
-        pos_aggressive = 10.0
-        
-        dynamic_warning = None
-        if sentiment_data:
-            sentiment = sentiment_data.get("market_sentiment", "neutral")
-            
-            if sentiment == "extreme_fear":
-                pos_conservative *= 0.5
-                pos_moderate *= 0.5
-                pos_aggressive *= 0.5
-            elif sentiment == "greed":
-                pos_conservative *= 1.2
-                pos_moderate *= 1.2
-                pos_aggressive *= 1.2
-                
-            # 情绪背离预警
-            if sentiment == "greed" and ("Distribution" in phase_str or "Markdown" in phase_str):
-                dynamic_warning = "⚠️ 极度危险：大盘贪婪 + 个股派发 = 暴跌前兆，禁止盲目接刀！"
-            elif sentiment == "extreme_fear" and ("Accumulation" in phase_str or "Markup" in phase_str):
-                dynamic_warning = "💡 黄金坑预警：大盘极度恐慌 + 个股筑底 = 绝佳击球区，请重点关注抗跌表现！"
-
-        # ATR 动态止损
-        atr_stop_loss = round(current_price - 1.5 * atr if is_bullish else current_price + 1.5 * atr, 2)
-        
-        # 分批建仓触发条件
-        if is_bullish:
-            scale_in_triggers = {
-                "entry_1_30pct": {
-                    "condition": "当前信号出现 (如 Spring/SOS)",
-                    "price": round(current_price, 2)
-                },
-                "entry_2_50pct": {
-                    "condition": "价格突破关键阻力位或回踩支撑不破",
-                    "price": round(high, 2)
-                },
-                "entry_3_20pct": {
-                    "condition": "创出新高或确认进入强势上涨阶段 (Phase E)",
-                    "price": round(high + atr, 2)
-                }
-            }
-        else:
-            scale_in_triggers = {
-                "entry_1_30pct": {
-                    "condition": "当前做空信号出现",
-                    "price": round(current_price, 2)
-                },
-                "entry_2_50pct": {
-                    "condition": "跌破关键支撑位或反抽阻力不破",
-                    "price": round(low, 2)
-                },
-                "entry_3_20pct": {
-                    "condition": "创出新低或确认进入强势下跌阶段 (Phase E)",
-                    "price": round(low - atr, 2)
-                }
-            }
-            
-        # 退出规则 (移动止损与时间止损)
-        exit_rules = [
-            {
-                "type": "trailing_stop",
-                "trigger": "1ATR_profit",
-                "description": f"浮盈达到1个ATR ({round(atr, 2)}元)",
-                "action": "move_to_cost"
-            },
-            {
-                "type": "trailing_stop",
-                "trigger": "2ATR_profit",
-                "description": f"浮盈达到2个ATR ({round(atr * 2, 2)}元)",
-                "action": "move_to_1ATR_profit"
-            },
-            {
-                "type": "time_stop",
-                "trigger": "5-8_days_no_profit",
-                "description": "建仓后 5-8 个交易日未脱离成本区",
-                "action": "exit_position"
-            }
-        ]
-
-        return {
-            "direction": "做多" if is_bullish else "做空",
-            "entry_zone": entry_zone,
-            "stop_loss": {
-                "conservative": stop_conservative,
-                "aggressive": stop_aggressive,
-                "atr_dynamic_stop": atr_stop_loss
-            },
-            "targets": {
-                "target_1": target_1,
-                "target_2": target_2
-            },
-            "position_sizing": {
-                "conservative": f"{round(pos_conservative, 1)}%总仓",
-                "moderate": f"{round(pos_moderate, 1)}%总仓",
-                "aggressive": f"{round(pos_aggressive, 1)}%总仓"
-            },
-            "scale_in_triggers": scale_in_triggers,
-            "exit_rules": exit_rules,
-            "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周）",
-            "atr_value": round(atr, 2),
-            "dynamic_warning": dynamic_warning
         }
 
     def get_relevant_terms(self, phase: str, events: dict) -> dict:
@@ -563,167 +567,10 @@ class WyckoffReportGenerator:
             f"这笔交易预期需要持有多长时间？(系统预估 {period})"
         ]
 
-    def get_signal_performance(self, events: dict) -> dict:
-        """基于该股票历史K线动态回测信号表现 (20个交易日窗口)"""
-        # 预设全市场通用基准（Fallback）
-        static_baseline = {
-            "SOS (强势信号)": {"total_occurrences": 128, "success_rate": "75.4%", "avg_return": "+12.4%"},
-            "Spring (震仓洗盘)": {"total_occurrences": 45, "success_rate": "82.1%", "avg_return": "+18.8%"},
-            "SOW (弱势信号)": {"total_occurrences": 92, "success_rate": "68.3%", "avg_return": "-9.2%"},
-            "Upthrust (上冲回落)": {"total_occurrences": 56, "success_rate": "71.5%", "avg_return": "-14.5%"}
-        }
-
-        signal_mapping = {
-            "SOS (强势信号)": {"key": "sos", "is_bullish": True},
-            "Spring (震仓洗盘)": {"key": "spring", "is_bullish": True},
-            "SOW (弱势信号)": {"key": "sow", "is_bullish": False},
-            "Upthrust (上冲回落)": {"key": "upthrust", "is_bullish": False}
-        }
-
-        results = {}
-        # 预先建立日期字符串 -> 整数位置的映射，将 O(n) 逐行扫描改为 O(1) 查找
-        date_to_pos = {
-            dt.strftime('%Y-%m-%d'): i
-            for i, dt in enumerate(self.data.index)
-        }
-
-        for display_name, config in signal_mapping.items():
-            key = config["key"]
-            is_bullish = config["is_bullish"]
-
-            signals = events.get(key, {}).get("signals", [])
-            if len(signals) < 2:
-                results[display_name] = dict(static_baseline[display_name])
-                results[display_name]["note"] = "样本不足2次，采用全市场基准"
-                continue
-
-            success_count = 0
-            total_returns = []
-
-            for sig in signals:
-                date_str = sig.get("date")
-                entry_price = sig.get("price")
-                if not date_str or not entry_price:
-                    continue
-
-                try:
-                    target_date = pd.to_datetime(date_str).strftime('%Y-%m-%d')
-                    idx = date_to_pos.get(target_date, -1)  # O(1) 查找
-                    if idx == -1:
-                        continue
-                except Exception:
-                    continue
-
-                target_idx = min(idx + 20, len(self.data) - 1)
-                if target_idx - idx < 5:
-                    continue
-
-                future_price = self.data['Close'].iloc[target_idx]
-
-                ret = (future_price - entry_price) / entry_price if is_bullish else (entry_price - future_price) / entry_price
-                total_returns.append(ret)
-                if ret > 0:
-                    success_count += 1
-
-            valid_count = len(total_returns)
-            if valid_count < 2:
-                results[display_name] = dict(static_baseline[display_name])
-                results[display_name]["note"] = "样本不足2次，采用全市场基准"
-            else:
-                avg_ret = sum(total_returns) / valid_count
-                succ_rate = success_count / valid_count
-                display_avg_ret = -avg_ret if not is_bullish else avg_ret
-                display_prefix = "+" if display_avg_ret > 0 else ""
-                results[display_name] = {
-                    "total_occurrences": valid_count,
-                    "success_rate": f"{succ_rate*100:.1f}%",
-                    "avg_return": f"{display_prefix}{display_avg_ret*100:.1f}%",
-                    "note": f"本股专属动态回测 ({valid_count}次)"
-                }
-
-        return results
-
-    def add_market_sentiment(self) -> dict:
-        """整合市场情绪指标（区分 A股、港股和美股）"""
-        try:
-            import numpy as np
-            import yfinance as yf
-            import pandas as pd
-            
-            is_us_market = not (self.symbol.startswith('sh.') or self.symbol.startswith('sz.') or self.symbol.endswith('.HK'))
-            is_hk_market = self.symbol.endswith('.HK')
-            
-            current_vix = None
-            benchmark_used = ""
-            
-            # 1. 尝试直接获取期权隐含波动率指数 (VIX / VHSI)
-            if is_us_market:
-                vix = yf.download('^VIX', period='5d', progress=False)
-                if not vix.empty:
-                    last_close = vix['Close'].iloc[-1]
-                    if isinstance(last_close, pd.Series):
-                        last_close = last_close.iloc[0] if len(last_close) > 0 else None
-                    if last_close is not None and not pd.isna(last_close):
-                        current_vix = float(last_close)
-                        benchmark_used = '^VIX (CBOE Implied Volatility)'
-            elif is_hk_market:
-                vhsi = yf.download('^VHSI', period='5d', progress=False)
-                if not vhsi.empty:
-                    last_close = vhsi['Close'].iloc[-1]
-                    if isinstance(last_close, pd.Series):
-                        last_close = last_close.iloc[0] if len(last_close) > 0 else None
-                    if last_close is not None and not pd.isna(last_close):
-                        current_vix = float(last_close)
-                        benchmark_used = '^VHSI (HSI Implied Volatility)'
-                    
-            # 2. 如果是 A股，或者外盘获取不到 VIX，回退到计算大盘的 20日历史实现波动率 (Realized Volatility)
-            if current_vix is None:
-                idx_analyzer = self.analyzer._get_cached_index_analyzer()
-                index_symbol = self.analyzer._get_baseline_index_symbol()
-
-                if idx_analyzer is None or idx_analyzer.data is None or len(idx_analyzer.data) < 20:
-                    return {"market_sentiment": "unknown", "vix_level": None, "implication": "无法获取大盘数据计算情绪"}
-
-                df = idx_analyzer.data.copy()
-                returns = df['Close'].pct_change().dropna()
-                if len(returns) < 20:
-                    return {"market_sentiment": "unknown", "vix_level": None, "implication": "大盘数据不足"}
-                    
-                current_vix = returns.rolling(20).std().iloc[-1] * np.sqrt(252) * 100
-                if pd.isna(current_vix):
-                    return {"market_sentiment": "unknown", "vix_level": None, "implication": "波动率计算失败"}
-                    
-                current_vix = float(current_vix)
-                benchmark_used = f'{index_symbol} (20-day Realized Volatility)'
-            
-            # 3. 统一的情绪评级标准
-            if current_vix >= 30:
-                sentiment = "extreme_fear"
-                implication = "大盘处于极度恐慌或剧烈波动环境，技术信号极易失效（暴涨暴跌），建议严控仓位"
-            elif current_vix >= 22:
-                sentiment = "fear"
-                implication = "大盘恐慌情绪上升，警惕向下突破或大幅震荡"
-            elif current_vix <= 15:
-                sentiment = "greed"
-                implication = "大盘波动极低，多头环境良好或处于温水煮青蛙的赶顶期，需防范高位诱多"
-            else:
-                sentiment = "neutral"
-                implication = "大盘情绪平稳，个股的技术信号和形态的有效性较高"
-                
-            return {
-                "market_sentiment": sentiment,
-                "vix_level": round(current_vix, 2),
-                "implication": implication,
-                "benchmark_used": benchmark_used
-            }
-        except Exception as e:
-            return {"market_sentiment": "unknown", "vix_level": None, "implication": f"获取情绪数据失败: {str(e)}"}
-
     def generate_json(self) -> str:
         """生成JSON格式的分析报告（供AI Agent读取）"""
-        data = self.analyzer.fetch_data()
-        if data is None or (isinstance(data, pd.DataFrame) and data.empty):
-            return json.dumps({"error": f"无法获取数据: {self.symbol}"}, ensure_ascii=False)
+        if self.data is None or (isinstance(self.data, pd.DataFrame) and self.data.empty):
+            raise DataFetchError(self.symbol, "无法获取数据")
             
         self.data = self.analyzer.data
         self.pattern_detector = self.analyzer.pattern_detector
@@ -734,124 +581,125 @@ class WyckoffReportGenerator:
         ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
         st_res = self.pattern_detector.detect_secondary_test(climax_res, ar_res)
         
-        events = {
-            "trading_range": self.pattern_detector.detect_trading_range(),
-            "climax": climax_res,
-            "automatic_reaction": ar_res,
-            "secondary_test": st_res,
-            "spring": self.pattern_detector.detect_spring(),
-            "upthrust": self.pattern_detector.detect_upthrust(),
-            "sos": self.pattern_detector.detect_sos(),
-            "sow": self.pattern_detector.detect_sow(),
-            "lps": self.pattern_detector.detect_lps(),
-            "lpsy": self.pattern_detector.detect_lpsy()
-        }
+        # 构建事件模型
+        events = EventsModel(
+            trading_range=TradingRangeModel(**self.pattern_detector.detect_trading_range()),
+            climax=ClimaxModel(**climax_res),
+            automatic_reaction=WyckoffEventModel(**ar_res) if ar_res.get('detected') else WyckoffEventModel(detected=False),
+            secondary_test=WyckoffEventModel(**st_res) if st_res.get('detected') else WyckoffEventModel(detected=False),
+            spring=SpringModel(**self.pattern_detector.detect_spring()),
+            upthrust=UpthrustModel(**self.pattern_detector.detect_upthrust()),
+            sos=SosModel(**self.pattern_detector.detect_sos()),
+            sow=SowModel(**self.pattern_detector.detect_sow()),
+            lps=LpsModel(**self.pattern_detector.detect_lps()),
+            lpsy=LpsyModel(**self.pattern_detector.detect_lpsy())
+        )
         
         # 获取完整带多时间框架和RS的阶段
         phase_dict = self.analyzer.identify_phase_with_rs()
         phase_str = phase_dict.get('phase', 'Unknown')
         
-        daily_phase_dict = phase_dict.get('daily_phase', {})
-        seq_score = daily_phase_dict.get('sequence_score', {})
-        div_res = daily_phase_dict.get('divergence', {})
+        daily_phase_dict = phase_dict.get('daily_analysis', {})
+        seq_score = SequenceScoreModel(**daily_phase_dict.get('sequence_score', {'completeness': 0, 'score': 0, 'rating': 'N/A'}))
+        div_res = DivergenceModel(**daily_phase_dict.get('divergence', {'detected': False}))
 
-        result = {
-            "symbol": self.symbol,
-            "date": datetime.now().strftime('%Y-%m-%d'),
-            "phase": phase_str,
-            "phase_confidence": phase_dict.get('confidence', 0.0),
-            "sequence_score": seq_score,
-            "divergence": div_res,
-            "multi_timeframe": {
-                "weekly_trend": phase_dict.get('weekly_trend', 'unknown'),
-                "monthly_trend": phase_dict.get('monthly_trend', 'unknown'),
-                "agreement": phase_dict.get('multi_timeframe_agreement', 'unknown')
-            },
-            "relative_strength": phase_dict.get('relative_strength', {}),
-            "basic_data": {
-                "current_price": round(self.data['Close'].iloc[-1], 2),
-                "volume": int(self.data['Volume'].iloc[-1]),
-                "volume_ratio": round(self.data['Volume'].iloc[-1] / self.data['Volume_MA20'].iloc[-1], 2)
-            },
-            "events": events,
-            "cause_effect": self.analyzer.calculate_cause_effect()
-        }
+        # 构建基础数据
+        basic_data = BasicDataModel(
+            current_price=round(self.data['Close'].iloc[-1], 2),
+            volume=int(self.data['Volume'].iloc[-1]),
+            volume_ratio=round(self.data['Volume'].iloc[-1] / max(self.data['Volume_MA20'].iloc[-1], 1), 2)
+        )
         
-        # 获取大盘基准 (使用缓存，避免重复 IO)
+        # 构建多时间框架
+        multi_timeframe = MultiTimeframeModel(
+            weekly_trend=phase_dict.get('weekly_trend', 'unknown'),
+            monthly_trend=phase_dict.get('monthly_trend', 'unknown'),
+            agreement=phase_dict.get('agreement', 'unknown')
+        )
+        
+        # 构建相对强度
+        rs_data = phase_dict.get('relative_strength', {})
+        relative_strength = RelativeStrengthModel(**rs_data) if rs_data else RelativeStrengthModel()
+        
+        # 构建因果分析
+        cause_effect_data = self.analyzer.calculate_cause_effect()
+        cause_effect = CauseEffectAnalysisModel(**cause_effect_data)
+        
+        # 获取大盘基准
         index_symbol = self.analyzer._get_baseline_index_symbol()
         idx_analyzer = self.analyzer._get_cached_index_analyzer()
 
-        market_context_dict = {}
+        market_context = MarketContextModel(index_symbol=index_symbol)
         if idx_analyzer is not None:
-            market_phase_dict = idx_analyzer.identify_phase()
+            market_phase_dict = idx_analyzer.identify_phase_with_rs()
             market_phase_str = market_phase_dict.get('phase', 'Unknown')
             env_dict = self.analyzer._analyze_market_environment()
-
-            market_context_dict = {
-                "index_symbol": index_symbol,
-                "phase": market_phase_str,
-                "environment": env_dict.get("environment", "Unknown"),
-                "ma_spread_pct": env_dict.get("ma_spread_pct", 0)
-            }
-            result["market_context"] = market_context_dict
-        else:
-            result["market_context"] = {
-                "index_symbol": index_symbol,
-                "error": "无法获取大盘数据"
-            }
-            
-        # 增加市场情绪整合
-        global_sentiment = self.add_market_sentiment()
-        result["global_sentiment"] = global_sentiment
+            market_context = MarketContextModel(
+                index_symbol=index_symbol,
+                phase=market_phase_str,
+                environment=env_dict.get("environment", "Unknown"),
+                ma_spread_pct=env_dict.get("ma_spread_pct", 0)
+            )
         
-        # 增加信号质量评分和交易计划 (传入 market_context_dict 以便使用 environment)
-        signal_quality = self.calculate_signal_quality(market_context_dict)
-        trading_plan = self.generate_trading_plan(global_sentiment, phase_str)
+        # 使用SentimentAnalyzer获取市场情绪
+        sentiment_analyzer = SentimentAnalyzer(self.symbol)
+        global_sentiment_data = sentiment_analyzer.analyze(
+            index_data=idx_analyzer.data if idx_analyzer else None,
+            index_symbol=index_symbol
+        )
+        global_sentiment = GlobalSentimentModel(**global_sentiment_data)
         
-        result["signal_quality"] = signal_quality
-        result["trading_plan"] = trading_plan
+        # 增加信号质量评分和交易计划
+        signal_quality_data = self.calculate_signal_quality(market_context.model_dump())
+        signal_quality = SignalQualityModel(**signal_quality_data)
+        
+        # 使用TradingPlanGenerator生成交易计划
+        trading_plan_generator = TradingPlanGenerator(self.data, self.pattern_detector)
+        trading_plan_data = trading_plan_generator.generate(global_sentiment_data, phase_str)
+        trading_plan = TradingPlanModel(**trading_plan_data)
         
         # 增加Wyckoff三大定律完整分析
-        wyckoff_laws = {
-            "supply_demand_law": self.law_analyzer.analyze_supply_demand_law(),
-            "effort_vs_result_law": self.law_analyzer.analyze_effort_vs_result_law(),
-            "cause_effect_law": self.law_analyzer.analyze_cause_effect_law_enhanced()
-        }
-        result["wyckoff_laws"] = wyckoff_laws
+        wyckoff_laws = WyckoffLawsModel(
+            supply_demand_law=SupplyDemandLawModel(**self.law_analyzer.analyze_supply_demand_law()),
+            effort_vs_result_law=EffortVsResultModel(**self.law_analyzer.analyze_effort_vs_result_law()),
+            cause_effect_law=CauseEffectModel(**self.law_analyzer.analyze_cause_effect_law_enhanced())
+        )
 
-        # 增加智能内容生成 (大模型剥离)
-        result["terminology_guide"] = self.get_relevant_terms(phase_str, events)
-        result["risk_specific_advice"] = self.generate_risk_advice(signal_quality, trading_plan)
-        result["interactive_qa"] = self.generate_interactive_qa(signal_quality, trading_plan)
-        result["performance_tracking"] = self.get_signal_performance(events)
+        # 增加风险建议
+        risk_advice_data = self.generate_risk_advice(signal_quality_data, trading_plan_data)
+        risk_advice = RiskAdviceModel(
+            conservative=RiskAdviceItem(**risk_advice_data.get('conservative', {})),
+            moderate=RiskAdviceItem(**risk_advice_data.get('moderate', {})),
+            aggressive=RiskAdviceItem(**risk_advice_data.get('aggressive', {}))
+        )
         
-        result = self._round_floats(result)
+        # 使用BacktestEngine获取历史表现
+        backtest_engine = BacktestEngine(self.data)
+        performance_tracking = backtest_engine.calculate_signal_performance(events.model_dump())
         
-        # 转换 datetime 和特殊类型以便序列化，然后使用 Pydantic 验证
-        def default_serializer(obj):
-            if isinstance(obj, (pd.Timestamp, datetime)):
-                return obj.strftime('%Y-%m-%d')
-            if isinstance(obj, np.integer):
-                return int(obj)
-            if isinstance(obj, np.floating):
-                return float(obj)
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            return str(obj)
-            
-        # 先转换为纯 Python 字典
-        clean_result = json.loads(json.dumps(result, default=default_serializer))
+        # 构建完整报告
+        report = ReportModel(
+            symbol=self.symbol,
+            date=datetime.now().strftime('%Y-%m-%d'),
+            phase=phase_str,
+            phase_confidence=phase_dict.get('confidence', 0.0),
+            sequence_score=seq_score,
+            divergence=div_res,
+            multi_timeframe=multi_timeframe,
+            relative_strength=relative_strength,
+            basic_data=basic_data,
+            events=events,
+            cause_effect=cause_effect,
+            market_context=market_context,
+            global_sentiment=global_sentiment,
+            signal_quality=signal_quality,
+            trading_plan=trading_plan,
+            wyckoff_laws=wyckoff_laws,
+            terminology_guide=self.get_relevant_terms(phase_str, events.model_dump()),
+            risk_specific_advice=risk_advice,
+            interactive_qa=self.generate_interactive_qa(signal_quality_data, trading_plan_data),
+            performance_tracking=performance_tracking
+        )
         
-        try:
-            from tools.schemas import ReportModel
-            report = ReportModel(**clean_result)
-            return report.model_dump_json(indent=2, exclude_none=True)
-        except ImportError:
-            try:
-                from .schemas import ReportModel
-                report = ReportModel(**clean_result)
-                return report.model_dump_json(indent=2, exclude_none=True)
-            except ImportError:
-                # Fallback
-                return json.dumps(clean_result, ensure_ascii=False, indent=2)
+        return report.model_dump_json(indent=2, exclude_none=True)
 

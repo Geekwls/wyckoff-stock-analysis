@@ -45,9 +45,10 @@ class TestWyckoffConfig:
 class TestWyckoffThresholds:
     def test_threshold_keys_present(self):
         t = WyckoffThresholds()
-        assert "low" in t.SPRING_BREAKDOWN
-        assert "medium" in t.SPRING_BREAKDOWN
-        assert "high" in t.SPRING_BREAKDOWN
+        assert "spring_breakdown" in t.VOLATILITY_THRESHOLDS
+        assert "low" in t.VOLATILITY_THRESHOLDS['spring_breakdown']
+        assert "medium" in t.VOLATILITY_THRESHOLDS['spring_breakdown']
+        assert "high" in t.VOLATILITY_THRESHOLDS['spring_breakdown']
 
     def test_volume_confirmation_keys(self):
         t = WyckoffThresholds()

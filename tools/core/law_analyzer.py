@@ -3,6 +3,8 @@ import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from ..config.settings import WyckoffConfig
+from .utils import PhaseClassifier
+from ..exceptions import InsufficientDataError, LawAnalysisError
 import logging
 logger = logging.getLogger(__name__)
 
@@ -15,14 +17,15 @@ class WyckoffLawAnalyzer:
     def analyze_supply_demand_law(self) -> dict:
         """Wyckoff第一定律：供求定律完整分析"""
         if self.data is None or len(self.data) < 60:
-            return {"error": "数据不足，无法分析供求关系"}
+            raise InsufficientDataError("供求分析", required=60, actual=len(self.data) if self.data is not None else 0)
 
         df = self.data.copy()
 
-        # 1. 识别当前处于积累期还是派发期
-        phase = self.pattern_detector.identify_phase()
-        is_accumulation = "Accumulation" in phase
-        is_distribution = "Distribution" in phase
+        # 1. 识别当前处于积累期还是派发期 (使用 PhaseClassifier)
+        phase_result = self.pattern_detector.identify_phase()
+        phase_str = phase_result.get('phase', 'Unknown')
+        is_accumulation = PhaseClassifier.is_accumulation(phase_str)
+        is_distribution = PhaseClassifier.is_distribution(phase_str)
 
         # 2. 检测交易区间
         trading_range = self.pattern_detector.detect_trading_range()
@@ -41,10 +44,10 @@ class WyckoffLawAnalyzer:
 
         # 5. 供求分析
         supply_demand_analysis = {
-            "current_phase": phase,
+            "current_phase": phase_str,
             "trading_range_status": "in_consolidation" if in_range else "trending",
             "volume_analysis": {
-                "current_volume_ratio": round(current_vol / vol_ma20, 2),
+                "current_volume_ratio": round(current_vol / max(vol_ma20, 1), 2),
                 "volume_trend": "increasing" if df['Volume'].iloc[-20:].mean() > df['Volume'].iloc[-60:-20].mean() else "decreasing"
             }
         }
@@ -117,7 +120,7 @@ class WyckoffLawAnalyzer:
     def analyze_effort_vs_result_law(self) -> dict:
         """Wyckoff第二定律：努力vs结果定律完整分析"""
         if self.data is None or len(self.data) < 20:
-            return {"error": "数据不足，无法分析努力vs结果"}
+            raise InsufficientDataError("努力vs结果分析", required=20, actual=len(self.data) if self.data is not None else 0)
 
         df = self.data.copy()
 
@@ -222,24 +225,29 @@ class WyckoffLawAnalyzer:
     def analyze_cause_effect_law_enhanced(self) -> dict:
         """Wyckoff第三定律：因果定律增强分析"""
         if self.data is None or len(self.data) < 60:
-            return {"error": "数据不足，无法分析因果关系"}
+            raise InsufficientDataError("因果分析", required=60, actual=len(self.data) if self.data is not None else 0)
 
-        # 获取基础因果分析
-        basic_cause_effect = self.calculate_cause_effect()
-
-        if "error" in basic_cause_effect:
-            return basic_cause_effect
+        # 获取基础因果分析 - 使用内置分析方法
+        basic_cause_effect = self._basic_cause_effect_analysis()
 
         # 增强因果分析
         trading_range = self.pattern_detector.detect_trading_range()
-        phase = self.pattern_detector.identify_phase()
+        
+        # WyckoffPatternDetector.identify_phase() 方法仍然存在（pattern_detector.py），
+        # 但此处为因果分析需要简化的趋势判断，故使用 MA60 均线替代，以降低依赖耦合。
+        current_close = self.data['Close'].iloc[-1]
+        ma60 = self.data['Close'].rolling(60).mean().iloc[-1] if len(self.data) >= 60 else current_close
+        if trading_range.get("is_consolidation"):
+            phase = "Accumulation" if current_close < ma60 else "Distribution"
+        else:
+            phase = "Markup" if current_close > ma60 else "Markdown"
 
         # 1. 测量"努力" - 更准确的积累/派发努力计算
         if trading_range.get("is_consolidation"):
             # 在交易区间内，测量积累/派发的努力
-            range_high = trading_range["high"]
-            range_low = trading_range["low"]
-            range_duration = trading_range["duration_days"]
+            range_high = trading_range.get("high", current_close)
+            range_low = trading_range.get("low", current_close * 0.95)
+            range_duration = trading_range.get("duration_days", 60)
 
             # 计算区间的成交量特征
             df = self.data.tail(range_duration)
@@ -408,4 +416,31 @@ class WyckoffLawAnalyzer:
             return "HIGH (75-85%)"
         else:
             return "MEDIUM (50-65%)"
+
+    def _basic_cause_effect_analysis(self) -> dict:
+        """基础因果分析 - 作为fallback方法"""
+        try:
+            # 计算交易区间
+            recent_data = self.data.tail(60)
+            trading_range_high = recent_data['High'].max()
+            trading_range_low = recent_data['Low'].min()
+            cause_size = trading_range_high - trading_range_low
+
+            # 计算目标位
+            breakout_point = trading_range_high
+            targets = {
+                "target_1": breakout_point + cause_size * 0.618,
+                "target_2": breakout_point + cause_size * 1.0,
+                "target_3": breakout_point + cause_size * 1.618
+            }
+
+            return {
+                "cause_size": cause_size,
+                "breakout_point": breakout_point,
+                "targets": targets,
+                "current_position": (self.data['Close'].iloc[-1] - trading_range_low) / cause_size if cause_size > 0 else 0,
+                "consolidation_duration_days": 60
+            }
+        except Exception as e:
+            raise LawAnalysisError("因果分析", str(e)) from e
 

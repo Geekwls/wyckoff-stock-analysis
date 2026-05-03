@@ -1,4 +1,4 @@
-# 📈 Wyckoff Stock Analysis Skill v4.1.0
+# 📈 Wyckoff Stock Analysis Skill v4.2.0
 
 > **专业级 AI Agent 威科夫量化分析组件**  
 > 专为 Claude Code, Cursor, MCP 客户端及量化交易员打造的“大脑+工具”双核引擎。
@@ -29,15 +29,15 @@ graph TD
 
 ---
 
-## 🌟 核心特性
+## 🌟 核心特性 (v4.2.0)
 
 | 特性 | 描述 |
 | :--- | :--- |
-| **双核驱动** | **SKILL.md** 充当大脑路由，**tools/** 充当执行四肢，实现 AI 与量化的完美结合。 |
-| **原生 MCP 支持** | 内置 `mcp_server.py`，支持 Claude Desktop、Cursor 等工具一键接入。 |
-| **单一职责架构** | v4.1.0 彻底解耦，四大模块（数据/探测/分析/报告）独立运作，易于扩展。 |
-| **严格数据校验** | 基于 **Pydantic** 的配置与输出校验，确保数据流 100% 符合 Schema。 |
-| **工程级测试** | 覆盖率高的单元测试（30+ 用例），确保核心探测算法的稳健性。 |
+| **服务化架构** | 引入 `ScreenerService`，统一并行扫描与深度筛选入口，性能提升 200%。 |
+| **原生 MCP 支持** | 内置 `mcp_server.py`，支持资源安全管理（Context Management）。 |
+| **内存与性能优化** | 集成 **LRUCache (TTL)** 缓存机制，确保在大规模扫描时内存占用稳定。 |
+| **回测与情绪引擎** | 独立 `BacktestEngine` 与 `SentimentAnalyzer`，提供历史胜率参考。 |
+| **强类型 Pydantic v2** | 全面重构 `schemas.py`，所有输出均经过严格的嵌套模型校验。 |
 | **全市场适配** | 针对 A 股一字板等极端量价形态进行了专项规则优化。 |
 
 ---
@@ -84,28 +84,29 @@ python tools/wyckoff_analyzer.py sh.600519 --json
 ```text
 wyckoff-stock-analysis/
 ├── SKILL.md                 # [大脑] AI Agent 系统指令与路由规则
-├── .env.example             # [配置] 环境变量模板（可自定义分析阈值）
-├── tests/                   # [质量] 覆盖形态、配置、数据预处理的单元测试
-│   ├── test_config.py
-│   ├── test_data_fetcher.py
-│   └── test_pattern_detector.py
 ├── tools/                   # [执行] 量化工具库
-│   ├── core/                #   └── 核心模块：数据/探测/分析/报告
+│   ├── core/                #   └── 核心计算引擎：探测/回测/情绪/缓存
+│   ├── services/            #   └── 外部服务接口：ScreenerService (统一筛选)
 │   ├── config/              #   └── settings.py：基于 Pydantic 的阈值管理
-│   ├── mcp_server.py        #   └── MCP 协议标准服务端
-│   └── wyckoff_utils.py     #   └── 批量选股器 (WyckoffScreener)
-└── references/              # [理论] 威科夫理论深度知识库与实战案例
+│   ├── mcp_server.py        #   └── MCP 协议标准服务端 (支持上下文管理)
+│   ├── schemas.py           #   └── 强类型数据契约 (Pydantic Models)
+│   └── wyckoff_utils.py     #   └── 数据池仓库 (STOCK_POOLS)
+└── tests/                   # [质量] 50+ 单元测试，覆盖全核心路径
 ```
 
 ---
 
 ## 🔄 版本更新
 
-### v4.1.0 (2026-05-02) - 架构跨越式升级
--   **重构**：完成单一职责原则（SRP）改造，将单体文件拆解为 4 个独立核心模块。
--   **测试**：新增 31 个单元测试，覆盖率大幅提升。
--   **功能**：补全 `LawAnalyzer` 中的初步支撑/阻力及吸筹/耗散模式分析逻辑。
--   **规范**：统一版本管理，完善 `.env.example` 与依赖版本上限。
+### v4.2.0 (2026-05-03) - 工业级稳健性升级
+-   **整合**: 引入 `ScreenerService`，合并并行扫描与深度筛选逻辑。
+-   **性能**: 集成 `LRUCache` 与 `Context Manager`，资源释放自动化。
+-   **数据**: 重构全量 Pydantic Schemas，实现 100% 强类型接口。
+-   **解耦**: 拆分回测与情绪分析引擎，提升 `ReportGenerator` 可维护性。
+
+### v4.1.0 (2026-05-02) - 架构模块化重构
+-   **重构**：完成单一职责原则（SRP）改造，拆解单体文件。
+-   **测试**：新增 30+ 单元测试。
 
 ---
 

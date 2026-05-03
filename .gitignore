@@ -33,3 +33,6 @@ scratch/
 
 # Local env secrets
 .env
+
+# Large Reference PDF Books
+*.pdf

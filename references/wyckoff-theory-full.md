@@ -96,7 +96,8 @@ When analyzing any stock, systematically answer:
 
 **Phase D - Markup Begins**
 - Sign of Strength (SOS): Strong breakout with increased volume
-- Last Point of Support (LPS): Pullback to re-test breakout on lower volume
+- **Jump Across the Creek (JOC)**: A specific, explosive SOS where price breaks the upper resistance (The Creek) with long bullish candles and high volume. This signifies smart money absorbing all floating supply.
+- Last Point of Support (LPS) / Test of JOC: Pullback to re-test the breakout (Creek) on lower volume. A successful test has small candles and shrinking volume (No Supply), offering a low-risk entry.
 - Series of higher lows
 - Demand clearly in control
 
@@ -135,7 +136,8 @@ When analyzing any stock, systematically answer:
 
 **Phase D - Markdown Begins**
 - Sign of Weakness (SOW): Strong breakdown with increased volume
-- Last Point of Supply (LPSY): Rally to re-test breakdown on lower volume
+- **Fall Through the Ice (FTI)**: A specific SOW where price breaks the major support (The Ice) with heavy selling pressure. It indicates demand is completely overwhelmed by supply.
+- Last Point of Supply (LPSY) / Test of Ice: Rally to re-test the breakdown (Ice line) on lower volume. A successful test has shrinking volume (No Demand) and fails to reclaim the Ice, offering a low-risk short entry.
 - Series of lower highs
 - Supply clearly in control
 

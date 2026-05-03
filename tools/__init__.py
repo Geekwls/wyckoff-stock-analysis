@@ -3,9 +3,11 @@
 """
 威科夫分析工具包
 """
-__version__ = "4.0.0"
+__version__ = "4.1.0"
 
 from .wyckoff_analyzer import WyckoffAnalyzer, WyckoffConfig, batch_scan
+from .wyckoff_utils import STOCK_POOLS
+from .services.screener_service import ScreenerService
 from .exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError
 
 __all__ = [
@@ -13,6 +15,8 @@ __all__ = [
     'WyckoffAnalyzer',
     'WyckoffConfig',
     'batch_scan',
+    'ScreenerService',
+    'STOCK_POOLS',
     'WyckoffError',
     'DataFetchError',
     'InsufficientDataError',

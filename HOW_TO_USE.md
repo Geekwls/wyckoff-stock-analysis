@@ -1,6 +1,6 @@
 # 威科夫分析 Skill - 多平台使用指南
 
-> 版本：v4.0.0 | 最后更新：2026-05-02
+> 版本：v4.2.0 | 最后更新：2026-05-03
 
 本指南帮助你将威科夫分析skill应用到多个AI平台和场景。
 
@@ -103,27 +103,24 @@ zip -r wyckoff-skill.zip wyckoff-stock-analysis/
 ### 💻 Python 集成示例
 
 ```python
-from tools.wyckoff_analyzer import WyckoffAnalyzer, batch_scan
+from tools import WyckoffAnalyzer, ScreenerService, STOCK_POOLS
 
-# 单股分析
-analyzer = WyckoffAnalyzer("AAPL")
-print(analyzer.generate_report())
+# 1. 单股分析 (推荐使用 with 语句管理资源)
+with WyckoffAnalyzer("AAPL") as analyzer:
+    # 生成专业文本报告
+    print(analyzer.generate_report())
+    
+    # 获取强类型 JSON 结果 (Pydantic Model)
+    json_data = analyzer.generate_json()
 
-# JSON 输出（供 AI Agent 使用）
-json_result = analyzer.generate_json()
+# 2. 快速批量扫描 (并行执行)
+results = ScreenerService().quick_scan(STOCK_POOLS['tech_giants'])
 
-# 批量扫描
-results = batch_scan(["AAPL", "TSLA", "NVDA"])
-```
-
-```python
-from tools.wyckoff_utils import WyckoffScreener
-
-# 批量筛选
-screener = WyckoffScreener()
-screener.add_stock("AAPL")
-screener.add_stock("TSLA")
-print(screener.generate_screening_report())
+# 3. 深度筛选机会 (如：筛选处于积累期的股票)
+screener = ScreenerService()
+accum_stocks = screener.deep_screen(STOCK_POOLS['sp500_top'], screen_type='accumulation')
+for stock in accum_stocks:
+    print(f"发现积累期机会: {stock['symbol']}, 评分: {stock['score']}")
 ```
 
 ---

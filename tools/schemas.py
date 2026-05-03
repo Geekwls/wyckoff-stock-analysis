@@ -1,34 +1,326 @@
+"""
+威科夫分析系统数据模型
+定义所有JSON接口的强类型模型
+"""
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 
+
+# ============================================================
+# 基础数据模型
+# ============================================================
+
 class BasicDataModel(BaseModel):
-    current_price: float
-    volume: int
-    volume_ratio: float
+    """基础数据"""
+    current_price: float = Field(description="当前价格")
+    volume: int = Field(description="成交量")
+    volume_ratio: float = Field(description="量比")
+
 
 class MultiTimeframeModel(BaseModel):
-    weekly_trend: str
-    monthly_trend: str
-    agreement: str
+    """多时间框架分析"""
+    weekly_trend: str = Field(description="周线趋势")
+    monthly_trend: str = Field(description="月线趋势")
+    agreement: str = Field(description="多时间框架一致性")
+
+
+# ============================================================
+# 事件检测模型
+# ============================================================
+
+class WyckoffEventModel(BaseModel):
+    """威科夫事件基础模型"""
+    detected: bool = Field(description="是否检测到")
+    date: Optional[str] = Field(default=None, description="事件日期")
+    price: Optional[float] = Field(default=None, description="事件价格")
+    volume: Optional[float] = Field(default=None, description="事件成交量")
+
+
+class TradingRangeModel(BaseModel):
+    """交易区间模型"""
+    is_consolidation: bool = Field(description="是否为整理区间")
+    high: float = Field(description="区间高点")
+    low: float = Field(description="区间低点")
+    range_pct: float = Field(description="区间幅度百分比")
+    duration_days: int = Field(description="持续天数")
+    consolidation_duration_days: int = Field(default=60, description="动态估算的积累/分布持续天数")
+    volume_trend: str = Field(default="neutral", description="成交量趋势")
+    position: float = Field(description="当前价格在区间中的位置")
+    current_price: float = Field(description="当前价格")
+
+
+class ClimaxModel(BaseModel):
+    """高潮事件"""
+    detected: bool = Field(description="是否检测到")
+    type: Optional[str] = Field(default=None, description="高潮类型")
+    date: Optional[str] = Field(default=None, description="日期")
+    price: Optional[float] = Field(default=None, description="价格")
+    volume: Optional[float] = Field(default=None, description="成交量")
+    volume_ratio: Optional[float] = Field(default=None, description="量比")
+
+
+class SpringModel(BaseModel):
+    """Spring事件"""
+    detected: bool = Field(description="是否检测到")
+    reason: Optional[str] = Field(default=None, description="未检测到的原因")
+    signals: Optional[List[Dict[str, Any]]] = Field(default=None, description="信号列表")
+    latest_spring: Optional[Dict[str, Any]] = Field(default=None, description="最新Spring")
+
+
+class UpthrustModel(BaseModel):
+    """Upthrust事件"""
+    detected: bool = Field(description="是否检测到")
+    reason: Optional[str] = Field(default=None, description="未检测到的原因")
+    signals: Optional[List[Dict[str, Any]]] = Field(default=None, description="信号列表")
+    latest_upthrust: Optional[Dict[str, Any]] = Field(default=None, description="最新Upthrust")
+
+
+class SosModel(BaseModel):
+    """SOS事件"""
+    detected: bool = Field(description="是否检测到")
+    signals: Optional[List[Dict[str, Any]]] = Field(default=None, description="信号列表")
+    latest: Optional[Dict[str, Any]] = Field(default=None, description="最新SOS")
+
+
+class SowModel(BaseModel):
+    """SOW事件"""
+    detected: bool = Field(description="是否检测到")
+    signals: Optional[List[Dict[str, Any]]] = Field(default=None, description="信号列表")
+    latest: Optional[Dict[str, Any]] = Field(default=None, description="最新SOW")
+
+
+class LpsModel(BaseModel):
+    """LPS事件"""
+    detected: bool = Field(description="是否检测到")
+    date: Optional[str] = Field(default=None, description="日期")
+    price: Optional[float] = Field(default=None, description="价格")
+    volume: Optional[float] = Field(default=None, description="成交量")
+
+
+class LpsyModel(BaseModel):
+    """LPSY事件"""
+    detected: bool = Field(description="是否检测到")
+    date: Optional[str] = Field(default=None, description="日期")
+    price: Optional[float] = Field(default=None, description="价格")
+    volume: Optional[float] = Field(default=None, description="成交量")
+
+
+class EventsModel(BaseModel):
+    """所有事件"""
+    trading_range: TradingRangeModel = Field(description="交易区间")
+    climax: ClimaxModel = Field(description="高潮事件")
+    automatic_reaction: WyckoffEventModel = Field(description="自动反应")
+    secondary_test: WyckoffEventModel = Field(description="二次测试")
+    spring: SpringModel = Field(description="Spring事件")
+    upthrust: UpthrustModel = Field(description="Upthrust事件")
+    sos: SosModel = Field(description="SOS事件")
+    sow: SowModel = Field(description="SOW事件")
+    lps: LpsModel = Field(description="LPS事件")
+    lpsy: LpsyModel = Field(description="LPSY事件")
+
+
+# ============================================================
+# 信号质量模型
+# ============================================================
+
+class SignalQualityModel(BaseModel):
+    """信号质量评分"""
+    score: int = Field(description="得分")
+    max_score: int = Field(default=10, description="最高分")
+    confidence: str = Field(description="信心级别")
+    reasons: List[str] = Field(default_factory=list, description="评分原因")
+
+
+# ============================================================
+# 交易计划模型
+# ============================================================
+
+class StopLossModel(BaseModel):
+    """止损设置"""
+    conservative: float = Field(description="保守止损")
+    aggressive: float = Field(description="激进止损")
+    atr_dynamic_stop: Optional[float] = Field(default=None, description="ATR动态止损")
+
+
+class TargetsModel(BaseModel):
+    """目标位"""
+    target_1: float = Field(description="第一目标")
+    target_2: float = Field(description="第二目标")
+
+
+class PositionSizingModel(BaseModel):
+    """仓位管理"""
+    conservative: str = Field(description="保守仓位")
+    moderate: str = Field(description="稳健仓位")
+    aggressive: str = Field(description="激进仓位")
+
+
+class TradingPlanModel(BaseModel):
+    """交易计划"""
+    direction: str = Field(description="操作方向")
+    entry_zone: str = Field(description="入场区间")
+    stop_loss: StopLossModel = Field(description="止损设置")
+    targets: TargetsModel = Field(description="目标位")
+    position_sizing: PositionSizingModel = Field(description="仓位管理")
+    holding_period: str = Field(description="持有周期")
+
+
+# ============================================================
+# 风险建议模型
+# ============================================================
+
+class RiskAdviceItem(BaseModel):
+    """风险建议项"""
+    action: str = Field(description="建议操作")
+    reason: Optional[str] = Field(default=None, description="原因")
+    position: Optional[str] = Field(default=None, description="仓位")
+    stop_loss: Optional[str] = Field(default=None, description="止损")
+    entry_condition: Optional[str] = Field(default=None, description="入场条件")
+
+
+class RiskAdviceModel(BaseModel):
+    """风险分层建议"""
+    conservative: RiskAdviceItem = Field(description="保守型")
+    moderate: RiskAdviceItem = Field(description="稳健型")
+    aggressive: RiskAdviceItem = Field(description="激进型")
+
+
+# ============================================================
+# 市场环境模型
+# ============================================================
+
+class MarketContextModel(BaseModel):
+    """市场环境"""
+    index_symbol: Optional[str] = Field(default=None, description="指数代码")
+    phase: Optional[str] = Field(default=None, description="市场阶段")
+    environment: Optional[str] = Field(default=None, description="市场环境")
+    ma_spread_pct: Optional[float] = Field(default=None, description="均线偏离度")
+
+
+class GlobalSentimentModel(BaseModel):
+    """全球市场情绪"""
+    market_sentiment: str = Field(description="市场情绪")
+    vix_level: Optional[float] = Field(default=None, description="VIX水平")
+    implication: str = Field(description="含义")
+    benchmark_used: Optional[str] = Field(default=None, description="基准")
+
+
+# ============================================================
+# 威科夫法则模型
+# ============================================================
+
+class SupplyDemandLawModel(BaseModel):
+    """供求法则"""
+    current_phase: Dict[str, Any] = Field(description="当前阶段")
+    trading_range_status: str = Field(description="交易区间状态")
+    volume_analysis: Dict[str, Any] = Field(description="成交量分析")
+
+
+class EffortVsResultModel(BaseModel):
+    """努力与结果法则"""
+    overall_assessment: str = Field(description="总体评估")
+    wyckoff_guidance: str = Field(description="威科夫指导")
+    timeframe_analysis: Dict[str, Any] = Field(description="时间框架分析")
+
+
+class CauseEffectModel(BaseModel):
+    """因果法则"""
+    basic_analysis: Optional[Dict[str, Any]] = Field(default=None, description="基础分析")
+    enhanced_analysis: Optional[Dict[str, Any]] = Field(default=None, description="增强分析")
+
+
+class WyckoffLawsModel(BaseModel):
+    """威科夫三大法则"""
+    supply_demand_law: SupplyDemandLawModel = Field(description="供求法则")
+    effort_vs_result_law: EffortVsResultModel = Field(description="努力与结果法则")
+    cause_effect_law: CauseEffectModel = Field(description="因果法则")
+
+
+# ============================================================
+# 相对强度模型
+# ============================================================
+
+class RelativeStrengthModel(BaseModel):
+    """相对强度"""
+    benchmark_used: Optional[str] = Field(default=None, description="基准")
+    rs_value: Optional[float] = Field(default=None, description="RS值")
+    rs_ma20: Optional[float] = Field(default=None, description="20日RS均线")
+    rs_ma50: Optional[float] = Field(default=None, description="50日RS均线")
+    rs_trend: Optional[str] = Field(default=None, description="RS趋势")
+    rs_change_20d: Optional[float] = Field(default=None, description="20日RS变化")
+
+
+# ============================================================
+# 序列评分模型
+# ============================================================
+
+class SequenceScoreModel(BaseModel):
+    """序列评分"""
+    completeness: float = Field(description="完整度")
+    score: float = Field(description="得分")
+    rating: str = Field(description="评级")
+    missing_events: List[str] = Field(default_factory=list, description="缺失事件")
+
+
+# ============================================================
+# 背离检测模型
+# ============================================================
+
+class DivergenceModel(BaseModel):
+    """背离检测"""
+    detected: bool = Field(description="是否检测到")
+    type: Optional[str] = Field(default=None, description="背离类型")
+
+
+# ============================================================
+# 历史表现模型
+# ============================================================
+
+class PerformanceItem(BaseModel):
+    """历史表现项"""
+    total_occurrences: int = Field(description="总出现次数")
+    success_rate: str = Field(description="成功率")
+    avg_return: str = Field(description="平均收益")
+    note: Optional[str] = Field(default=None, description="备注")
+
+
+# ============================================================
+# 因果分析模型
+# ============================================================
+
+class CauseEffectAnalysisModel(BaseModel):
+    """因果分析结果"""
+    error: Optional[str] = Field(default=None, description="错误信息")
+    basic_analysis: Optional[Dict[str, Any]] = Field(default=None, description="基础分析")
+    cause_size: Optional[float] = Field(default=None, description="原因大小")
+    breakout_point: Optional[float] = Field(default=None, description="突破点")
+    targets: Optional[Dict[str, float]] = Field(default=None, description="目标位")
+    current_position: Optional[float] = Field(default=None, description="当前位置")
+
+
+# ============================================================
+# 主报告模型
+# ============================================================
 
 class ReportModel(BaseModel):
-    symbol: str
-    date: str
-    phase: str
-    phase_confidence: float
-    sequence_score: Dict[str, Any] = Field(default_factory=dict)
-    divergence: Dict[str, Any] = Field(default_factory=dict)
-    multi_timeframe: MultiTimeframeModel
-    relative_strength: Dict[str, Any] = Field(default_factory=dict)
-    basic_data: BasicDataModel
-    events: Dict[str, Any] = Field(default_factory=dict)
-    cause_effect: Dict[str, Any] = Field(default_factory=dict)
-    market_context: Dict[str, Any] = Field(default_factory=dict)
-    global_sentiment: Dict[str, Any] = Field(default_factory=dict)
-    signal_quality: Dict[str, Any] = Field(default_factory=dict)
-    trading_plan: Dict[str, Any] = Field(default_factory=dict)
-    wyckoff_laws: Dict[str, Any] = Field(default_factory=dict)
-    terminology_guide: Dict[str, Any] = Field(default_factory=dict)
-    risk_specific_advice: Dict[str, Any] = Field(default_factory=dict)
-    interactive_qa: List[str] = Field(default_factory=list)
-    performance_tracking: Dict[str, Any] = Field(default_factory=dict)
+    """威科夫分析报告"""
+    symbol: str = Field(description="股票代码")
+    date: str = Field(description="分析日期")
+    phase: str = Field(description="当前阶段")
+    phase_confidence: float = Field(description="阶段置信度")
+    sequence_score: SequenceScoreModel = Field(description="序列评分")
+    divergence: DivergenceModel = Field(description="背离检测")
+    multi_timeframe: MultiTimeframeModel = Field(description="多时间框架")
+    relative_strength: RelativeStrengthModel = Field(description="相对强度")
+    basic_data: BasicDataModel = Field(description="基础数据")
+    events: EventsModel = Field(description="事件检测")
+    cause_effect: CauseEffectAnalysisModel = Field(description="因果分析")
+    market_context: MarketContextModel = Field(description="市场环境")
+    global_sentiment: GlobalSentimentModel = Field(description="全球情绪")
+    signal_quality: SignalQualityModel = Field(description="信号质量")
+    trading_plan: TradingPlanModel = Field(description="交易计划")
+    wyckoff_laws: WyckoffLawsModel = Field(description="威科夫法则")
+    terminology_guide: Dict[str, Any] = Field(default_factory=dict, description="术语指南")
+    risk_specific_advice: RiskAdviceModel = Field(description="风险建议")
+    interactive_qa: List[str] = Field(default_factory=list, description="交互问答")
+    performance_tracking: Dict[str, Any] = Field(default_factory=dict, description="历史表现")

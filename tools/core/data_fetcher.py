@@ -68,6 +68,9 @@ class WyckoffDataFetcher:
             return True
         if symbol_upper.startswith(('SH.', 'SZ.')):
             return True
+        # 港股（.HK）通过 yfinance 获取，不走 baostock
+        if symbol_upper.endswith('.HK'):
+            return False
         return False
 
     def _resolve_stock_name(self, name: str) -> Optional[str]:
@@ -209,7 +212,11 @@ class WyckoffDataFetcher:
         })
         df['Date'] = pd.to_datetime(df['Date'])
         df = df.set_index('Date')
-        df = df.astype(float)
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume', 'amount']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # 移除含有空价格的行
+        df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
         return df
 
     def _fetch_global_stock_data(self, symbol: str, period: str) -> pd.DataFrame:
