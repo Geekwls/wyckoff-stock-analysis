@@ -14,6 +14,11 @@ class ClassicPatternDetector:
     # --- Climax, AR, ST ---
     def detect_climax(self) -> Dict:
         """检测高潮行为 (SC/BC)"""
+        return self._analysis_cache.get_or_compute(
+            "climax", self._detect_climax_impl
+        )
+
+    def _detect_climax_impl(self) -> Dict:
         if self.data is None or len(self.data) < 20:
             return {'detected': False}
 
@@ -25,14 +30,14 @@ class ClassicPatternDetector:
         sc_mask = (
             (df['Close'] < df['Open']) & 
             (df['Volume'] > vol_ma.reindex(df.index) * self.thresholds.VOLUME_CONFIRMATION['strong']) & 
-            (df['Low'] == df['Low'].rolling(20).min())
+            (df['Low'] == self.data['Low_Min_20'].reindex(df.index))
         )
         
         # 买入高潮 (Buying Climax)
         bc_mask = (
             (df['Close'] > df['Open']) & 
             (df['Volume'] > vol_ma.reindex(df.index) * self.thresholds.VOLUME_CONFIRMATION['strong']) & 
-            (df['High'] == df['High'].rolling(20).max())
+            (df['High'] == self.data['High_Max_20'].reindex(df.index))
         )
         
         if sc_mask.any():
@@ -46,6 +51,12 @@ class ClassicPatternDetector:
 
     def detect_automatic_reaction(self, climax_res: Dict) -> Dict:
         """检测自动反弹/回落 (AR)"""
+        cache_key = f"ar_{climax_res.get('date')}_{climax_res.get('type')}"
+        return self._analysis_cache.get_or_compute(
+            cache_key, self._detect_automatic_reaction_impl, climax_res
+        )
+
+    def _detect_automatic_reaction_impl(self, climax_res: Dict) -> Dict:
         if not climax_res.get('detected'):
             return {'detected': False}
             
@@ -66,6 +77,12 @@ class ClassicPatternDetector:
 
     def detect_secondary_test(self, climax_res: Dict, ar_res: Dict) -> Dict:
         """检测二次测试 (ST)"""
+        cache_key = f"st_{climax_res.get('date')}_{ar_res.get('date')}"
+        return self._analysis_cache.get_or_compute(
+            cache_key, self._detect_secondary_test_impl, climax_res, ar_res
+        )
+
+    def _detect_secondary_test_impl(self, climax_res: Dict, ar_res: Dict) -> Dict:
         if not climax_res.get('detected') or not ar_res.get('detected'):
             return {'detected': False}
             
@@ -76,7 +93,6 @@ class ClassicPatternDetector:
             return {'detected': False}
             
         climax_price = climax_res['price']
-        vol_ma = self.data['Volume_MA20']
         
         if climax_res['type'] == 'selling_climax':
             # 寻找接近 SC 低点的测试 (使用 JOC_TEST_BAND 比例)
@@ -122,19 +138,33 @@ class ClassicPatternDetector:
         return {'detected': False, 'reason': 'no_spring_found'}
 
     def _check_spring_preconditions(self, df: pd.DataFrame) -> Optional[float]:
-        window = min(len(df), 60)
-        recent_df = df.tail(window)
-        high_max = recent_df['High'].max()
-        low_min = recent_df['Low'].min()
+        """
+        检查前置条件：前 N-M 根定义区间，计算支撑位。
+        """
+        M = self.config.breakout_search_window
+        if len(df) <= M:
+            return None
+            
+        range_df = df.iloc[:-M] # 前 N-M 根定义区间
+        high_max = range_df['High'].max()
+        low_min = range_df['Low'].min()
+        
         range_pct = (high_max - low_min) / low_min
         if range_pct < self.config.spring_range_threshold:
             return low_min
         return None
 
     def _find_spring_breakdowns(self, df: pd.DataFrame, support_level: float):
-        breakdown_mask = df['Low'] < support_level
-        breakdown_indices = df.index[breakdown_mask]
+        """
+        在最后 M 根中找突破/回归。
+        """
+        M = self.config.breakout_search_window
+        breakout_df = df.tail(M)
         
+        breakdown_mask = breakout_df['Low'] < support_level
+        breakdown_indices = breakout_df.index[breakdown_mask]
+        
+        # 寻找回归（可以在整个 df 中寻找，但触发点必须在 breakout_df 之后或之内）
         recovery_mask = df['Close'] > support_level
         recovery_info = {
             'mask': recovery_mask,
@@ -191,19 +221,29 @@ class ClassicPatternDetector:
         return {'detected': False}
 
     def _check_upthrust_preconditions(self, df: pd.DataFrame) -> Optional[float]:
-        window = min(len(df), 60)
-        recent_df = df.tail(window)
-        high_max = recent_df['High'].max()
-        low_min = recent_df['Low'].min()
+        """
+        检查前置条件：前 N-M 根定义区间，计算阻力位。
+        """
+        M = self.config.breakout_search_window
+        if len(df) <= M:
+            return None
+            
+        range_df = df.iloc[:-M]
+        high_max = range_df['High'].max()
+        low_min = range_df['Low'].min()
+        
         range_pct = (high_max - low_min) / low_min
         if range_pct < self.config.spring_range_threshold:
             return high_max
         return None
 
     def _find_and_verify_upthrusts(self, df: pd.DataFrame, resistance_level: float):
+        M = self.config.breakout_search_window
+        breakout_df = df.tail(M)
+        
         upthrusts = []
-        breakout_mask = df['High'] > resistance_level
-        breakout_indices = df.index[breakout_mask]
+        breakout_mask = breakout_df['High'] > resistance_level
+        breakout_indices = breakout_df.index[breakout_mask]
         
         rejection_mask = df['Close'] < resistance_level
         rejection_indices = df.index[rejection_mask]

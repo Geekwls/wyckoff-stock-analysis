@@ -6,6 +6,10 @@ from .detectors.classic_pattern_detector import ClassicPatternDetector
 from .detectors.strength_weakness_detector import StrengthWeaknessDetector
 from .detectors.phase_identifier import PhaseIdentifier
 from ..config.settings import WyckoffConfig, WyckoffThresholds
+from ..schemas import (
+    ClimaxModel, WyckoffEventModel, SpringModel, UpthrustModel,
+    SosModel, SowModel, LpsModel, LpsyModel
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,7 +28,7 @@ class WyckoffPatternDetector:
         self.range_detector = TradingRangeDetector(data, config)
         self.classic_detector = ClassicPatternDetector(data, config, self.thresholds, analysis_cache)
         self.sw_detector = StrengthWeaknessDetector(data, config, self.thresholds)
-        self.phase_identifier = PhaseIdentifier(data, config)
+        self.phase_identifier = PhaseIdentifier(data, config, self.thresholds)
 
     # --- 代理方法 (Delegated Methods) ---
 
@@ -77,46 +81,43 @@ class WyckoffPatternDetector:
 
     # --- 私有辅助方法 (保持原有逻辑或重构) ---
 
-    def _collect_all_events(self) -> Dict:
+    def _collect_all_events(self) -> Dict[str, Any]:
         """收集所有威科夫事件供阶段识别使用"""
-        events = {
-            'climax': self.detect_climax(),
-            'automatic_reaction': None,
-            'secondary_test': None,
-            'spring_upthrust': None,
-            'sos_sow': None,
-            'lps_lpsy': None
-        }
+        climax_res = self.detect_climax()
+        ar_res = self.detect_automatic_reaction(climax_res)
+        st_res = self.detect_secondary_test(climax_res, ar_res)
         
-        if events['climax']['detected']:
-            events['automatic_reaction'] = self.detect_automatic_reaction(events['climax'])
-            if events['automatic_reaction'] and events['automatic_reaction']['detected']:
-                events['secondary_test'] = self.detect_secondary_test(
-                    events['climax'], 
-                    events['automatic_reaction']
-                )
-        
-        # 基础形态
         spring_res = self.detect_spring()
         upthrust_res = self.detect_upthrust()
-        if spring_res.get('detected'):
-            events['spring_upthrust'] = {**spring_res, '_type': 'spring'}
-        elif upthrust_res.get('detected'):
-            events['spring_upthrust'] = {**upthrust_res, '_type': 'upthrust'}
-
-        # SOS/SOW 
+        
         sos_res = self.detect_sos()
         sow_res = self.detect_sow()
-        if sos_res.get('detected'):
-            events['sos_sow'] = {**sos_res, '_type': 'sos'}
-        elif sow_res.get('detected'):
-            events['sos_sow'] = {**sow_res, '_type': 'sow'}
+        
+        lps_res = self.detect_lps(sos_res)
+        lpsy_res = self.detect_lpsy(sow_res)
 
-        # LPS/LPSY
-        events['lps_lpsy'] = {
-            'lps': self.detect_lps(sos_res),
-            'lpsy': self.detect_lpsy(sow_res)
+        # 统一使用强类型模型封装
+        events = {
+            'climax': ClimaxModel(**climax_res),
+            'automatic_reaction': WyckoffEventModel(**ar_res) if ar_res.get('detected') else WyckoffEventModel(detected=False),
+            'secondary_test': WyckoffEventModel(**st_res) if st_res.get('detected') else WyckoffEventModel(detected=False),
+            'spring_upthrust': None,
+            'sos_sow': None,
+            'lps_lpsy': {
+                'lps': LpsModel(**lps_res),
+                'lpsy': LpsyModel(**lpsy_res)
+            }
         }
+        
+        if spring_res.get('detected'):
+            events['spring_upthrust'] = {'_type': 'spring', 'data': SpringModel(**spring_res)}
+        elif upthrust_res.get('detected'):
+            events['spring_upthrust'] = {'_type': 'upthrust', 'data': UpthrustModel(**upthrust_res)}
+
+        if sos_res.get('detected'):
+            events['sos_sow'] = {'_type': 'sos', 'data': SosModel(**sos_res)}
+        elif sow_res.get('detected'):
+            events['sos_sow'] = {'_type': 'sow', 'data': SosModel(**sow_res)} 
             
         return events
 

@@ -14,9 +14,10 @@ class WyckoffConfig(BaseModel):
     spring_max_recovery_days: int = Field(3, ge=1, le=10)
     spring_range_threshold: float = Field(0.30, ge=0.1, le=0.5)
     
-    # 高潮检测参数
-    climax_vol_multiplier: float = Field(3.0, ge=2.0, le=10.0)
     climax_range_multiplier: float = Field(1.5, ge=1.0, le=5.0)
+    
+    # 突破搜索窗口 (Spring/Upthrust 搜索最后 M 根 K线)
+    breakout_search_window: int = Field(5, ge=1, le=20)
     
     @field_validator('min_data_length')
     @classmethod
@@ -39,6 +40,12 @@ class ScoringConfig(BaseModel):
     market_bearish_weight: int = Field(4, description="顺势大盘空头权重")
     market_range_bonus: int = Field(2, description="震荡市固定加分")
     max_score: int = Field(10, description="名义最高分")
+    
+    # 阶段识别置信度权重 (Confidence, MA, Volume)
+    phase_weights: Dict[str, float] = Field(
+        default={'confidence': 0.5, 'ma': 0.3, 'vol': 0.2},
+        description="阶段识别置信度权重"
+    )
 
 class PositionSizingConfig(BaseModel):
     """仓位管理详细配置"""
@@ -56,10 +63,14 @@ class WyckoffThresholds(BaseModel):
         default={
             'spring_breakdown': {'low': 0.03, 'medium': 0.04, 'high': 0.05},
             'upthrust_breakout': {'low': 0.03, 'medium': 0.04, 'high': 0.05},
-            'sos_price_change': {'low': 0.02, 'medium': 0.035, 'high': 0.05},
-            'sow_price_change': {'low': -0.02, 'medium': -0.035, 'high': -0.05},
+            'sos_price_change': {'low': 0.02, 'medium': 0.03, 'high': 0.05},
+            'sow_price_change': {'low': -0.02, 'medium': -0.03, 'high': -0.05},
         }
     )
+    
+    # 标准 SOS/SOW 价格变化阈值 (不分波动率时的默认值)
+    SOS_PRICE_CHANGE_DEFAULT: float = Field(0.02)
+    SOW_PRICE_CHANGE_DEFAULT: float = Field(-0.02)
     
     # ── 成交量确认阈值 ──────────────────────────────────────
     VOLUME_CONFIRMATION: Dict[str, float] = Field(

@@ -19,7 +19,7 @@ class StrengthWeaknessDetector:
         
         # 使用配置中的阈值
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
-        price_change_threshold = 0.02 # TODO: 迁移至 thresholds
+        price_change_threshold = self.thresholds.SOS_PRICE_CHANGE_DEFAULT
         
         sos_mask = (df['Close'] > df['Open']) & (df['Volume'] > vol_ma * vol_ratio_threshold) & (price_pct_change > price_change_threshold)
         if sos_mask.any():
@@ -44,7 +44,7 @@ class StrengthWeaknessDetector:
         price_pct_change = df['Close'].pct_change()
         
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
-        price_change_threshold = -0.02
+        price_change_threshold = self.thresholds.SOW_PRICE_CHANGE_DEFAULT
         
         sow_mask = (df['Close'] < df['Open']) & (df['Volume'] > vol_ma * vol_ratio_threshold) & (price_pct_change < price_change_threshold)
         if sow_mask.any():
@@ -72,7 +72,6 @@ class StrengthWeaknessDetector:
         lps_signals = []
         for i in range(5, len(df)):
             current = df.iloc[i]
-            prev = df.iloc[i-1]
             
             # 回调缩量条件
             is_pullback = (current['Low'] < df.iloc[i-5:i]['High'].max()) and (current['Close'] > df['MA20'].iloc[i])

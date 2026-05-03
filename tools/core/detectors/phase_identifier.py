@@ -1,14 +1,15 @@
 import pandas as pd
 from typing import Dict, Tuple, List, Optional, Union
-from ...config.settings import WyckoffConfig
+from ...config.settings import WyckoffConfig, WyckoffThresholds
 from ..enums import WyckoffPhase
 from ..utils import PhaseAdapter
 
 class PhaseIdentifier:
     """负责识别威科夫阶段和评分"""
-    def __init__(self, data: pd.DataFrame, config: WyckoffConfig):
+    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds):
         self.data = data
         self.config = config
+        self.thresholds = thresholds
 
     def identify(self, events: Dict) -> Dict:
         """主识别流程"""
@@ -22,7 +23,12 @@ class PhaseIdentifier:
         ma_conf = self._check_ma_confirmation(phase_enum)
         vol_conf = self._check_volume_confirmation(phase_enum)
         
-        final_conf = confidence * 0.5 + ma_conf * 0.3 + vol_conf * 0.2
+        weights = self.thresholds.SCORING.phase_weights
+        final_conf = (
+            confidence * weights.get('confidence', 0.5) + 
+            ma_conf * weights.get('ma', 0.3) + 
+            vol_conf * weights.get('vol', 0.2)
+        )
         seq_score = self.calculate_sequence_score(events, phase_enum)
         final_conf *= seq_score.get('adjustment_factor', 1.0)
 
@@ -37,16 +43,19 @@ class PhaseIdentifier:
 
     def _determine_phase_from_events(self, events: Dict) -> Tuple[str, WyckoffPhase, float]:
         """从事件序列中判定阶段"""
-        su = events.get('spring_upthrust') or {}
-        ss = events.get('sos_sow') or {}
-        cl = events.get('climax') or {}
-        ar = events.get('automatic_reaction') or {}
-        st = events.get('secondary_test') or {}
+        su_info = events.get('spring_upthrust') or {}
+        su_data = su_info.get('data')
+        ss_info = events.get('sos_sow') or {}
+        ss_data = ss_info.get('data')
+        
+        climax = events.get('climax')
+        ar = events.get('automatic_reaction')
+        st = events.get('secondary_test')
 
-        is_spring = su.get('detected') and su.get('_type') == 'spring'
-        is_upthrust = su.get('detected') and su.get('_type') == 'upthrust'
-        is_sos = ss.get('detected') and ss.get('_type') == 'sos'
-        is_sow = ss.get('detected') and ss.get('_type') == 'sow'
+        is_spring = su_info.get('_type') == 'spring' and su_data and su_data.detected
+        is_upthrust = su_info.get('_type') == 'upthrust' and su_data and su_data.detected
+        is_sos = ss_info.get('_type') == 'sos' and ss_data and ss_data.detected
+        is_sow = ss_info.get('_type') == 'sow' and ss_data and ss_data.detected
 
         if is_spring and is_sos: 
             return 'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, 0.85
@@ -57,13 +66,13 @@ class PhaseIdentifier:
         if is_upthrust: 
             return 'Distribution Phase C (派发期诱多)', WyckoffPhase.PHASE_C, 0.70
             
-        if cl.get('detected') and ar.get('detected'):
-            if cl.get('type') == 'selling_climax': 
+        if climax and climax.detected and ar and ar.detected:
+            if climax.type == 'selling_climax': 
                 return 'Accumulation Phase A (恐慌抛售停止)', WyckoffPhase.PHASE_A, 0.75
             return 'Distribution Phase A (买入高潮停止)', WyckoffPhase.PHASE_A, 0.75
             
-        if st.get('detected'):
-            if cl.get('type') == 'selling_climax': 
+        if st and st.detected:
+            if climax.type == 'selling_climax': 
                 return 'Accumulation Phase B (积累期测试)', WyckoffPhase.PHASE_B, 0.60
             return 'Distribution Phase B (派发期测试)', WyckoffPhase.PHASE_B, 0.60
             
@@ -108,8 +117,13 @@ class PhaseIdentifier:
         count = 0
         checks = ['climax', 'automatic_reaction', 'secondary_test', 'spring_upthrust', 'sos_sow']
         for c in checks:
-            event = events.get(c) or {}
-            if event.get('detected'): count += 1
+            event = events.get(c)
+            if event:
+                if isinstance(event, dict): # spring_upthrust or sos_sow
+                    data = event.get('data')
+                    if data and data.detected: count += 1
+                elif hasattr(event, 'detected') and event.detected: 
+                    count += 1
             
         completeness = (count / len(checks)) * 100
         factor = 1.0 if completeness >= 80 else 0.8 if completeness >= 60 else 0.6

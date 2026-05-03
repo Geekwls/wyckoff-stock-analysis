@@ -50,6 +50,11 @@ def prepare_data(data: pd.DataFrame, config: WyckoffConfig = None) -> pd.DataFra
     rs = gain / loss.replace(0, float('nan'))
     df['RSI'] = 100 - (100 / (1 + rs.fillna(0)))
 
+    # 新增常用滚动极值，减少各检测器重复计算
+    for w in [20, 60, 120]:
+        df[f'High_Max_{w}'] = df['High'].rolling(w, min_periods=1).max()
+        df[f'Low_Min_{w}'] = df['Low'].rolling(w, min_periods=1).min()
+
     return df
 
 class WyckoffDataFetcher:
