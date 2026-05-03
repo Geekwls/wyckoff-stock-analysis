@@ -233,14 +233,16 @@ class WyckoffLawAnalyzer:
         # 增强因果分析
         trading_range = self.pattern_detector.detect_trading_range()
         
-        # WyckoffPatternDetector.identify_phase() 方法仍然存在（pattern_detector.py），
-        # 但此处为因果分析需要简化的趋势判断，故使用 MA60 均线替代，以降低依赖耦合。
+        # 优先使用阶段识别器结果，避免仅用 MA60 推断造成语义偏差；失败时再降级到 MA60。
         current_close = self.data['Close'].iloc[-1]
-        ma60 = self.data['Close'].rolling(60).mean().iloc[-1] if len(self.data) >= 60 else current_close
-        if trading_range.get("is_consolidation"):
-            phase = "Accumulation" if current_close < ma60 else "Distribution"
-        else:
-            phase = "Markup" if current_close > ma60 else "Markdown"
+        phase_result = self.pattern_detector.identify_phase() if self.pattern_detector else {}
+        phase = phase_result.get("phase", "") if isinstance(phase_result, dict) else ""
+        if not phase:
+            ma60 = self.data['Close'].rolling(60).mean().iloc[-1] if len(self.data) >= 60 else current_close
+            if trading_range.get("is_consolidation"):
+                phase = "Accumulation" if current_close < ma60 else "Distribution"
+            else:
+                phase = "Markup" if current_close > ma60 else "Markdown"
 
         # 1. 测量"努力" - 更准确的积累/派发努力计算
         if trading_range.get("is_consolidation"):
@@ -258,16 +260,21 @@ class WyckoffLawAnalyzer:
             range_tightness = (range_high - range_low) / ((range_high + range_low) / 2)
 
             # 计算积累/派发努力的综合指标
+            vol_ma20 = df['Volume_MA20'].mean() if 'Volume_MA20' in df.columns else avg_range_volume
+            volume_participation = (avg_range_volume / vol_ma20) if vol_ma20 and vol_ma20 > 0 else 1.0
+
             accumulation_effort = {
                 "time_effort": range_duration,  # 时间努力
                 "volume_effort": total_range_volume,  # 成交量努力
+                "avg_volume": avg_range_volume,
+                "volume_participation": round(volume_participation, 2),
                 "price_consolidation": range_tightness,  # 价格整理努力
                 "cause_size": range_high - range_low,  # 因果幅度
                 "effort_quality": "HIGH" if range_tightness < 0.15 else "MEDIUM" if range_tightness < 0.25 else "LOW"
             }
 
             # 2. 预测"效果" - 基于Wyckoff理论的目标计算
-            current_position = trading_range["position"]
+            current_position = trading_range.get("position", 0.5)
 
             if current_position > 0.5:
                 # 向上突破的因果预测
@@ -443,4 +450,3 @@ class WyckoffLawAnalyzer:
             }
         except Exception as e:
             raise LawAnalysisError("因果分析", str(e)) from e
-
