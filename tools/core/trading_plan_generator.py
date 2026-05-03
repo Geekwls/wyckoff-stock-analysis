@@ -40,18 +40,24 @@ class TradingPlanGenerator:
         """
         self.data = data
         self.pattern_detector = pattern_detector
+        self.is_a_stock = False
+        if hasattr(pattern_detector, 'data_fetcher'): # PatternDetector doesn't have it usually, but analyzer does.
+             pass
     
-    def generate(self, sentiment_data: Optional[Dict[str, Any]] = None, phase_str: str = "") -> Dict[str, Any]:
+    def generate(self, sentiment_data: Optional[Dict[str, Any]] = None, 
+                 phase_str: str = "", is_a_stock: bool = False) -> Dict[str, Any]:
         """
         生成交易计划
         
         Args:
             sentiment_data: 市场情绪数据
             phase_str: 当前阶段字符串
+            is_a_stock: 是否为A股
             
         Returns:
             交易计划字典
         """
+        self.is_a_stock = is_a_stock
         if self.data is None:
             return {}
         
@@ -88,17 +94,24 @@ class TradingPlanGenerator:
         # 退出规则
         exit_rules = self._calculate_exit_rules(atr)
         
+        # 方向判定与市场约束
+        if is_bullish:
+            direction = "做多"
+        else:
+            direction = "减仓/观望" if self.is_a_stock else "做空"
+
         return {
-            "direction": "做多" if is_bullish else "做空",
+            "direction": direction,
             "entry_zone": entry_zone,
             "stop_loss": stop_loss,
             "targets": targets,
             "position_sizing": pos_sizing,
             "scale_in_triggers": scale_in_triggers,
             "exit_rules": exit_rules,
-            "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周）",
+            "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周） Gord",
             "atr_value": round(atr, 2),
-            "dynamic_warning": dynamic_warning
+            "dynamic_warning": dynamic_warning,
+            "market_constraint": "A股无法直接做空，建议以减仓或对冲替代" if self.is_a_stock and not is_bullish else None
         }
     
     def _calculate_levels(self, current_price: float, atr: float, 

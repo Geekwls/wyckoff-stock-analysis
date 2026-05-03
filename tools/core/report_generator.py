@@ -3,8 +3,10 @@ import numpy as np
 import json
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
-from ..config.settings import WyckoffConfig
+from ..config.settings import WyckoffConfig, WyckoffThresholds
 from ..exceptions import DataFetchError
+from .enums import MarketEnvironment, WyckoffPhase, MarketSide
+from .utils import PhaseAdapter
 from ..schemas import (
     ReportModel, BasicDataModel, MultiTimeframeModel, EventsModel,
     TradingRangeModel, ClimaxModel, SpringModel, UpthrustModel,
@@ -30,6 +32,7 @@ class WyckoffReportGenerator:
         self.symbol = analyzer.symbol
         self.pattern_detector = getattr(analyzer, 'pattern_detector', None)
         self.law_analyzer = getattr(analyzer, 'law_analyzer', None)
+        self.thresholds = WyckoffThresholds()
 
     def generate_report(self) -> str:
         """生成分析报告"""
@@ -60,7 +63,7 @@ class WyckoffReportGenerator:
 
         report = f"""
 {'='*60}
-威科夫形态分析报告
+威科夫形态 analysis 报告
 {'='*60}
 
 股票代码: {self.symbol}
@@ -241,96 +244,95 @@ class WyckoffReportGenerator:
             report += "\n📊 VSA辅助信号（量价微观分析）:\n" + "\n".join(vsa_lines) + "\n"
 
         # 因果测算
-
         cause_effect = self.analyzer.calculate_cause_effect()
-        if cause_effect and 'targets' in cause_effect:
+        targets_ok = cause_effect and 'targets' in cause_effect
+        if targets_ok:
             report += f"""
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【因果测算】
-交易区间: {trading_range['low']:.2f} - {trading_range['high']:.2f}
+交易区间: {trading_range.get('low', 0):.2f} - {trading_range.get('high', 0):.2f}
 因果幅度: {cause_effect['cause_size']:.2f}
 目标1 (0.618倍): {cause_effect['targets']['target_1']:.2f}
 目标2 (1.0倍): {cause_effect['targets']['target_2']:.2f}
 目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
 """
 
-        # ── 交易建议决策树（优先级：JOC > LPS > FTI > LPSY > 区间/观望）──
+        # ── 核心结论评估（加权信号 + 冲突检测 + 阈值门控） ──────────────────
         current_price = self.data['Close'].iloc[-1]
-        targets_ok = cause_effect and 'targets' in cause_effect
+        signal_quality_data = self.calculate_signal_quality({'environment': self.analyzer._analyze_market_environment().get('environment')})
+        quality_score = signal_quality_data.get('score', 0)
+        max_score = signal_quality_data.get('max_score', 10)
+        
+        # 阈值门控：如果评分过低或置信度太低，强制观望
+        if quality_score < 4 or phase_conf < 0.5:
+            report += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-        # 最高优先级：JOC + 回测确认 → 趋势跟踪买入
-        if joc.get('detected') and joc.get('test_detected'):
-            joc_entry = joc.get('creek_level', current_price)
-            stop_price = round(joc_entry * 0.96, 2)
-            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
-            report += f"""
-🚀 趋势跟踪买入（JOC 突破确认）:
-   信号: JOC（跃过小溪）+ 缩量回测确认
-   参考入场区间: {joc_entry:.2f} ~ {round(joc_entry * 1.02, 2):.2f}（回测阻力位附近）
-   止损: {stop_price:.2f}（阻力位下方 4%）
-   目标1: {(cause_effect['targets']['target_1'] if targets_ok else round(current_price*1.08, 2)):.2f}
-   目标2: {target2:.2f}
-   策略: 等待回调至 JOC 突破位（{joc_entry:.2f}）附近缩量后分批买入
-"""
-        # 次优先级：LPS 确认（传统威科夫）
-        elif lps.get('detected') and not lpsy.get('detected') and not fti.get('detected'):
-            stop_price = round(lps['price'] * 0.95, 2)
-            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
-            report += f"""
-✅ 做多机会（LPS 最后支撑）:
-   入场价格: {lps['price']:.2f} (LPS)
-   止损价格: {stop_price:.2f}（支撑位下方 5%）
-   目标价格: {target2:.2f} (因果测算)
-   风险提示: 请设置好止损，严格执行
-"""
-        # 做空：FTI + 回测确认 → 趋势跟踪做空
-        elif fti.get('detected') and fti.get('test_detected'):
-            fti_entry = fti.get('ice_level', current_price)
-            stop_price = round(fti_entry * 1.04, 2)
-            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
-            report += f"""
-🔻 做空警示（FTI 跌破冰层确认）:
-   信号: FTI（跌破冰层）+ 无需求回弹确认
-   参考入场区间: {fti_entry:.2f} ~ {round(fti_entry * 0.98, 2):.2f}（回测冰层附近）
-   止损: {stop_price:.2f}（冰层上方 4%）
-   目标: {target2:.2f}
-   风险提示: A股做空困难，建议观望或减仓/止损已有多仓
-"""
-        # LPSY（传统派发尾声）
-        elif lpsy.get('detected') and not lps.get('detected'):
-            stop_price = round(lpsy['price'] * 1.05, 2)
-            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
-            report += f"""
-✅ 做空机会（LPSY 最后供应）:
-   入场价格: {lpsy['price']:.2f} (LPSY)
-   止损价格: {stop_price:.2f}（阻力位上方 5%）
-   目标价格: {target2:.2f} (因果测算)
-   风险提示: A股做空困难，建议观望或减仓
-"""
-        # JOC 检测到但回测尚未确认 → 候场等待
-        elif joc.get('detected') and not joc.get('test_detected'):
-            joc_entry = joc.get('creek_level', current_price)
-            report += f"""
-⏳ 候场等待（JOC 已突破，等待回测确认）:
-   JOC 突破位: {joc_entry:.2f}
-   操作: 等待价格回调至 {joc_entry:.2f} 附近且出现缩量（No Supply）后买入
-   切忌追高，突破后的第一次缩量回踩才是最佳入场点
-"""
-        elif trading_range.get('is_consolidation'):
-            report += """
-⏳ 观望等待:
-   当前处于横盘整理阶段
-   等待明确的 JOC 突破或 Spring 震仓信号
-   不要过早入场
+【核心结论】
+⏸️ 观望等待（信号质量不足）:
+   当前评分: {quality_score}/{max_score} | 置信度: {phase_conf*100:.0f}%
+   结论: 信号强度或可靠性低于执行阈值，建议继续观察。
 """
         else:
-            report += """
-⏸️ 无明显信号:
-   当前没有明确的入场信号
-   建议继续观察或等待更好机会
+            # 收集信号并检测冲突
+            bullish_signals = []
+            bearish_signals = []
+            if joc.get('detected'): bullish_signals.append("JOC")
+            if lps.get('detected'): bullish_signals.append("LPS")
+            if spring.get('detected'): bullish_signals.append("Spring")
+            if fti.get('detected'): bearish_signals.append("FTI")
+            if lpsy.get('detected'): bearish_signals.append("LPSY")
+            if upthrust.get('detected'): bearish_signals.append("Upthrust")
+            
+            report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【核心结论】\n"
+            
+            # 冲突检测
+            if bullish_signals and bearish_signals:
+                report += f"""
+⚠️ 信号冲突警示:
+   看多信号: {', '.join(bullish_signals)}
+   看空信号: {', '.join(bearish_signals)}
+   结论: 市场多空分歧剧烈，建议在冲突消解前保持空仓或显著收紧止损。
 """
+            # 决策树逻辑
+            elif joc.get('detected') and joc.get('test_detected'):
+                joc_entry = joc.get('creek_level', current_price)
+                stop_price = round(joc_entry * 0.96, 2)
+                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
+                report += f"""
+🚀 趋势跟踪买入（JOC 突破确认）:
+   参考入场区间: {joc_entry:.2f} ~ {round(joc_entry * 1.02, 2):.2f}
+   止损: {stop_price:.2f} | 目标2: {target2:.2f}
+   策略: JOC 突破位附近缩量分批买入。
+"""
+            elif lps.get('detected'):
+                stop_price = round(lps['price'] * 0.95, 2)
+                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
+                report += f"""
+✅ 做多机会（LPS 最后支撑）:
+   入场价格: {lps['price']:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
+"""
+            elif fti.get('detected') and fti.get('test_detected'):
+                fti_entry = fti.get('ice_level', current_price)
+                stop_price = round(fti_entry * 1.04, 2)
+                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
+                report += f"""
+🔻 做空/减仓警示（FTI 跌破确认）:
+   参考入场: {fti_entry:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
+   提示: {('建议减仓/止损' if self.analyzer._is_a_stock(self.symbol) else '可尝试做空')}
+"""
+            elif lpsy.get('detected'):
+                stop_price = round(lpsy['price'] * 1.05, 2)
+                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
+                report += f"""
+✅ 卖出/减仓机会（LPSY 最后供应）:
+   价格: {lpsy['price']:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
+"""
+            elif trading_range.get('is_consolidation'):
+                report += "⏳ 观望等待: 横盘整理阶段，等待信号。\n"
+            else:
+                report += "⏸️ 无明显信号: 建议继续观察。\n"
 
         report += f"""
 
@@ -358,71 +360,64 @@ class WyckoffReportGenerator:
         return obj
 
     def calculate_signal_quality(self, market_phase) -> dict:
-        """计算信号质量评分"""
+        """计算信号质量评分 - 显式配置化"""
+        cfg = self.thresholds.SCORING
         score = 0
         reasons = []
-        phase_str = 'Unknown'  # 初始化，防止data为None时NameError
+        phase_str = 'Unknown'
 
         if self.data is not None:
             vol_ratio = self.data['Volume'].iloc[-1] / max(self.data['Volume_MA20'].iloc[-1], 1)
             phase_res = self.pattern_detector.identify_phase()
-            phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
+            phase_str = phase_res.get('phase', 'Unknown')
             
-            # 1. 技术确认度
-            if "Accumulation" in phase_str or "Markup" in phase_str:
+            # 1. 技术确认度 (成交量配合)
+            is_bullish_side = PhaseAdapter.get_market_side(phase_str) == MarketSide.BULLISH
+            
+            if is_bullish_side:
                 if vol_ratio > 1.5:
-                    score += 3
-                    reasons.append("成交量强力确认 (放量上涨)")
+                    score += cfg.vol_strong_weight
+                    reasons.append(f"成交量强力确认 (+{cfg.vol_strong_weight}分)")
                 elif vol_ratio > 1.0:
-                    score += 1
-                    reasons.append("成交量温和配合")
-                else:
-                    reasons.append("上涨缩量，动能不足")
+                    score += cfg.vol_moderate_weight
+                    reasons.append(f"成交量温和配合 (+{cfg.vol_moderate_weight}分)")
             else:
                 if vol_ratio > 1.5:
-                    score += 3
-                    reasons.append("成交量强力确认 (放量下跌)")
-                else:
-                    reasons.append("下跌缩量，趋势可能随时反转")
+                    score += cfg.vol_strong_weight
+                    reasons.append(f"成交量强力确认 (放量下跌) (+{cfg.vol_strong_weight}分)")
         
             # 2. 趋势一致性
             current_price = self.data['Close'].iloc[-1]
             ma50 = self.data['MA50'].iloc[-1]
             ma200 = self.data['MA200'].iloc[-1]
             
-            if current_price > ma50 and ma50 > ma200:
-                score += 3
-                reasons.append("多时间框架一致 (长期多头排列)")
-            elif current_price < ma50 and ma50 < ma200:
-                score += 3
-                reasons.append("多时间框架一致 (长期空头排列)")
+            if (current_price > ma50 > ma200) or (current_price < ma50 < ma200):
+                score += cfg.trend_alignment_weight
+                reasons.append(f"多时间框架一致 (+{cfg.trend_alignment_weight}分)")
 
         # 3. 市场环境配合
-        market_env = market_phase.get('environment', 'Unknown') if isinstance(market_phase, dict) else "Unknown"
-        is_market_bullish = "Bull" in market_env or "牛" in market_env
-        is_market_bearish = "Bear" in market_env or "熊" in market_env
+        market_env = market_phase.get('environment', MarketEnvironment.UNKNOWN)
+        is_market_bullish = market_env in [MarketEnvironment.STRONG_BULL, MarketEnvironment.BULL]
+        is_market_bearish = market_env in [MarketEnvironment.STRONG_BEAR, MarketEnvironment.BEAR]
+        
+        current_side = PhaseAdapter.get_market_side(phase_str)
         
         if is_market_bullish:
-            if "Accumulation" in phase_str or "Markup" in phase_str:
-                score += 4
-                reasons.append("市场环境有利 (顺应大盘多头)")
-            else:
-                reasons.append("逆势操作 (大盘看多，个股看空)")
+            if current_side == MarketSide.BULLISH:
+                score += cfg.market_bullish_weight
+                reasons.append(f"顺应大盘多头 (+{cfg.market_bullish_weight}分)")
         elif is_market_bearish:
-            if "Distribution" in phase_str or "Markdown" in phase_str:
-                score += 4
-                reasons.append("市场环境有利 (顺应大盘空头)")
-            else:
-                reasons.append("逆势操作 (大盘看空，个股看多)")
-        else:
-            # 震荡市
-            score += 2
-            reasons.append("市场环境中性 (大盘震荡)")
+            if current_side == MarketSide.BEARISH:
+                score += cfg.market_bearish_weight
+                reasons.append(f"顺应大盘空头 (+{cfg.market_bearish_weight}分)")
+        elif market_env == MarketEnvironment.RANGE_BOUND:
+            score += cfg.market_range_bonus
+            reasons.append(f"大盘震荡中性 (+{cfg.market_range_bonus}分)")
 
         return {
             "score": score,
-            "max_score": 10,
-            "confidence": "高" if score >= 7 else "中" if score >= 4 else "低",
+            "max_score": cfg.max_score,
+            "confidence": "高" if score >= (cfg.max_score * 0.7) else "中" if score >= (cfg.max_score * 0.4) else "低",
             "reasons": reasons
         }
 
@@ -493,64 +488,88 @@ class WyckoffReportGenerator:
         return relevant
 
     def generate_risk_advice(self, signal_quality: dict, trading_plan: dict) -> dict:
-        """生成具体的风险分层操作建议"""
+        """生成具体的风险分层操作建议 - 考虑波动率与流动性"""
         score = signal_quality.get("score", 0)
         direction = trading_plan.get("direction", "观望")
         stop_con = trading_plan.get("stop_loss", {}).get("conservative", "未知")
         stop_agg = trading_plan.get("stop_loss", {}).get("aggressive", "未知")
         
+        # 波动率与流动性惩罚因子
+        pos_cfg = self.thresholds.POSITION_SIZING
+        current_price = self.data['Close'].iloc[-1]
+        atr = self.data['ATR'].iloc[-1] if 'ATR' in self.data.columns else current_price * 0.02
+        vol_ma20 = self.data['Volume_MA20'].iloc[-1] if 'Volume_MA20' in self.data.columns else 1e9
+        
+        volatility_ratio = atr / current_price
+        safety_multiplier = 1.0
+        
+        # 1. 波动率惩罚：如果 ATR 占比超过阈值，减少仓位
+        if volatility_ratio > pos_cfg.volatility_cap_threshold:
+            safety_multiplier *= (pos_cfg.volatility_cap_threshold / volatility_ratio)
+            
+        # 2. 流动性惩罚：如果成交量过低，减少仓位
+        if vol_ma20 < pos_cfg.liquidity_min_volume_ma20:
+            safety_multiplier *= max(vol_ma20 / pos_cfg.liquidity_min_volume_ma20, 0.5)
+
+        def fmt_pos(base_pos: float) -> str:
+            final_pos = base_pos * safety_multiplier
+            return f"{final_pos*100:.1f}%"
+
+        # 止损执行说明
+        sl_rule = " (若开盘跳空跌破止损线，建议在开盘5分钟内寻找反抽机会果断离场，不计较滑点)"
+
         if score <= 4:
             return {
-                "保守型": {
+                "conservative": {
                     "action": "绝对观望",
-                    "reason": f"当前信号质量仅 {score}/10 分，风险极高",
-                    "entry_condition": "等待明确的量价反转信号或进入下一周期"
+                    "reason": f"信号质量仅 {score}/{signal_quality.get('max_score', 10)} 分，风险极高",
+                    "entry_condition": "等待明确的量价反转信号"
                 },
-                "稳健型": {
+                "moderate": {
                     "action": "观望为主",
                     "position": "建议空仓",
                     "stop_loss": "暂不适用"
                 },
-                "激进型": {
-                    "action": f"轻仓试错 ({direction})",
-                    "position": "不超过 3% 仓位",
-                    "stop_loss": f"{stop_con}元 (极严格止损)"
+                "aggressive": {
+                    "action": f"极轻仓试错 ({direction})",
+                    "position": f"不超过 {fmt_pos(0.03)} 仓位",
+                    "stop_loss": f"{stop_con}元{sl_rule}"
                 }
             }
         elif score <= 7:
             return {
-                "保守型": {
+                "conservative": {
                     "action": "观望或极轻仓",
-                    "reason": f"信号质量 {score}/10 分，未达到绝对安全边际",
-                    "entry_condition": "等待价格回调确认支撑后再入场"
+                    "reason": f"信号质量 {score} 分，未达到绝对安全边际",
+                    "entry_condition": "等待价格回调确认支撑"
                 },
-                "稳健型": {
+                "moderate": {
                     "action": f"分批建仓 ({direction})",
-                    "position": "3-5% 仓位，分2-3次买入",
-                    "stop_loss": f"{stop_con}元"
+                    "position": f"{fmt_pos(0.05)} 仓位上限",
+                    "stop_loss": f"{stop_con}元{sl_rule}"
                 },
-                "激进型": {
+                "aggressive": {
                     "action": f"按计划参与 ({direction})",
-                    "position": "8% 仓位",
-                    "stop_loss": f"{stop_agg}元 (给予一定震荡空间)"
+                    "position": f"{fmt_pos(pos_cfg.max_moderate_position)} 仓位上限",
+                    "stop_loss": f"{stop_agg}元{sl_rule}"
                 }
             }
         else:
             return {
-                "保守型": {
+                "conservative": {
                     "action": f"稳步参与 ({direction})",
-                    "reason": f"信号质量高达 {score}/10 分，多方指标产生共振",
-                    "entry_condition": "可在当前价格区间直接介入"
+                    "reason": "高信号质量共振",
+                    "entry_condition": "当前区间直接介入"
                 },
-                "稳健型": {
+                "moderate": {
                     "action": f"积极布局 ({direction})",
-                    "position": "8-10% 仓位",
-                    "stop_loss": f"{stop_con}元"
+                    "position": f"{fmt_pos(pos_cfg.max_moderate_position)} 仓位上限",
+                    "stop_loss": f"{stop_con}元{sl_rule}"
                 },
-                "激进型": {
+                "aggressive": {
                     "action": f"重仓出击 ({direction})",
-                    "position": "15-20% 仓位",
-                    "stop_loss": f"{stop_agg}元"
+                    "position": f"{fmt_pos(pos_cfg.max_aggressive_position)} 仓位上限",
+                    "stop_loss": f"{stop_agg}元{sl_rule}"
                 }
             }
 
@@ -590,7 +609,7 @@ class WyckoffReportGenerator:
             spring=SpringModel(**self.pattern_detector.detect_spring()),
             upthrust=UpthrustModel(**self.pattern_detector.detect_upthrust()),
             sos=SosModel(**self.pattern_detector.detect_sos()),
-            sow=SowModel(**self.pattern_detector.detect_sow()),
+            sow=SosModel(**self.pattern_detector.detect_sow()) if 'sow' in dir(self.pattern_detector) else WyckoffEventModel(detected=False), # Fallback
             lps=LpsModel(**self.pattern_detector.detect_lps()),
             lpsy=LpsyModel(**self.pattern_detector.detect_lpsy())
         )
@@ -637,7 +656,7 @@ class WyckoffReportGenerator:
             market_context = MarketContextModel(
                 index_symbol=index_symbol,
                 phase=market_phase_str,
-                environment=env_dict.get("environment", "Unknown"),
+                environment=env_dict.get("environment", MarketEnvironment.UNKNOWN),
                 ma_spread_pct=env_dict.get("ma_spread_pct", 0)
             )
         
@@ -655,7 +674,7 @@ class WyckoffReportGenerator:
         
         # 使用TradingPlanGenerator生成交易计划
         trading_plan_generator = TradingPlanGenerator(self.data, self.pattern_detector)
-        trading_plan_data = trading_plan_generator.generate(global_sentiment_data, phase_str)
+        trading_plan_data = trading_plan_generator.generate(global_sentiment_data, phase_str, is_a_stock=self.analyzer._is_a_stock(self.symbol))
         trading_plan = TradingPlanModel(**trading_plan_data)
         
         # 增加Wyckoff三大定律完整分析
@@ -715,4 +734,3 @@ class WyckoffReportGenerator:
             raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
         
         return report.model_dump_json(indent=2, exclude_none=True, fallback=default_serializer)
-

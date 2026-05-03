@@ -30,6 +30,24 @@ class WyckoffConfig(BaseModel):
         populate_by_name=True
     )
 
+class ScoringConfig(BaseModel):
+    """评分表显式配置"""
+    vol_strong_weight: int = Field(3, description="成交量强力确认权重")
+    vol_moderate_weight: int = Field(1, description="成交量温和配合权重")
+    trend_alignment_weight: int = Field(3, description="多时间框架一致性权重")
+    market_bullish_weight: int = Field(4, description="顺势大盘多头权重")
+    market_bearish_weight: int = Field(4, description="顺势大盘空头权重")
+    market_range_bonus: int = Field(2, description="震荡市固定加分")
+    max_score: int = Field(10, description="名义最高分")
+
+class PositionSizingConfig(BaseModel):
+    """仓位管理详细配置"""
+    max_aggressive_position: float = Field(0.20, description="激进型最高仓位 (20%)")
+    max_moderate_position: float = Field(0.10, description="稳健型最高仓位 (10%)")
+    max_conservative_position: float = Field(0.05, description="保守型最高仓位 (5%)")
+    volatility_cap_threshold: float = Field(0.04, description="高波动阈值 (ATR/Price > 4%)")
+    liquidity_min_volume_ma20: int = Field(1000000, description="最低流动性门槛 (20日均量)")
+
 class WyckoffThresholds(BaseModel):
     """威科夫分析阈值集中配置"""
     
@@ -83,6 +101,10 @@ class WyckoffThresholds(BaseModel):
     # ── 涨跌停判断 ──────────────────────────────────────
     LIMIT_UP_THRESHOLD: float = Field(0.095, description="涨停阈值")
     LIMIT_DOWN_THRESHOLD: float = Field(-0.095, description="跌停阈值")
+    
+    # ── 评分与仓位配置 ──────────────────────────────────────
+    SCORING: ScoringConfig = Field(default_factory=ScoringConfig)
+    POSITION_SIZING: PositionSizingConfig = Field(default_factory=PositionSizingConfig)
     
     def get_volatility_threshold(self, threshold_type: str, volatility_class: str) -> float:
         """

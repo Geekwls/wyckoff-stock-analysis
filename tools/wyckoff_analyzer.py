@@ -30,6 +30,7 @@ warnings.filterwarnings('ignore')
 try:
     from .exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError, PatternDetectionError
     from .config.settings import WyckoffConfig, WyckoffThresholds
+    from .core.enums import MarketEnvironment, WyckoffPhase
     from .core.data_fetcher import WyckoffDataFetcher
     from .core.pattern_detector import WyckoffPatternDetector
     from .core.law_analyzer import WyckoffLawAnalyzer
@@ -45,6 +46,7 @@ except ImportError:
         sys.path.insert(0, parent_dir)
     from tools.exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError, PatternDetectionError
     from tools.config.settings import WyckoffConfig, WyckoffThresholds
+    from tools.core.enums import MarketEnvironment, WyckoffPhase
     from tools.core.data_fetcher import WyckoffDataFetcher
     from tools.core.pattern_detector import WyckoffPatternDetector
     from tools.core.law_analyzer import WyckoffLawAnalyzer
@@ -180,11 +182,12 @@ class WyckoffAnalyzer:
 
     def _check_timeframe_agreement(self, daily_phase: str, weekly_trend: str, monthly_trend: str) -> str:
         """检查多时间框架是否一致"""
-        if 'Accumulation' in daily_phase or 'Markup' in daily_phase:
+        from .core.utils import PhaseAdapter
+        if PhaseAdapter.is_accumulation(daily_phase) or PhaseAdapter.is_markup(daily_phase):
             if weekly_trend == 'bullish' and monthly_trend == 'bullish': return 'strong_agreement'
             elif weekly_trend == 'bullish' or monthly_trend == 'bullish': return 'moderate_agreement'
             return 'disagreement'
-        elif 'Distribution' in daily_phase or 'Markdown' in daily_phase:
+        elif PhaseAdapter.is_distribution(daily_phase) or PhaseAdapter.is_markdown(daily_phase):
             if weekly_trend == 'bearish' and monthly_trend == 'bearish': return 'strong_agreement'
             elif weekly_trend == 'bearish' or monthly_trend == 'bearish': return 'moderate_agreement'
             return 'disagreement'
@@ -208,14 +211,15 @@ class WyckoffAnalyzer:
 
     def _get_resonance_trading_recommendation(self, resonance_level: str, daily_analysis: Dict) -> Dict:
         """根据共振等级提供交易建议"""
+        from .core.utils import PhaseAdapter
         phase = daily_analysis.get('phase', '')
         if resonance_level == 'strong_resonance':
-            if 'Accumulation' in phase or 'Markup' in phase:
+            if PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase):
                 return {'action': 'strong_buy', 'position_size': 'aggressive', 'reason': f'多时间框架强烈共振 + {phase}'}
             else:
                 return {'action': 'strong_sell', 'position_size': 'aggressive', 'reason': f'多时间框架强烈共振 + {phase}'}
         elif resonance_level == 'moderate_resonance':
-            if 'Accumulation' in phase or 'Markup' in phase:
+            if PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase):
                 return {'action': 'moderate_buy', 'position_size': 'moderate', 'reason': f'多时间框架中等共振 + {phase}'}
             else:
                 return {'action': 'moderate_sell', 'position_size': 'moderate', 'reason': f'多时间框架中等共振 + {phase}'}
@@ -223,6 +227,7 @@ class WyckoffAnalyzer:
 
     def identify_phase_with_rs(self) -> Dict:
         """结合相对强度的阶段识别"""
+        from .core.utils import PhaseAdapter
         # 获取大盘分析器
         idx_analyzer = self._get_cached_index_analyzer()
         if idx_analyzer is None or idx_analyzer.data is None:
@@ -234,14 +239,14 @@ class WyckoffAnalyzer:
         confidence = base_phase.get('confidence', 0.0)
         
         if rs_data.get('rs_trend') == 'rising':
-            if 'Accumulation' in base_phase['phase'] or 'Markup' in base_phase['phase']:
+            if PhaseAdapter.is_accumulation(base_phase['phase']) or PhaseAdapter.is_markup(base_phase['phase']):
                 confidence *= 1.15
-            elif 'Distribution' in base_phase['phase'] or 'Markdown' in base_phase['phase']:
+            elif PhaseAdapter.is_distribution(base_phase['phase']) or PhaseAdapter.is_markdown(base_phase['phase']):
                 confidence *= 0.75
         elif rs_data.get('rs_trend') == 'falling':
-            if 'Distribution' in base_phase['phase'] or 'Markdown' in base_phase['phase']:
+            if PhaseAdapter.is_distribution(base_phase['phase']) or PhaseAdapter.is_markdown(base_phase['phase']):
                 confidence *= 1.15
-            elif 'Accumulation' in base_phase['phase'] or 'Markup' in base_phase['phase']:
+            elif PhaseAdapter.is_accumulation(base_phase['phase']) or PhaseAdapter.is_markup(base_phase['phase']):
                 confidence *= 0.75
                 
         base_phase['relative_strength'] = rs_data
@@ -271,13 +276,13 @@ class WyckoffAnalyzer:
         }
 
     def _analyze_market_environment(self) -> Dict:
-        """量化大盘环境（强牛/牛/弱牛/震荡/熊/强熊）- 使用缓存避免重复 IO"""
+        """量化大盘环境（使用 MarketEnvironment 枚举）- 使用缓存避免重复 IO"""
         try:
             index_symbol = self._get_baseline_index_symbol()
             idx_analyzer = self._get_cached_index_analyzer()
                 
             if idx_analyzer is None or idx_analyzer.data is None or len(idx_analyzer.data) < 200:
-                return {'environment': 'unknown', 'index': index_symbol}
+                return {'environment': MarketEnvironment.UNKNOWN, 'index': index_symbol}
                 
             df = idx_analyzer.data
             close = df['Close'].iloc[-1]
@@ -292,19 +297,19 @@ class WyckoffAnalyzer:
             ma_spread_pct = (max_ma - min_ma) / min_ma
             
             if ma_spread_pct < 0.02:
-                environment = 'Range Bound (震荡)'
+                environment = MarketEnvironment.RANGE_BOUND
             elif close > ma20 and ma20 > ma50 and ma50 > ma200:
-                environment = 'Strong Bull (强牛)'
+                environment = MarketEnvironment.STRONG_BULL
             elif close > ma50 and ma50 > ma200:
-                environment = 'Bull (牛)'
+                environment = MarketEnvironment.BULL
             elif close > ma200 and ma20 < ma50:
-                environment = 'Weak Bull (弱牛)'
+                environment = MarketEnvironment.WEAK_BULL
             elif close < ma20 and ma20 < ma50 and ma50 < ma200:
-                environment = 'Strong Bear (强熊)'
+                environment = MarketEnvironment.STRONG_BEAR
             elif close < ma50 and ma50 < ma200:
-                environment = 'Bear (熊)'
+                environment = MarketEnvironment.BEAR
             else:
-                environment = 'Range Bound (震荡)'
+                environment = MarketEnvironment.RANGE_BOUND
                 
             return {
                 'environment': environment,
@@ -312,7 +317,7 @@ class WyckoffAnalyzer:
                 'ma_spread_pct': round(ma_spread_pct * 100, 2)
             }
         except Exception:
-            return {'environment': 'unknown', 'index': self._get_baseline_index_symbol()}
+            return {'environment': MarketEnvironment.UNKNOWN, 'index': self._get_baseline_index_symbol()}
 
     # ----------------------------------------------------------
     # 因果定律计算

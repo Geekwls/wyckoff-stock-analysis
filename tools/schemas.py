@@ -4,6 +4,7 @@
 """
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
+from .core.enums import MarketEnvironment, WyckoffPhase
 
 
 # ============================================================
@@ -250,7 +251,7 @@ class MarketContextModel(BaseModel):
     """市场环境"""
     index_symbol: Optional[str] = Field(default=None, description="指数代码")
     phase: Optional[str] = Field(default=None, description="市场阶段")
-    environment: Optional[str] = Field(default=None, description="市场环境")
+    environment: Optional[MarketEnvironment] = Field(default=MarketEnvironment.UNKNOWN, description="市场环境")
     ma_spread_pct: Optional[float] = Field(default=None, description="均线偏离度")
 
 

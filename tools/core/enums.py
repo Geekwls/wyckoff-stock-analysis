@@ -20,6 +20,16 @@ class WyckoffPhase(str, Enum):
     PHASE_E = "Phase E"
     UNKNOWN = "Unknown"
 
+class MarketEnvironment(str, Enum):
+    """市场环境量化枚举"""
+    STRONG_BULL = "Strong Bull"
+    BULL = "Bull"
+    WEAK_BULL = "Weak Bull"
+    RANGE_BOUND = "Range Bound"
+    BEAR = "Bear"
+    STRONG_BEAR = "Strong Bear"
+    UNKNOWN = "Unknown"
+
 class MarketSide(str, Enum):
     """市场侧倾向"""
     BULLISH = "bullish"
