@@ -79,7 +79,7 @@ class WyckoffReportGenerator:
    跌破价: {latest['breakdown_price']:.2f}
    支撑位: {latest['support_level']:.2f}
    收回价: {latest['recovery_price']:.2f}
-   收回天数: {latest['recovery_days']}天
+   收回天数: {latest['recovery_day']}天
    ✓ 真Spring（3天内收回且放量）
 """
 
