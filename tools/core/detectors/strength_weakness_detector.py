@@ -15,12 +15,13 @@ class StrengthWeaknessDetector:
             return {'detected': False}
         df = self.data.tail(window).copy()
         vol_ma = df['Volume'].rolling(20).mean()
+        price_pct_change = df['Close'].pct_change()
         
         # 使用配置中的阈值
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
         price_change_threshold = 0.02 # TODO: 迁移至 thresholds
         
-        sos_mask = (df['Close'] > df['Open']) & (df['Volume'] > vol_ma * vol_ratio_threshold) & (df['Close'].pct_change() > price_change_threshold)
+        sos_mask = (df['Close'] > df['Open']) & (df['Volume'] > vol_ma * vol_ratio_threshold) & (price_pct_change > price_change_threshold)
         if sos_mask.any():
             idx = df[sos_mask].index[-1]
             return {
@@ -29,7 +30,7 @@ class StrengthWeaknessDetector:
                 'date': idx, 
                 'price': df.loc[idx, 'Close'], 
                 'volume_ratio': round(df.loc[idx, 'Volume']/vol_ma.loc[idx], 2), 
-                'price_change': round(df.loc[idx, 'Close'].pct_change(), 4), 
+                'price_change': round(price_pct_change.loc[idx], 4), 
                 'breakthrough_level': df['High'].rolling(20).max().iloc[-1]
             }
         return {'detected': False}
@@ -40,11 +41,12 @@ class StrengthWeaknessDetector:
             return {'detected': False}
         df = self.data.tail(window).copy()
         vol_ma = df['Volume'].rolling(20).mean()
+        price_pct_change = df['Close'].pct_change()
         
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
         price_change_threshold = -0.02
         
-        sow_mask = (df['Close'] < df['Open']) & (df['Volume'] > vol_ma * vol_ratio_threshold) & (df['Close'].pct_change() < price_change_threshold)
+        sow_mask = (df['Close'] < df['Open']) & (df['Volume'] > vol_ma * vol_ratio_threshold) & (price_pct_change < price_change_threshold)
         if sow_mask.any():
             idx = df[sow_mask].index[-1]
             return {
@@ -53,7 +55,7 @@ class StrengthWeaknessDetector:
                 'date': idx, 
                 'price': df.loc[idx, 'Close'], 
                 'volume_ratio': round(df.loc[idx, 'Volume']/vol_ma.loc[idx], 2), 
-                'price_change': round(df.loc[idx, 'Close'].pct_change(), 4), 
+                'price_change': round(price_pct_change.loc[idx], 4), 
                 'breakdown_level': df['Low'].rolling(20).min().iloc[-1]
             }
         return {'detected': False}

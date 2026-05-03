@@ -164,7 +164,7 @@ class ClassicPatternDetector:
                             'breakdown_price': df.loc[b_idx, 'Low'],
                             'support_level': support_level,
                             'recovery_price': df.loc[r_idx, 'Close'],
-                            'recovery_day': int(days_to_recover),
+                            'recovery_days': int(days_to_recover),
                             'volume_ratio': round(r_vol / b_vol, 2)
                         })
         return springs

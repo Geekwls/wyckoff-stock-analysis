@@ -59,34 +59,74 @@ class ClimaxModel(BaseModel):
     volume_ratio: Optional[float] = Field(default=None, description="量比")
 
 
+class SpringSignalModel(BaseModel):
+    """Spring信号详情"""
+    date: Any = Field(description="信号日期")
+    breakdown_date: Any = Field(description="跌破日期")
+    breakdown_price: float = Field(description="跌破价格")
+    support_level: float = Field(description="支撑位")
+    recovery_price: float = Field(description="收回价格")
+    recovery_days: int = Field(description="收回天数")
+    volume_ratio: float = Field(description="量比")
+
+
 class SpringModel(BaseModel):
     """Spring事件"""
     detected: bool = Field(description="是否检测到")
     reason: Optional[str] = Field(default=None, description="未检测到的原因")
-    signals: Optional[List[Dict[str, Any]]] = Field(default=None, description="信号列表")
-    latest_spring: Optional[Dict[str, Any]] = Field(default=None, description="最新Spring")
+    signals: Optional[List[SpringSignalModel]] = Field(default=None, description="信号列表")
+    latest_spring: Optional[SpringSignalModel] = Field(default=None, description="最新Spring")
+
+
+class UpthrustSignalModel(BaseModel):
+    """Upthrust信号详情"""
+    date: Any = Field(description="信号日期")
+    breakout_date: Any = Field(description="突破日期")
+    breakout_price: float = Field(description="突破价格")
+    resistance_level: float = Field(description="阻力位")
+    rejection_price: float = Field(description="回落价格")
+    rejection_days: int = Field(description="回落天数")
+    close_from_high: float = Field(description="收盘距高点比例")
 
 
 class UpthrustModel(BaseModel):
     """Upthrust事件"""
     detected: bool = Field(description="是否检测到")
     reason: Optional[str] = Field(default=None, description="未检测到的原因")
-    signals: Optional[List[Dict[str, Any]]] = Field(default=None, description="信号列表")
-    latest_upthrust: Optional[Dict[str, Any]] = Field(default=None, description="最新Upthrust")
+    signals: Optional[List[UpthrustSignalModel]] = Field(default=None, description="信号列表")
+    latest_upthrust: Optional[UpthrustSignalModel] = Field(default=None, description="最新Upthrust")
+
+
+class SosSignalModel(BaseModel):
+    """SOS信号详情"""
+    date: Any = Field(description="信号日期")
+    price: float = Field(description="价格")
+    volume_ratio: float = Field(description="量比")
+    price_change: float = Field(description="涨幅")
+    breakthrough_level: float = Field(description="突破位")
 
 
 class SosModel(BaseModel):
     """SOS事件"""
     detected: bool = Field(description="是否检测到")
-    signals: Optional[List[Dict[str, Any]]] = Field(default=None, description="信号列表")
-    latest: Optional[Dict[str, Any]] = Field(default=None, description="最新SOS")
+    signals: Optional[List[SosSignalModel]] = Field(default=None, description="信号列表")
+    latest: Optional[SosSignalModel] = Field(default=None, description="最新SOS")
+
+
+class SowSignalModel(BaseModel):
+    """SOW信号详情"""
+    date: Any = Field(description="信号日期")
+    price: float = Field(description="价格")
+    volume_ratio: float = Field(description="量比")
+    price_change: float = Field(description="跌幅")
+    breakdown_level: float = Field(description="跌破位")
 
 
 class SowModel(BaseModel):
     """SOW事件"""
     detected: bool = Field(description="是否检测到")
-    signals: Optional[List[Dict[str, Any]]] = Field(default=None, description="信号列表")
-    latest: Optional[Dict[str, Any]] = Field(default=None, description="最新SOW")
+    signals: Optional[List[SowSignalModel]] = Field(default=None, description="信号列表")
+    latest: Optional[SowSignalModel] = Field(default=None, description="最新SOW")
 
 
 class LpsModel(BaseModel):
