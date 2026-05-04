@@ -18,11 +18,11 @@
 ```mermaid
 graph TD
     A[AI Agent / Human] -->|调用| B(SKILL.md - 决策大脑)
-    B -->|调度| C{wyckoff_analyzer.py - 门面模式}
-    C -->|数据获取| D[core/data_fetcher.py]
-    C -->|形态探测| E[core/pattern_detector.py]
-    C -->|规律分析| F[core/law_analyzer.py]
-    C -->|报告生成| G[core/report_generator.py]
+    B -->|调度| C{src/wyckoff/facade.py - 统一入口}
+    C -->|数据获取| D[src/wyckoff/core/data_fetcher.py]
+    C -->|形态探测| E[src/wyckoff/core/pattern_detector.py]
+    C -->|规律分析| F[src/wyckoff/core/law_analyzer.py]
+    C -->|报告生成| G[src/wyckoff/core/report_generator.py]
     D -.->|A股/港股| H[Baostock/YFinance]
     G -->|输出| I[结构化 JSON / 专业文本报告]
 ```
@@ -34,7 +34,7 @@ graph TD
 | 特性 | 描述 |
 | :--- | :--- |
 | **服务化架构** | 引入 `ScreenerService`，统一并行扫描与深度筛选入口，性能提升 200%。 |
-| **原生 MCP 支持** | 内置 `mcp_server.py`，支持资源安全管理（Context Management）。 |
+| **原生 MCP 支持** | 内置 `apps/mcp/server.py`，支持资源安全管理（Context Management）。 |
 | **内存与性能优化** | 集成 **LRUCache (TTL)** 缓存机制，确保在大规模扫描时内存占用稳定。 |
 | **回测与情绪引擎** | 独立 `BacktestEngine` 与 `SentimentAnalyzer`，提供历史胜率参考。 |
 | **强类型 Pydantic v2** | 全面重构 `schemas.py`，所有输出均经过严格的嵌套模型校验。 |

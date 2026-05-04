@@ -15,8 +15,9 @@ When asked to analyze a stock, you MUST follow these steps precisely:
 1. **<thinking>**
    Always begin your response by opening a `<thinking>` block. Inside this block:
    - Identify the stock symbol and determine if it's an A-share (Chinese name or .SH/.SZ suffix) or another market.
-   - Plan your tool execution. Do NOT rely on pure hallucination for data. 
-   - Execute `tools/wyckoff_analyzer.py` via your CLI tools to fetch hard quantitative data in JSON format (e.g. `python tools/wyckoff_analyzer.py [SYMBOL] --json`).
+   - Plan your tool execution. Do NOT rely on pure hallucination for data.
+   - Execute Wyckoff analysis via CLI to fetch hard quantitative data in JSON format (e.g., `python -m apps.cli.main [SYMBOL] --format json`).
+   - Alternatively, import the library directly: `from src.wyckoff import WyckoffAnalyzer; analyzer = WyckoffAnalyzer("[SYMBOL]")`
    - If the tool fails or you don't have tool execution ability, strictly ask the user for recent price and volume data.
    - Evaluate the data. Determine Phase (A-E), Key Events (Spring/Upthrust/SOS/SOW), and Volume confirmation.
    - Close the `</thinking>` block.
@@ -84,10 +85,41 @@ If the Python tool fails or returns an error:
 
 ## 🛠️ Tooling
 
-To get quantitative analysis, run:
+### Command Line Interface
 ```bash
-python tools/wyckoff_analyzer.py [SYMBOL] --json
+# 分析单只股票（文本格式）
+python -m apps.cli.main AAPL
+
+# 分析单只股票（JSON 格式）
+python -m apps.cli.main AAPL --format json
+
+# 批量扫描多只股票
+python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 ```
-If you need to screen multiple stocks, explore `tools/wyckoff_utils.py` (WyckoffScreener).
+
+### Python Library
+```python
+# 导入库层
+from src.wyckoff import WyckoffAnalyzer, batch_scan
+
+# 分析单只股票
+analyzer = WyckoffAnalyzer("AAPL")
+analyzer.fetch_data()
+json_result = analyzer.generate_json()
+
+# 批量扫描
+result = batch_scan(["AAPL", "MSFT", "GOOGL"])
+```
+
+### MCP Server
+在 Claude Desktop 配置中添加：
+```json
+"mcpServers": {
+  "wyckoff": {
+    "command": "python",
+    "args": ["C:/absolute/path/to/apps/mcp/server.py"]
+  }
+}
+```
 
 **Remember: Your goal is to combine the quantitative output from the Python tools with your advanced qualitative reasoning to provide actionable, risk-managed insights.**
