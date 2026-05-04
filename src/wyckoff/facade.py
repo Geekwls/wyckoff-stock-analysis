@@ -160,6 +160,44 @@ class WyckoffAnalyzer:
         merged['monthly_trend'] = monthly
         return merged
 
+    def _is_a_stock(self, symbol: str) -> bool:
+        """判断是否为 A 股 (P2 辅助接口)"""
+        from .core.symbol_resolver import SymbolResolver, MarketType
+        info = SymbolResolver().resolve(symbol)
+        return info.market == MarketType.A_SHARE
+
+    def identify_phase_with_rs(self) -> Dict:
+        """识别阶段并附加相对强度分析 (P2 增强接口)"""
+        # 1. 获取多时间框架阶段信息
+        result = self.identify_phase_multi_timeframe()
+
+        # 2. 获取基准指数分析器
+        idx_analyzer = self._get_cached_index_analyzer()
+        if idx_analyzer and idx_analyzer.data is not None:
+            # 3. 计算相对强度
+            rs_data = self.rs_analyzer.calculate_rs(idx_analyzer.data)
+            result['relative_strength'] = rs_data
+        else:
+            result['relative_strength'] = {'rs_trend': 'unknown', 'rs_value': None}
+
+        return result
+
+    def _get_cached_index_analyzer(self) -> Optional['WyckoffAnalyzer']:
+        """获取并缓存基准指数分析器"""
+        if self._index_analyzer_cache is not None:
+            return self._index_analyzer_cache
+
+        index_symbol = self._get_baseline_index_symbol()
+        try:
+            # 创建指数分析器（注意：避免递归创建指数的指数）
+            idx_analyzer = WyckoffAnalyzer(index_symbol, self.period, self.config, self.cache_service)
+            idx_analyzer.fetch_data()
+            self._index_analyzer_cache = idx_analyzer
+            return idx_analyzer
+        except Exception as e:
+            logger.warning(f"Failed to initialize index analyzer for {index_symbol}: {e}")
+            return None
+
     def calculate_cause_effect(self) -> Dict:
         """计算因果效应"""
         if not self.pattern_detector:

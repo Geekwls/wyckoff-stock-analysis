@@ -772,7 +772,7 @@ class WyckoffReportGenerator:
             wyckoff_laws=wyckoff_laws,
             terminology_guide=self.get_relevant_terms(phase_str, events.model_dump()),
             risk_specific_advice=risk_advice,
-            interactive_qa=self.generate_interactive_qa(signal_quality_data, trading_plan_data),
+            interactive_qa=self.generate_interactive_qa(signal_quality.model_dump(), trading_plan_data),
             performance_tracking=performance_tracking
         )
         
