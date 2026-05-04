@@ -9,7 +9,8 @@ from .meng_pattern_enhancer import MengPatternEnhancer
 from ..config.settings import WyckoffConfig, WyckoffThresholds
 from ..schemas import (
     ClimaxModel, WyckoffEventModel, SpringModel, UpthrustModel,
-    SosModel, SowModel, LpsModel, LpsyModel, TradingRangeModel
+    SosModel, SowModel, LpsModel, LpsyModel, TradingRangeModel,
+    JocModel, FtiModel
 )
 import logging
 
