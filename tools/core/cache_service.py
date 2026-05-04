@@ -386,6 +386,63 @@ class CacheService:
 
         logger.info(f"缓存预热完成: {len(cache_data)}项")
 
+    def get_legacy_lru_adapter(
+        self,
+        namespace: str,
+        max_size: int = 256,
+        ttl_seconds: int = 3600,
+    ) -> "LegacyLRUAdapter":
+        """
+        获取兼容旧LRUCache接口的适配器。
+
+        注意：为了保持旧接口语义，每个适配器实例会使用独立前缀来隔离键空间。
+        """
+        return LegacyLRUAdapter(
+            cache_service=self,
+            namespace=namespace,
+            max_size=max_size,
+            ttl_seconds=ttl_seconds,
+        )
+
+
+class LegacyLRUAdapter:
+    """兼容旧 LRUCache 的薄封装，底层统一到 CacheService。"""
+
+    def __init__(self, cache_service: CacheService, namespace: str, max_size: int, ttl_seconds: int):
+        self._cache_service = cache_service
+        self._namespace = namespace
+        self._instance_prefix = CacheKey.generate("legacy", namespace, id(self))
+        self._cache_service.memory_cache.max_size = max_size
+        self._ttl_seconds = ttl_seconds
+
+    def _parts(self, key: str):
+        return (self._instance_prefix, key)
+
+    def get(self, key: str):
+        return self._cache_service.get(self._namespace, *self._parts(key))
+
+    def put(self, key: str, value: Any):
+        self._cache_service.set(
+            self._namespace,
+            *self._parts(key),
+            value=value,
+            ttl=self._ttl_seconds,
+        )
+
+    def get_or_compute(self, key: str, compute_fn: Callable, *args, **kwargs):
+        value = self.get(key)
+        if value is not None:
+            return value
+        value = compute_fn(*args, **kwargs)
+        self.put(key, value)
+        return value
+
+    def invalidate(self, key: str = None):
+        if key is not None:
+            self._cache_service.delete(self._namespace, *self._parts(key))
+            return
+        self._cache_service.invalidate_namespace(self._namespace)
+
 
 class CachedDataFetcher:
     """带缓存的数据获取器（示例）"""

@@ -14,7 +14,7 @@ from datetime import datetime
 # 基础组件
 from .config.settings import WyckoffConfig, WyckoffThresholds
 from .core.enums import MarketEnvironment, WyckoffPhase
-from .core.cache import LRUCache
+from .core.cache_service import CacheService
 
 # 编排层 (P2)
 from .core.orchestrator import WyckoffOrchestrator
@@ -36,12 +36,23 @@ class WyckoffAnalyzer:
     此类作为统一入口保持向下兼容。
     """
 
-    def __init__(self, symbol: str, period: str = "1y", config: WyckoffConfig = None):
+    def __init__(
+        self,
+        symbol: str,
+        period: str = "1y",
+        config: WyckoffConfig = None,
+        cache_service: Optional[CacheService] = None,
+    ):
         self.symbol = symbol
         self.period = period
         self.config = config or WyckoffConfig()
         self.thresholds = WyckoffThresholds()
-        self._analysis_cache = LRUCache(max_size=256, ttl_seconds=3600)
+        self.cache_service = cache_service or CacheService.get_instance()
+        self._analysis_cache = self.cache_service.get_legacy_lru_adapter(
+            namespace="analysis",
+            max_size=256,
+            ttl_seconds=3600,
+        )
         
         # 核心编排器
         self.orchestrator = WyckoffOrchestrator(self.config)
