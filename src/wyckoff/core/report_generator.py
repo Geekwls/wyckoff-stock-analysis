@@ -130,8 +130,19 @@ class WyckoffReportGenerator:
             # Spring (弹簧)
             spring = evidence.get('spring', {})
             if spring.get('detected'):
+                # 尝试获取日内数据进行微观分析
+                try:
+                    intraday_data = self.analyzer.get_intraday_data("60m")
+                    # 这里通过 enhancer 分析日内质量
+                    spring_quality = self.pattern_detector.meng_enhancer._analyze_spring_intraday_quality(intraday_data)
+                    quality_text = f"质量评分{spring_quality['quality_score']} ({spring_quality['recovery_type']})"
+                    observation = f"\n       微观细节: {spring_quality['observation']}"
+                except Exception:
+                    quality_text = "质量未评估 (数据获取失败)"
+                    observation = ""
+
                 report += f"""
-   ✓ Spring (弹簧): {spring['date']} 收盘{spring['close']:.2f} 滤网{spring['filters_passed']}/5 置信度{spring['confidence']:.0f}%
+   ✓ Spring (弹簧): {spring['date']} 收盘{spring['close']:.2f} 滤网{spring['filters_passed']}/5 {quality_text}{observation}
 """
             else:
                 report += f"""
@@ -149,10 +160,32 @@ class WyckoffReportGenerator:
 """
             else:
                 report += f"""
-   >>> 无 Phase A 证据 ({evidence_count}/{total_checks}) - 不建议入场
+   >>> 无 Phase A 证据 - 当前处于趋势或深度休整中
 """
 
+        # ── 孟洪涛进阶预警：枯燥区与死角突破 ──────────
+        boring_res = self.pattern_detector.detect_boring_zone()
+        dead_corner = self.pattern_detector.detect_dead_corner_breakout()
+        
+        if boring_res.get('detected') or boring_res.get('score', 0) >= 70:
+            status = "🔥 高能预警" if boring_res.get('high_alert') else "⚡ 深度关注"
             report += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【{status}：孟洪涛枯燥区】
+   状态: 检测到显著枯燥区
+   评分: {boring_res['score']}/100
+   量能萎缩: {boring_res['vol_contraction']*100:.0f}%
+   波动收敛: {boring_res['atr_contraction']*100:.0f}%
+   预警等级: {"死角突破临界" if boring_res.get('high_alert') else "能量积蓄中"}
+"""
+            if dead_corner.get('detected'):
+                report += f"""
+   >>> 🎯 [实战确认] 死角突破已发生！
+       突破价: {dead_corner['breakout_price']}
+       量比: {dead_corner['breakout_volume_ratio']:.1f}x
+"""
+
+        report += """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -362,20 +395,15 @@ class WyckoffReportGenerator:
         if vsa_lines:
             report += "\n📊 VSA辅助信号（量价微观分析）:\n" + "\n".join(vsa_lines) + "\n"
 
-        # BOREDOM_ZONE 量化（枯燥区）
-        boredom = self._quantify_boredom_zone()
-        report += """
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-【BOREDOM_ZONE 检测】
-"""
+        # ── 孟洪涛枯燥区分析 ──────────
+        boredom = self.pattern_detector.detect_boring_zone()
         report += f"""
-枯燥区评分: {boredom.get('score', 0)}/100 {'🔥' if boredom.get('detected') else ''}
-近20日振幅: {boredom.get('range_pct', 0)*100:.2f}%
-近20日波动率: {boredom.get('close_std_pct', 0)*100:.2f}%
-量能干涸度: {boredom.get('volume_dryness', 0):.2f} (<1 越枯燥)
-整理持续: {boredom.get('duration_days', 0)} 天
-结论: {'进入高价值枯燥区，警惕后续爆发。' if boredom.get('detected') else '暂未形成典型枯燥区。'}
+【枯燥区分析】
+枯燥区评分: {boredom.get('score', 0)}/100 
+量能收缩比: {boredom.get('vol_contraction', 1.0)*100:.1f}%
+波动收敛比: {boredom.get('atr_contraction', 1.0)*100:.1f}%
+整理持续: {boredom.get('duration', 0)} 天
+结论: {'🔥 检测到高价值枯燥区，系统已进入高能预警状态。' if boredom.get('detected') else '暂未形成典型枯燥区。'}
 """
 
         # 因果测算
@@ -397,6 +425,12 @@ class WyckoffReportGenerator:
         current_price = self.data['Close'].iloc[-1]
         market_env_res = self.analyzer._analyze_market_environment()
         market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
+        
+        # 收集所有识别出的形态供建议引擎评分
+        patterns = self.pattern_detector._collect_all_events()
+        patterns['phase'] = phase_str
+        patterns['boring_zone'] = boring_res
+        patterns['dead_corner_breakout'] = dead_corner
         
         signal_quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
 

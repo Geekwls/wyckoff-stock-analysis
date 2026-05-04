@@ -20,6 +20,12 @@ sys.path.insert(0, project_root)
 from src.wyckoff.facade import WyckoffAnalyzer, batch_scan
 from src.wyckoff.config.settings import WyckoffConfig
 
+# 强制终端输出为 UTF-8 (解决 Windows 编码问题)
+if sys.platform.startswith('win'):
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 
 def check_dependencies():
     """检查关键依赖是否已安装"""

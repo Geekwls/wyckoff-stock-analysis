@@ -25,7 +25,7 @@ class BaoStockStrategy(DataSourceStrategy):
             logger.error(f"baostock连接异常: {e}")
             return False
 
-    def fetch(self, symbol: str, period: str) -> pd.DataFrame:
+    def fetch(self, symbol: str, period: str, frequency: str = "d") -> pd.DataFrame:
         if not self.is_available():
             raise DataFetchError(symbol, "BaoStock 服务不可用")
 
@@ -38,14 +38,27 @@ class BaoStockStrategy(DataSourceStrategy):
             code = f"{prefix}.{symbol}"
 
         end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
-        period_days = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
-        days = period_days.get(period, 365)
+        
+        # 对于日线以上频率，使用period参数；对于日内频率，限制时间窗口
+        if frequency == "d":
+            period_days = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
+            days = period_days.get(period, 365)
+        else:
+            # 日内数据（如60m），通常只获取最近30天
+            days = 30
+            
         start_date = (pd.Timestamp.now() - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
 
+        # Baostock 频率映射
+        bs_freq = "d" if frequency == "d" else "60" if frequency == "60m" else frequency
+        fields = "date,open,high,low,close,volume,amount"
+        if bs_freq != "d":
+            fields = "date,time,open,high,low,close,volume,amount"
+
         rs = bs.query_history_k_data_plus(
-            code, "date,open,high,low,close,volume,amount",
+            code, fields,
             start_date=start_date, end_date=end_date,
-            frequency="d", adjustflag="3"
+            frequency=bs_freq, adjustflag="3"
         )
 
         data_list = []
@@ -57,10 +70,17 @@ class BaoStockStrategy(DataSourceStrategy):
 
         df = pd.DataFrame(data_list, columns=rs.fields)
         df = df.rename(columns={
-            'date': 'Date', 'open': 'Open', 'high': 'High',
+            'open': 'Open', 'high': 'High',
             'low': 'Low', 'close': 'Close', 'volume': 'Volume'
         })
-        df['Date'] = pd.to_datetime(df['Date'])
+        
+        # 处理时间索引
+        if bs_freq == "d":
+            df['Date'] = pd.to_datetime(df['date'])
+        else:
+            # intraday 数据使用 time 列 (YYYYMMDDHHMMSSmmm)
+            df['Date'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S%f')
+            
         df = df.set_index('Date')
         
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:

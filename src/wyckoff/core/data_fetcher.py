@@ -62,7 +62,7 @@ class WyckoffDataFetcher:
         self.config = config or WyckoffConfig()
         self.resolver = SymbolResolver()
 
-    def fetch_data(self, symbol: str, period: str) -> Tuple[str, pd.DataFrame]:
+    def fetch_data(self, symbol: str, period: str, frequency: str = "d") -> Tuple[str, pd.DataFrame]:
         """
         统一获取数据入口
         1. 解析代码 (SymbolResolver)
@@ -87,9 +87,9 @@ class WyckoffDataFetcher:
 
             # 3. 获取对应策略并抓取
             strategy = DataSourceFactory.create(info.source, self.config)
-            data = strategy.fetch(info.normalized, period)
+            data = strategy.fetch(info.normalized, period, frequency=frequency)
 
-            if data is None or len(data) < self.config.min_data_length:
+            if data is None or (frequency == "d" and len(data) < self.config.min_data_length):
                 raise InsufficientDataError(
                     info.normalized, 
                     self.config.min_data_length, 

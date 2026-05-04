@@ -1,43 +1,27 @@
-# Python
+# Wyckoff Analysis Skill - Git Ignore
+
+# Security: Ignore internal cache and state files
+stock_cache.json
+src/wyckoff/stock_cache.json
+.cache/
+
+# Python environment
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
+.env
+.venv
 env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Project specific
 .pytest_cache/
 .coverage
 htmlcov/
-.tox/
-.mypy_cache/
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Project cache
-tools/stock_cache.json
-
-# Scratch / temp refactor scripts
+dist/
+build/
+*.egg-info/
 scratch/
-
-# Local env secrets
-.env
-
-# Large Reference PDF Books
-*.pdf

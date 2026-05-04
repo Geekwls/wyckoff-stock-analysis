@@ -30,7 +30,12 @@ class SymbolResolver:
         if cache_file is None:
             self.cache_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "stock_cache.json")
         else:
-            self.cache_file = cache_file
+            # 安全增强：防止路径穿越，强制限定在当前项目的合理目录下，或者仅接受文件名
+            base_filename = os.path.basename(cache_file)
+            if not base_filename.endswith('.json'):
+                base_filename += '.json'
+            self.cache_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), base_filename)
+            
         self._name_cache: Dict[str, str] = self._load_cache()
 
     def _load_cache(self) -> Dict[str, str]:
@@ -44,6 +49,15 @@ class SymbolResolver:
 
     def resolve(self, symbol: str) -> SymbolInfo:
         """解析输入的代码/名称"""
+        if not symbol or not isinstance(symbol, str):
+            raise ValueError("Invalid symbol type")
+            
+        # 基础安全性校验：限制长度和特殊字符，防止注入攻击
+        if len(symbol) > 50 or not all(c.isalnum() or c in '.-_/\u4e00-\u9fff' for c in symbol):
+             logger.warning(f"检测到潜在的非法代码输入: {symbol}")
+             # 对于明显非法的输入，直接抛出异常或返回 UNKNOWN
+             return SymbolInfo(original=symbol, normalized="UNKNOWN", market=MarketType.UNKNOWN, source="none")
+
         original = symbol
         
         # 1. 处理中文名称解析

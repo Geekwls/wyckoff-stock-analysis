@@ -77,15 +77,20 @@ class WyckoffAnalyzer:
         if hasattr(self.orchestrator.data_fetcher, 'logout_baostock'):
             self.orchestrator.data_fetcher.logout_baostock()
 
-    def fetch_data(self) -> pd.DataFrame:
+    def fetch_data(self, frequency: str = "d") -> pd.DataFrame:
         """获取数据并初始化所有探测器"""
-        self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period)
+        self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)
         if self.data is not None:
             self.pattern_detector = WyckoffPatternDetector(self.data, self.config, self._analysis_cache)
             self.law_analyzer = WyckoffLawAnalyzer(self.data, self.config, self.pattern_detector)
             self.mtf_analyzer = MultiTimeframeAnalyzer(self.data, self.pattern_detector)
             self.rs_analyzer = RelativeStrengthAnalyzer(self.data, self.symbol)
         return self.data
+
+    def get_intraday_data(self, frequency: str = "60m") -> pd.DataFrame:
+        """获取日内数据（不更新主数据状态）"""
+        _, data = self.orchestrator.data_fetcher.fetch_data(self.symbol, "1mo", frequency=frequency)
+        return data
 
     def generate_report(self) -> str:
         """生成文本报告"""

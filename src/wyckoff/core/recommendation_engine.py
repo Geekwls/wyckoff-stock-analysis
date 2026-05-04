@@ -84,6 +84,19 @@ class RecommendationEngine:
 
             base_score += max_weight * min(quality_factor, 1.5)
 
+        # --- 孟洪涛进阶信号：枯燥区与死角突破 ---
+        boring = pattern_results.get('boring_zone', {})
+        if boring.get('detected'):
+            base_score += 10
+            reasons.append(f"检测到“枯燥区” (得分:{boring['score']})，主力可能正在吸筹")
+            if boring.get('high_alert'):
+                reasons.append("🔥 高能预警：系统已进入“死角突破”严密监控模式")
+
+        dead_corner = pattern_results.get('dead_corner_breakout', {})
+        if dead_corner.get('detected'):
+            base_score += 25
+            reasons.append("🎯 发现“死角突破”信号！从枯燥区放量跃起，极具爆发力")
+
         # 冲突惩罚
         if bullish_count > 0 and bearish_count > 0:
             base_score -= self.thresholds.CONFLICT_PENALTY
@@ -102,10 +115,16 @@ class RecommendationEngine:
             reasons.append("大盘环境不利于做多 (-10分)")
 
         final_score = int(max(0, min(base_score, 100)))
+        
+        # 针对枯燥区 85 分以上的特殊提升
+        if boring.get('score', 0) >= 85 and final_score < 85:
+            final_score = 85
+            reasons.append("触发高能预警阈值，综合评分上调至 85 (死角突破临界)")
+
         return SignalQualityModel(
             score=final_score,
             max_score=100,
-            confidence="高" if final_score >= 70 else "中" if final_score >= 40 else "低",
+            confidence="极高" if final_score >= 85 else "高" if final_score >= 70 else "中" if final_score >= 40 else "低",
             reasons=reasons
         )
 

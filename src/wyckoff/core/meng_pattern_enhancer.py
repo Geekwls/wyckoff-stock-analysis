@@ -403,6 +403,136 @@ class MengPatternEnhancer:
 
         return atr.iloc[-1] if len(atr) > 0 else 0
 
+    def detect_boring_zone(self, window: int = 14) -> Dict:
+        """
+        检测“枯燥区”（Boring Zone）
+        
+        书中特征：价格波动极小，成交量极度萎缩，市场处于无聊状态，主力在默默吸筹。
+        """
+        if self.data is None or len(self.data) < window + 20:
+            return {"detected": False, "reason": "insufficient_data"}
+
+        df = self.data.tail(window + 20).copy()
+        
+        # 计算历史波动率参考
+        atr_series = self._calculate_atr_series(df, 14)
+        df['ATR_Pct'] = atr_series / df['Close'] * 100
+        avg_atr_pct = df['ATR_Pct'].iloc[:-window].mean()
+        
+        # 枯燥区特征计算
+        recent = df.tail(window)
+        recent_vol_avg = recent['Volume'].mean()
+        overall_vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
+        
+        vol_contraction = recent_vol_avg / overall_vol_ma20 if overall_vol_ma20 > 0 else 1.0
+        atr_contraction = recent['ATR_Pct'].mean() / avg_atr_pct if avg_atr_pct > 0 else 1.0
+        
+        # 判定标准：量能萎缩且波动率处于低位
+        is_boring = vol_contraction < 0.75 and atr_contraction < 0.8
+        
+        score = self.calculate_boring_alert_score(vol_contraction, atr_contraction, window)
+        
+        return {
+            "detected": is_boring,
+            "score": score,
+            "vol_contraction": round(vol_contraction, 2),
+            "atr_contraction": round(atr_contraction, 2),
+            "duration": window,
+            "high_alert": score >= 85
+        }
+
+    def calculate_boring_alert_score(self, vol_contraction, atr_contraction, duration) -> int:
+        """计算枯燥区评分及预警等级"""
+        score = 0
+        # 量能萎缩得分 (40分)
+        if vol_contraction < 0.5: score += 40
+        elif vol_contraction < 0.7: score += 30
+        elif vol_contraction < 0.85: score += 15
+        
+        # 波动率收敛得分 (40分)
+        if atr_contraction < 0.6: score += 40
+        elif atr_contraction < 0.75: score += 30
+        elif atr_contraction < 0.9: score += 15
+        
+        # 持续时间得分 (20分)
+        if duration >= 20: score += 20
+        elif duration >= 10: score += 15
+        elif duration >= 5: score += 10
+        
+        return score
+
+    def _analyze_spring_intraday_quality(self, intraday_data: pd.DataFrame) -> Dict:
+        """
+        分析 Spring 的日内质量（使用 60 分钟线）
+        
+        分析逻辑：
+        1. 稳步吸筹型：下影线拉回过程中成交量递增，且价格重心稳步抬升。
+        2. 尾盘偷袭型：仅在最后时段无量拉回，或者单笔巨量拉回后又陷入沉寂。
+        """
+        if intraday_data is None or len(intraday_data) < 4:
+            return {"quality_score": 50, "recovery_type": "unknown", "observation": "数据不足以分析日内质量"}
+
+        # 简单的日内逻辑：观察最后 4 根 60m K 线
+        last_bars = intraday_data.tail(4)
+        price_trend = last_bars['Close'].iloc[-1] > last_bars['Close'].iloc[0]
+        vol_trend = last_bars['Volume'].iloc[-1] > last_bars['Volume'].mean()
+        
+        if price_trend and vol_trend:
+            return {
+                "quality_score": 85,
+                "recovery_type": "steady_accumulation",
+                "observation": "日内稳步拉回，且伴随主动性买盘放量，Spring 信号极其可靠"
+            }
+        elif price_trend and not vol_trend:
+            return {
+                "quality_score": 65,
+                "recovery_type": "late_sneak_attack",
+                "observation": "日内尾盘无量拉回，存在偷袭嫌疑，需观察次日跟随情况"
+            }
+        else:
+            return {
+                "quality_score": 40,
+                "recovery_type": "weak_recovery",
+                "observation": "日内反弹乏力，Spring 质量欠佳"
+            }
+
+    def _calculate_atr_series(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """计算ATR序列"""
+        high = df['High']
+        low = df['Low']
+        close = df['Close'].shift(1)
+        tr = pd.concat([high - low, (high - close).abs(), (low - close).abs()], axis=1).max(axis=1)
+        return tr.rolling(window=period, min_periods=1).mean()
+
+    def detect_dead_corner_breakout(self) -> Dict:
+        """
+        检测“死角突破”（Dead Corner Breakout）
+        
+        书中特征：价格在枯燥区末端，以放量阳线或连续放量上涨突破枯燥区上沿。
+        """
+        boring_res = self.detect_boring_zone(window=10)
+        if not boring_res.get("detected") and boring_res.get("score", 0) < 70:
+            return {"detected": False, "reason": "no_boring_zone_base"}
+
+        df = self.data.tail(20).copy()
+        boring_high = df['High'].iloc[-10:-1].max()
+        current_bar = df.iloc[-1]
+        
+        # 突破特征：放量 + 价格创新高
+        vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
+        breakout_vol = current_bar['Volume'] > vol_ma20 * 1.5
+        breakout_price = current_bar['Close'] > boring_high
+        
+        is_breakout = breakout_vol and breakout_price
+        
+        return {
+            "detected": is_breakout,
+            "boring_zone": boring_res,
+            "breakout_price": round(current_bar['Close'], 2),
+            "breakout_volume_ratio": round(current_bar['Volume'] / vol_ma20, 2) if vol_ma20 > 0 else 1.0,
+            "confidence": 85 if is_breakout else 0
+        }
+
     def _detect_trading_range(self, df: pd.DataFrame, window: int = 60) -> Dict:
         """检测交易区间"""
         if len(df) < window:

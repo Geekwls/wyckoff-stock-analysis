@@ -173,18 +173,26 @@ class FileCache:
 
     def __init__(self, cache_dir: str = None):
         self.cache_dir = Path(cache_dir) if cache_dir else Path(".cache")
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # 安全增强：使用受限权限 (0700) 创建目录
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            if os.name != 'nt': # Windows 对 mode 的支持有限，但在 Unix 上必须设置
+                os.chmod(self.cache_dir, 0o700)
+        except Exception as e:
+            logger.warning(f"无法设置缓存目录权限: {e}")
+            
         self.lock = threading.RLock()
 
     def get(self, key: str) -> Optional[Any]:
         """获取缓存值"""
         cache_file = self.cache_dir / f"{key}.json"
 
-        if not cache_file.exists():
-            return None
-
+        # 安全增强：消除 TOCTOU 竞态条件，直接尝试在锁内打开文件
         try:
             with self.lock:
+                if not cache_file.exists():
+                    return None
+                    
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
 
@@ -192,10 +200,15 @@ class FileCache:
                 if "expires_at" in data:
                     expires_at = data["expires_at"]
                     if time.time() > expires_at:
-                        cache_file.unlink()
+                        try:
+                            cache_file.unlink()
+                        except FileNotFoundError:
+                            pass
                         return None
 
                 return data.get("value")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
         except Exception as e:
             logger.warning(f"文件缓存读取失败 {key}: {e}")
             return None
@@ -224,10 +237,14 @@ class FileCache:
         """删除缓存值"""
         cache_file = self.cache_dir / f"{key}.json"
 
+        # 安全增强：在锁内执行检查与删除，确保原子性
         with self.lock:
-            if cache_file.exists():
-                cache_file.unlink()
-                return True
+            try:
+                if cache_file.exists():
+                    cache_file.unlink()
+                    return True
+            except FileNotFoundError:
+                pass
             return False
 
     def clear(self):

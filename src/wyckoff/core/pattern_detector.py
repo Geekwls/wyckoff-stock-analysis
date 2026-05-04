@@ -226,6 +226,14 @@ class WyckoffPatternDetector:
                 "stopping_vol": {"detected": False, "error": str(e)}
             }
 
+    def detect_boring_zone(self) -> Dict:
+        """检测枯燥区 (Boring Zone)"""
+        return self.meng_enhancer.detect_boring_zone()
+
+    def detect_dead_corner_breakout(self) -> Dict:
+        """检测死角突破 (Dead Corner Breakout)"""
+        return self.meng_enhancer.detect_dead_corner_breakout()
+
     # ============================================================
     # 孟洪涛核心证据检测（Core Evidence Detection）
     # ============================================================
@@ -388,97 +396,6 @@ class WyckoffPatternDetector:
             logger.exception(f"SOT检测失败: {e}")
             return {"detected": False, "error": str(e)}
 
-    def detect_spring_menhongtao(self, lookback_days: int = 10) -> Dict:
-        """
-        检测弹簧（Spring）- 孟洪涛5滤网严格标准
-
-        孟洪涛标准：
-        1. 下影线刺破支撑位（至少2%误差范围）
-        2. 收盘价回到支撑位之上
-        3. 下影线长度>1.5倍实体长度
-        4. 成交量放大（>1.2倍50日均量）
-        5. 必须有充分的底部准备（因）
-
-        Returns:
-            Dict: {
-                "detected": bool,
-                "date": str (检测日期),
-                "low": float (最低价),
-                "close": float (收盘价),
-                "lower_wick": float (下影线长度),
-                "volume_ratio": float (成交量倍数),
-                "confidence": float (0-100),
-                "filters_passed": int (通过的滤网数量)
-            }
-        """
-        try:
-            # 确定支撑位（最近60天的最低点）
-            support_level = self.data.tail(60)['Low'].min()
-            support_ref = support_level * 0.98  # 允许2%误差
-
-            recent_data = self.data.tail(lookback_days)
-            avg_vol = self.data['Volume'].tail(50).mean()
-
-            for idx in range(len(recent_data)):
-                row = recent_data.iloc[idx]
-                lower_wick = min(row['Close'], row['Open']) - row['Low']
-                body_size = abs(row['Close'] - row['Open'])
-                vol_expansion = row['Volume'] / avg_vol if avg_vol > 0 else 0
-
-                # 5滤网检测
-                filters_passed = 0
-
-                # 滤网1：刺破支撑位
-                filter1 = row['Low'] < support_ref
-                if filter1:
-                    filters_passed += 1
-
-                # 滤网2：收盘回到支撑位之上
-                filter2 = row['Close'] > support_ref
-                if filter2:
-                    filters_passed += 1
-
-                # 滤网3：下影线>1.5倍实体
-                filter3 = lower_wick > body_size * 1.5
-                if filter3:
-                    filters_passed += 1
-
-                # 滤网4：成交量放大
-                filter4 = vol_expansion > 1.2
-                if filter4:
-                    filters_passed += 1
-
-                # 滤网5：有底部准备（通过检测SC和PS）
-                # 这个需要额外的上下文，暂时作为通过条件
-                filters_passed += 1
-
-                # Spring判定：至少通过4/5滤网
-                is_spring = filters_passed >= 4
-
-                if is_spring:
-                    confidence = (filters_passed / 5.0) * 100
-                    return {
-                        "detected": True,
-                        "date": row.name.strftime("%Y-%m-%d"),
-                        "low": float(row['Low']),
-                        "close": float(row['Close']),
-                        "lower_wick": float(lower_wick),
-                        "body_size": float(body_size),
-                        "volume_ratio": float(vol_expansion),
-                        "support_level": float(support_level),
-                        "filters_passed": filters_passed,
-                        "confidence": float(confidence)
-                    }
-
-            return {
-                "detected": False,
-                "reason": "No qualified Spring pattern found",
-                "filters_passed": 0
-            }
-
-        except Exception as e:
-            logger.exception(f"Spring检测失败: {e}")
-            return {"detected": False, "error": str(e)}
 
     def analyze_phase_a_evidence(self) -> Dict:
         """

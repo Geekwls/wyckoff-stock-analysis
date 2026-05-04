@@ -10,7 +10,7 @@ class DataSourceStrategy(ABC):
         self.config = config or WyckoffConfig()
 
     @abstractmethod
-    def fetch(self, symbol: str, period: str) -> pd.DataFrame:
+    def fetch(self, symbol: str, period: str, frequency: str = "d") -> pd.DataFrame:
         """
         获取原始数据
         
