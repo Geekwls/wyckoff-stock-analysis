@@ -217,12 +217,14 @@ class WyckoffLawAnalyzer:
             wyckoff_guidance = "量价关系正常，无明确信号"
 
         volume_health = self._analyze_volume_health_context()
+        follow_through = self._analyze_signal_follow_through()
 
         return {
             "overall_assessment": overall_assessment,
             "wyckoff_guidance": wyckoff_guidance,
             "timeframe_analysis": effort_result_analysis,
-            "volume_health": volume_health
+            "volume_health": volume_health,
+            "follow_through": follow_through
         }
 
     def _analyze_volume_health_context(self) -> dict:
@@ -259,6 +261,14 @@ class WyckoffLawAnalyzer:
             contraction_signal = "LPS_CANDIDATE"
             contraction_meaning = "低位缩量止跌，供应耗尽，符合LPS测试特征"
 
+        close_pos = (curr['Close'] - curr['Low']) / max(curr['High'] - curr['Low'], 1e-9)
+        high_vol = curr['Volume'] > vol_ma20 * 1.4
+        candle_read = "neutral"
+        if high_vol and close_pos <= 0.2:
+            candle_read = "SOW_BEARISH_CLOSE"
+        elif high_vol and close_pos >= 0.8:
+            candle_read = "ABSORPTION_BULLISH_CLOSE"
+
         return {
             "status": "alert" if evr else "normal",
             "evr": {
@@ -272,8 +282,77 @@ class WyckoffLawAnalyzer:
                 "price_position": "high" if is_high_zone else "low" if is_low_zone else "middle",
                 "signal": contraction_signal,
                 "meaning": contraction_meaning,
-            }
+            },
+            "high_volume_close_reading": {
+                "close_position": round(close_pos, 2),
+                "high_volume": bool(high_vol),
+                "signal": candle_read,
+            },
+            "wave_comparison": self._analyze_wave_efficiency(df)
         }
+
+    def _analyze_wave_efficiency(self, df: pd.DataFrame) -> dict:
+        """对比相邻上升波：量增但推进缩短 => SOT。"""
+        if len(df) < 25:
+            return {"status": "insufficient_data"}
+        recent = df.tail(25)
+        returns = recent['Close'].pct_change().fillna(0)
+        up_idx = returns[returns > 0].index.tolist()
+        if len(up_idx) < 6:
+            return {"status": "insufficient_swings"}
+
+        wave1 = recent.iloc[-12:-6]
+        wave2 = recent.iloc[-6:]
+        wave1_push = wave1['High'].max() - wave1['Low'].min()
+        wave2_push = wave2['High'].max() - wave2['Low'].min()
+        wave1_vol = wave1['Volume'].mean()
+        wave2_vol = wave2['Volume'].mean()
+        sot = wave2_vol > wave1_vol * 1.1 and wave2_push < wave1_push * 0.8
+        return {
+            "status": "ok",
+            "sot_detected": bool(sot),
+            "wave1_push": round(wave1_push, 2),
+            "wave2_push": round(wave2_push, 2),
+            "wave1_avg_vol": round(wave1_vol, 2),
+            "wave2_avg_vol": round(wave2_vol, 2)
+        }
+
+    def _analyze_signal_follow_through(self) -> dict:
+        """Spring/UT 不立即采信，要求次日跟随确认。"""
+        if len(self.data) < 5:
+            return {"status": "insufficient_data"}
+        df = self.data
+        spring = self.pattern_detector.detect_spring() if self.pattern_detector else {}
+        upthrust = self.pattern_detector.detect_upthrust() if self.pattern_detector else {}
+
+        out = {"status": "ok", "spring_follow_through": {"tracked": False}, "upthrust_follow_through": {"tracked": False}}
+
+        if spring.get('detected'):
+            c0, c1 = df.iloc[-2], df.iloc[-1]
+            three_h = c1['High'] > c0['High']
+            three_l = c1['Low'] > c0['Low']
+            three_c = c1['Close'] > c0['Close']
+            vol_shrink_hard = c1['Volume'] < c0['Volume'] * 0.6
+            failed = (not (three_h and three_l and three_c)) or vol_shrink_hard
+            out['spring_follow_through'] = {
+                "tracked": True,
+                "three_highs_confirmed": bool(three_h and three_l and three_c),
+                "low_quality": bool(failed),
+                "priority_adjustment": "decrease" if failed else "keep",
+            }
+
+        if upthrust.get('detected'):
+            c0, c1 = df.iloc[-2], df.iloc[-1]
+            engulf_bull = c1['Close'] > c0['High'] and c1['Open'] <= c0['Close']
+            vol_up = c1['Volume'] > c0['Volume'] * 1.05
+            ut_invalid = engulf_bull and vol_up
+            out['upthrust_follow_through'] = {
+                "tracked": True,
+                "bear_follow_through_confirmed": bool((c1['Close'] < c1['Open']) and vol_up),
+                "trap_invalidated": bool(ut_invalid),
+                "short_alert": "解除" if ut_invalid else "维持观察",
+            }
+        return out
 
     def analyze_cause_effect_law_enhanced(self) -> dict:
         """Wyckoff第三定律：因果定律增强分析"""
@@ -427,6 +506,7 @@ class WyckoffLawAnalyzer:
             mode = "redistribution"
             confidence_bias = 15
 
+        dynamic_path = self._analyze_target_path_monitor(recent, low, downside_target_1)
         return {
             "status": "active",
             "tr_range": {
@@ -438,8 +518,31 @@ class WyckoffLawAnalyzer:
                 "detected": bool(broke_down),
                 "downside_target_1": round(downside_target_1, 2) if downside_target_1 is not None else None
             },
+            "dynamic_target_context": dynamic_path,
             "phase_mode": mode,
             "confidence_bias": confidence_bias
+        }
+
+    def _analyze_target_path_monitor(self, recent: pd.DataFrame, support: float, target: Optional[float]) -> dict:
+        """监测目标运行路径：无需求反弹/停止行为，并识别历史密集区重叠。"""
+        if target is None:
+            return {"status": "inactive"}
+        bins = pd.cut(recent['Close'], bins=8)
+        vp = recent.groupby(bins, observed=False)['Volume'].sum()
+        hvn_zone = vp.idxmax() if len(vp) else None
+        overlap = False
+        if hvn_zone is not None:
+            overlap = hvn_zone.left <= target <= hvn_zone.right
+
+        last5 = recent.tail(5)
+        no_demand_bounces = int(((last5['Close'] > last5['Open']) & (last5['Volume'] < last5['Volume'].rolling(3).mean().fillna(last5['Volume']))).sum())
+        stopping = bool(((last5['Volume'] > last5['Volume'].rolling(3).mean().fillna(last5['Volume']) * 1.4) & ((last5['High'] - last5['Low']) < (recent['High'] - recent['Low']).rolling(10).mean().iloc[-1])).any())
+        return {
+            "status": "active",
+            "target_overlap_with_historical_demand": overlap,
+            "no_demand_bounce_count": no_demand_bounces,
+            "target_hit_probability_bias": 10 if no_demand_bounces >= 2 else -10 if stopping else 0,
+            "bottoming_risk_alert": stopping
         }
 
     def _detect_preliminary_support(self) -> dict:
