@@ -2,9 +2,9 @@
 """
 威科夫分析使用示例
 
-演示本地工具库用法：
-- tools.wyckoff_analyzer.WyckoffAnalyzer：单股分析 / JSON 输出 / 批量扫描
-- tools.wyckoff_utils.WyckoffScreener：批量筛选 / 报告生成
+演示库层用法：
+- src.wyckoff.facade.WyckoffAnalyzer：单股分析 / JSON 输出 / 批量扫描
+- src.wyckoff.facade.batch_scan：批量扫描
 """
 
 import sys
@@ -22,9 +22,10 @@ def example_local_analyzer():
     print("示例 1: 本地分析器 - 威科夫分析")
     print("=" * 60)
 
-    from tools.wyckoff_analyzer import WyckoffAnalyzer
+    from src.wyckoff.facade import WyckoffAnalyzer
 
     analyzer = WyckoffAnalyzer("AAPL")
+    analyzer.fetch_data()
     report = analyzer.generate_report()
     print(report)
 
@@ -35,64 +36,40 @@ def example_local_analyzer_json():
     print("示例 2: JSON 格式输出")
     print("=" * 60)
 
-    from tools.wyckoff_analyzer import WyckoffAnalyzer
+    from src.wyckoff.facade import WyckoffAnalyzer
 
     analyzer = WyckoffAnalyzer("AAPL")
-    import os
-    from contextlib import redirect_stdout
-    with open(os.devnull, 'w') as f, redirect_stdout(f):
-        result_json = analyzer.generate_json()
+    analyzer.fetch_data()
+    result_json = analyzer.generate_json()
     print(result_json[:500] + "...")
 
 
-def example_local_screener():
-    """示例3：使用本地筛选器进行批量筛选。"""
-    print("=" * 60)
-    print("示例 3: 本地筛选器 - 批量筛选")
-    print("=" * 60)
-
-    from tools.wyckoff_utils import WyckoffScreener
-
-    screener = WyckoffScreener()
-
-    symbols = ["AAPL", "MSFT", "GOOGL"]
-    for symbol in symbols:
-        if screener.add_stock(symbol):
-            print(f"  ✅ {symbol}")
-        else:
-            print(f"  ❌ {symbol}")
-
-    report = screener.generate_screening_report()
-    print(report)
-
-
 def example_local_batch_scan():
-    """示例4：批量扫描多只股票。"""
+    """示例3：批量扫描多只股票。"""
     print("=" * 60)
-    print("示例 4: 批量扫描")
+    print("示例 3: 批量扫描")
     print("=" * 60)
 
-    from tools.wyckoff_analyzer import batch_scan
+    from src.wyckoff.facade import batch_scan
 
     symbols = ["AAPL", "TSLA", "NVDA"]
-    results = batch_scan(symbols)
+    result = batch_scan(symbols, show_progress=False)
 
     print(f"\n扫描完成！")
-    print(f"总计扫描: {len(symbols)} 只股票")
-    print(f"发现信号: {sum(1 for r in results if r['strength'] > 0)} 只")
+    print(f"总计扫描: {result['summary']['total_scanned']} 只股票")
+    print(f"发现信号: {result['summary']['signal_count']} 只")
 
-    if results:
-        best = max(results, key=lambda x: x['strength'])
-        if best['strength'] > 0:
-            print(f"\n最佳机会: {best['symbol']}")
-            print(f"   阶段: {best['phase']}")
-            print(f"   信号强度: {best['strength']}/6")
+    if result['top_picks']:
+        best = result['top_picks'][0]
+        print(f"\n最佳机会: {best['symbol']}")
+        print(f"   阶段: {best['phase']}")
+        print(f"   综合评分: {best.get('weighted_score', best.get('strength', 0))}")
 
 
 def main():
     example_local_analyzer()
     print()
-    example_local_screener()
+    example_local_analyzer_json()
     print()
     example_local_batch_scan()
 

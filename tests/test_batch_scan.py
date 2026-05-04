@@ -15,8 +15,8 @@ if sys.platform == "win32":
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.wyckoff_analyzer import batch_scan
-from tools.services.screener_service import ScreenerService
+from src.wyckoff.wyckoff_analyzer import batch_scan
+from src.wyckoff.services.screener_service import ScreenerService
 
 
 def test_batch_scan_function():

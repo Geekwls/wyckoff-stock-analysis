@@ -12,7 +12,7 @@ import shutil
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.core.cache_service import (
+from src.wyckoff.core.cache_service import (
     CacheService, CacheNamespace, CacheKey,
     MemoryCache, FileCache, CachedDataFetcher
 )

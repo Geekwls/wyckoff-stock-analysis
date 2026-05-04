@@ -64,8 +64,8 @@ class SkillInstaller:
         # 检查项目文件
         required_files = [
             "SKILL.md",
-            "tools/wyckoff_analyzer.py",
-            "tools/__init__.py",
+            "src/wyckoff/facade.py",
+            "src/wyckoff/__init__.py",
             "requirements.txt"
         ]
 
@@ -118,7 +118,7 @@ class SkillInstaller:
             # 测试导入
             print("  🔄 测试模块导入...")
             sys.path.insert(0, str(self.project_path))
-            from tools.wyckoff_analyzer import WyckoffAnalyzer
+            from src.wyckoff.facade import WyckoffAnalyzer
 
             # 测试基本功能
             print("  🔄 测试基本功能...")

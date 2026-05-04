@@ -17,7 +17,7 @@ class SkillAuditor:
     def __init__(self, project_path: str = "."):
         self.project_path = project_path
         self.skill_md_path = os.path.join(project_path, "SKILL.md")
-        self.analyzer_path = os.path.join(project_path, "tools/wyckoff_analyzer.py")
+        self.analyzer_path = os.path.join(project_path, "src/wyckoff/facade.py")
         self.findings = {}
 
     def analyze_all(self) -> Dict:
@@ -174,8 +174,8 @@ class SkillAuditor:
             "cursor_compatible": "Cursor" in content or "VS Code" in content,
             "claude_code_compatible": "Claude Code" in content or "claude" in content.lower(),
             "chatgpt_compatible": "ChatGPT" in content or "GPT" in content,
-            "cli_tool_support": "python tools/" in content.lower() or "命令行" in content,
-            "path_independence": any(keyword in content for keyword in ["tools/", "当前目录", "working directory"]),
+            "cli_tool_support": "python -m apps.cli.main" in content.lower() or "命令行" in content,
+            "path_independence": any(keyword in content for keyword in ["apps/cli", "src/wyckoff", "当前目录", "working directory"]),
             "universal_instructions": any(keyword in content for keyword in ["AI Agent", "大语言模型", "LLM"])
         }
 

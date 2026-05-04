@@ -1,7 +1,7 @@
 import unittest
 import pandas as pd
-from tools.core.data_fetcher import WyckoffDataFetcher
-from tools.core.symbol_resolver import MarketType
+from src.wyckoff.core.data_fetcher import WyckoffDataFetcher
+from src.wyckoff.core.symbol_resolver import MarketType
 
 class TestDataFetcherRefactoring(unittest.TestCase):
     def setUp(self):
