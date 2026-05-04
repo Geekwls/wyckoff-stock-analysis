@@ -5,7 +5,8 @@
 """
 __version__ = "4.1.0"
 
-from .wyckoff_analyzer import WyckoffAnalyzer, WyckoffConfig, batch_scan
+from .facade import WyckoffAnalyzer, batch_scan
+from .config.settings import WyckoffConfig
 from .wyckoff_utils import STOCK_POOLS
 from .services.screener_service import ScreenerService
 from .exceptions import WyckoffError, DataFetchError, InsufficientDataError, AnalysisError

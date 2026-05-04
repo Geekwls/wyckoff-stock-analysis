@@ -1,6 +1,6 @@
 import json
-from tools.mcp_server import analyze_stock_wyckoff
-from tools.exceptions import DataFetchError
+from apps.mcp.server import analyze_stock_wyckoff
+from wyckoff.exceptions import DataFetchError
 
 def test_error_compatibility():
     """验证错误响应的向后兼容性"""

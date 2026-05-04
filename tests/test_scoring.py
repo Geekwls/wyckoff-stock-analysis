@@ -1,9 +1,9 @@
 import pytest
 import pandas as pd
 import numpy as np
-from tools.core.report_generator import WyckoffReportGenerator
-from tools.config.settings import ScoringConfig, PositionSizingConfig, WyckoffConfig
-from tools.core.enums import MarketEnvironment, MarketSide
+from wyckoff.core.report_generator import WyckoffReportGenerator
+from wyckoff.config.settings import ScoringConfig, PositionSizingConfig, WyckoffConfig
+from wyckoff.core.enums import MarketEnvironment, MarketSide
 from datetime import datetime
 
 class MockAnalyzer:
@@ -185,7 +185,7 @@ def test_threshold_gating_low_score():
     assert "信号强度或可靠性低于执行阈值" in report
 
 def test_market_aware_direction_a_stock():
-    from tools.core.trading_plan_generator import TradingPlanGenerator
+    from wyckoff.core.trading_plan_generator import TradingPlanGenerator
     data = create_mock_data([100.0, 100.0], [1000, 1000])
     # detect_trading_range in generator is called without args, but my mock might be receiving self.
     pattern_detector = type('obj', (object,), {'detect_trading_range': lambda self: {}})()

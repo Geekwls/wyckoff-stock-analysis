@@ -16,8 +16,8 @@ from datetime import datetime, timedelta
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.core.pattern_detector import WyckoffPatternDetector
-from tools.config.settings import WyckoffConfig
+from wyckoff.core.pattern_detector import WyckoffPatternDetector
+from wyckoff.config.settings import WyckoffConfig
 
 
 # ─────────────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ def _inject_fti_test(df: pd.DataFrame, ice_level: float, position: int = -3) -> 
 
 def _make_detector(df: pd.DataFrame) -> WyckoffPatternDetector:
     """构造一个带缓存的探测器"""
-    from tools.core.cache import LRUCache
+    from wyckoff.core.cache import LRUCache
     return WyckoffPatternDetector(df, WyckoffConfig(), LRUCache())
 
 

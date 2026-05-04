@@ -11,8 +11,11 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+SRC = os.path.join(ROOT, "src")
+if SRC not in sys.path:
+    sys.path.insert(0, SRC)
 
-from tools.config.settings import WyckoffConfig
+from wyckoff.config.settings import WyckoffConfig
 
 
 def _make_ohlcv(n: int = 300, trend: str = "flat", seed: int = 42) -> pd.DataFrame:

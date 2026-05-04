@@ -2,11 +2,11 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from tools.wyckoff_analyzer import WyckoffAnalyzer
-from tools.core.multi_timeframe_analyzer import MultiTimeframeAnalyzer
-from tools.core.relative_strength_analyzer import RelativeStrengthAnalyzer
-from tools.core.pattern_detector import WyckoffPatternDetector
-from tools.config.settings import WyckoffConfig
+from wyckoff.facade import WyckoffAnalyzer
+from wyckoff.core.multi_timeframe_analyzer import MultiTimeframeAnalyzer
+from wyckoff.core.relative_strength_analyzer import RelativeStrengthAnalyzer
+from wyckoff.core.pattern_detector import WyckoffPatternDetector
+from wyckoff.config.settings import WyckoffConfig
 
 def _make_base_df(days=300):
     end_date = datetime(2024, 1, 1)
@@ -33,7 +33,7 @@ def test_mtf_analyzer():
     df['MA10'] = df['Close'].rolling(10).mean()
     df['MA20'] = df['Close'].rolling(20).mean()
     
-    from tools.core.cache import LRUCache
+    from wyckoff.core.cache import LRUCache
     cache = LRUCache()
     config = WyckoffConfig()
     pd_detector = WyckoffPatternDetector(df, config, cache)
@@ -65,7 +65,7 @@ def test_rs_analyzer():
     assert 'rs_change_20d' in rs_result
 
 def test_wyckoff_analyzer_integration():
-    from tools.core.cache import LRUCache
+    from wyckoff.core.cache import LRUCache
     # 这是一个集成测试，验证 refactored WyckoffAnalyzer 是否能正常工作
     analyzer = WyckoffAnalyzer("AAPL", period="1y")
     # 我们不真调 fetch_data，而是注入模拟数据

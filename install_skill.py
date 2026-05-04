@@ -64,8 +64,8 @@ class SkillInstaller:
         # 检查项目文件
         required_files = [
             "SKILL.md",
-            "tools/wyckoff_analyzer.py",
-            "tools/__init__.py",
+            "apps/cli/main.py",
+            "src/wyckoff/__init__.py",
             "requirements.txt"
         ]
 
@@ -118,7 +118,7 @@ class SkillInstaller:
             # 测试导入
             print("  🔄 测试模块导入...")
             sys.path.insert(0, str(self.project_path))
-            from tools.wyckoff_analyzer import WyckoffAnalyzer
+            from wyckoff.facade import WyckoffAnalyzer
 
             # 测试基本功能
             print("  🔄 测试基本功能...")
@@ -194,7 +194,7 @@ class SkillInstaller:
 ## 工具调用
 Claude Code会自动调用：
 ```bash
-python {self.project_path / "tools/wyckoff_analyzer.py"} <股票代码> --json
+python {self.project_path / "apps/cli/main.py"} <股票代码> --json
 ```
 
 ## 知识库
@@ -220,7 +220,7 @@ python {self.project_path / "tools/wyckoff_analyzer.py"} <股票代码> --json
 
 当用户询问股票分析、威科夫理论、技术分析时：
 1. 读取 SKILL.md 获取分析框架
-2. 运行 python tools/wyckoff_analyzer.py <symbol> --json 获取数据
+2. 运行 python apps/cli/main.py <symbol> --json 获取数据
 3. 基于JSON输出生成结构化报告
 4. 引用 references/ 目录下的理论文档
 
@@ -339,7 +339,7 @@ When asked to analyze stocks, follow these steps:
         print()
 
         print("💡 快速测试:")
-        print("   python tools/wyckoff_analyzer.py AAPL --json")
+        print("   python apps/cli/main.py AAPL --json")
         print()
 
         return {

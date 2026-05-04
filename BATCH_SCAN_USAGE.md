@@ -24,7 +24,7 @@
 ### 1. 基础用法
 
 ```python
-from tools.wyckoff_analyzer import batch_scan
+from wyckoff.facade import batch_scan
 
 # 扫描多只股票
 result = batch_scan(
@@ -311,8 +311,8 @@ python tests/test_batch_scan.py
 
 ## 📚 相关文档
 
-- `tools/wyckoff_analyzer.py` - 批量扫描实现
-- `tools/services/screener_service.py` - 筛选服务
+- `apps/cli/main.py` - 批量扫描实现
+- `src/wyckoff/services/screener_service.py` - 筛选服务
 - `tests/test_batch_scan.py` - 测试文件
 
 ---

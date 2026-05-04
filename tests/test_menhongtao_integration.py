@@ -16,8 +16,8 @@ if sys.platform == "win32":
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
-from tools.wyckoff_analyzer import WyckoffAnalyzer
-from tools.config.settings import WyckoffConfig
+from wyckoff.facade import WyckoffAnalyzer
+from wyckoff.config.settings import WyckoffConfig
 
 
 def test_spring_enhanced():

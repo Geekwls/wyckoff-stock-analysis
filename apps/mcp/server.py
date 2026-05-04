@@ -10,14 +10,17 @@ from mcp.server.fastmcp import FastMCP
 
 # Ensure the parent directory is in the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+project_root = os.path.dirname(os.path.dirname(current_dir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+src_dir = os.path.join(project_root, "src")
+if src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
 
-from tools.wyckoff_analyzer import WyckoffAnalyzer, batch_scan
-from tools.exceptions import *
-from tools.schemas import ErrorResponseModel
-from tools.error_codes import ErrorCode
+from wyckoff.facade import WyckoffAnalyzer, batch_scan
+from wyckoff.exceptions import *
+from wyckoff.schemas import ErrorResponseModel
+from wyckoff.error_codes import ErrorCode
 
 mcp = FastMCP("Wyckoff Stock Analyzer")
 

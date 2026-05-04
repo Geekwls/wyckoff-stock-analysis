@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-from tools.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
-from tools.config.settings import WyckoffConfig, WyckoffThresholds
+from wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
+from wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
 
 def create_mock_data(trend="up"):
     dates = pd.date_range(start="2023-01-01", periods=100)

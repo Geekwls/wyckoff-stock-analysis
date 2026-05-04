@@ -20,7 +20,7 @@
 
 ### ✅ 本地 Agent 直接可用
 
-将项目放在任意目录，Agent 即可通过 `tools/wyckoff_analyzer.py` 进行分析。
+将项目放在任意目录，Agent 即可通过 `apps/cli/main.py` 进行分析。
 
 **使用方法**：
 ```
@@ -39,25 +39,25 @@
 ### 💻 本地代码编辑器 Agent (Cursor / Windsurf 等)
 
 - **使用方法**：在聊天框或 Composer 中 `@` 引用根目录的 `SKILL.md`，并提问：“请帮我用威科夫理论分析 AAPL”。
-- **背后原理**：Agent 会读取 `SKILL.md` 的规则，自动在终端运行 `python tools/wyckoff_analyzer.py AAPL --json`，然后将其输出转化为结构化的研报。
+- **背后原理**：Agent 会读取 `SKILL.md` 的规则，自动在终端运行 `python apps/cli/main.py AAPL --json`，然后将其输出转化为结构化的研报。
 
 ### 🤖 ChatGPT Plus / Claude.ai Web端
 
 - **使用方法**：
   1. 将 `SKILL.md` 的内容设为 Custom Instructions (自定义指令) 或 Project Instructions。
-  2. 如果需要量化数据，可以将 `tools/wyckoff_analyzer.py` 上传给大模型。
+  2. 如果需要量化数据，可以将 `apps/cli/main.py` 上传给大模型。
 - **背后原理**：利用大模型自带的代码解释器 (Code Interpreter / Advanced Data Analysis) 运行脚本，精准输出分析结论。
 
 ### 🔌 MCP 兼容平台 (Claude Desktop / Cursor)
 
-- **进阶玩法**：本项目内置了原生的 MCP Server。你只需要将 `tools/mcp_server.py` 挂载到兼容 MCP 的客户端即可。
+- **进阶玩法**：本项目内置了原生的 MCP Server。你只需要将 `apps/mcp/server.py` 挂载到兼容 MCP 的客户端即可。
 - **Claude Desktop 配置示例** (`claude_desktop_config.json`):
   ```json
   {
     "mcpServers": {
       "wyckoff_analyzer": {
         "command": "python",
-        "args": ["/绝对路径/到/wyckoff-stock-analysis/tools/mcp_server.py"]
+        "args": ["/绝对路径/到/wyckoff-stock-analysis/apps/mcp/server.py"]
       }
     }
   }
@@ -66,7 +66,7 @@
 
 ### ⚙️ Dify / FastGPT 等工作流引擎
 
-- **使用方法**：将 `SKILL.md` 作为主节点的 System Prompt，将 `tools/wyckoff_analyzer.py` 挂载为自定义工具（Custom Tool）节点。
+- **使用方法**：将 `SKILL.md` 作为主节点的 System Prompt，将 `apps/cli/main.py` 挂载为自定义工具（Custom Tool）节点。
 - **效果**：您可以零代码编排搭建出一个对外的“威科夫股票智能诊断机器人”。
 
 ---
@@ -103,7 +103,7 @@ zip -r wyckoff-skill.zip wyckoff-stock-analysis/
 ### 💻 Python 集成示例
 
 ```python
-from tools import WyckoffAnalyzer, ScreenerService, STOCK_POOLS
+from wyckoff import WyckoffAnalyzer, ScreenerService, STOCK_POOLS
 
 # 1. 单股分析 (推荐使用 with 语句管理资源)
 with WyckoffAnalyzer("AAPL") as analyzer:
@@ -131,8 +131,8 @@ for stock in accum_stocks:
 
 | 使用场景 | 推荐方式 | 文件位置 |
 |---------|---------|---------|
-| 命令行分析 | Python工具 | `tools/wyckoff_analyzer.py` |
-| 批量筛选 | 筛选器 | `tools/wyckoff_utils.py` |
+| 命令行分析 | Python工具 | `apps/cli/main.py` |
+| 批量筛选 | 筛选器 | `src/wyckoff/wyckoff_utils.py` |
 | 分享给他人 | GitHub仓库 | 整个目录 |
 
 ---
@@ -156,7 +156,7 @@ head -10 ~/.claude/user-skills/wyckoff-stock-analysis/SKILL.md
 
 ### 大模型回答不准确或出现幻觉？
 
-1. 确保大模型成功执行了 `python tools/wyckoff_analyzer.py --json` 命令。
+1. 确保大模型成功执行了 `python apps/cli/main.py --json` 命令。
 2. 检查股票代码是否正确（例如 A 股加上 .SH 或 .SZ 后缀）。
 3. 如果模型处于离线或无代码执行环境，请手动提供包含成交量的股票历史 CSV 数据。
 4. 在提问时强调：“请必须结合量价分析（Effort vs Result）进行判断”。

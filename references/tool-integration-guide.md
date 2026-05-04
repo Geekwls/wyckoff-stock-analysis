@@ -23,7 +23,7 @@
 **理论依据**：在积累期末端，价格跌破支撑位后快速收回。
 **工具操作**：
 ```python
-from tools import ScreenerService, STOCK_POOLS
+from wyckoff import ScreenerService, STOCK_POOLS
 
 # 使用深度筛选功能，过滤出处于积累期（Accumulation）且有信号的股票
 screener = ScreenerService()

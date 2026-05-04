@@ -4,7 +4,7 @@
 威科夫分析系统 - 预定义数据池
 Wyckoff Analysis - Predefined Stock Pools
 
-注：原来的 WyckoffScreener 已由 tools/services/screener_service.py 替代。
+注：原来的 WyckoffScreener 已由 src/wyckoff/services/screener_service.py 替代。
 """
 
 # ============================================================

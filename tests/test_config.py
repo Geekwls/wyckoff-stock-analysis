@@ -3,7 +3,7 @@ tests/test_config.py - WyckoffConfig 配置验证测试
 """
 import pytest
 from pydantic import ValidationError
-from tools.config.settings import WyckoffConfig, WyckoffThresholds
+from wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
 
 
 class TestWyckoffConfig:

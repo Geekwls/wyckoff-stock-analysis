@@ -3,8 +3,8 @@
 威科夫分析使用示例
 
 演示本地工具库用法：
-- tools.wyckoff_analyzer.WyckoffAnalyzer：单股分析 / JSON 输出 / 批量扫描
-- tools.wyckoff_utils.WyckoffScreener：批量筛选 / 报告生成
+- wyckoff.facade.WyckoffAnalyzer：单股分析 / JSON 输出 / 批量扫描
+- wyckoff.wyckoff_utils.WyckoffScreener：批量筛选 / 报告生成
 """
 
 import sys
@@ -22,7 +22,7 @@ def example_local_analyzer():
     print("示例 1: 本地分析器 - 威科夫分析")
     print("=" * 60)
 
-    from tools.wyckoff_analyzer import WyckoffAnalyzer
+    from wyckoff.facade import WyckoffAnalyzer
 
     analyzer = WyckoffAnalyzer("AAPL")
     report = analyzer.generate_report()
@@ -35,7 +35,7 @@ def example_local_analyzer_json():
     print("示例 2: JSON 格式输出")
     print("=" * 60)
 
-    from tools.wyckoff_analyzer import WyckoffAnalyzer
+    from wyckoff.facade import WyckoffAnalyzer
 
     analyzer = WyckoffAnalyzer("AAPL")
     import os
@@ -51,7 +51,7 @@ def example_local_screener():
     print("示例 3: 本地筛选器 - 批量筛选")
     print("=" * 60)
 
-    from tools.wyckoff_utils import WyckoffScreener
+    from wyckoff.wyckoff_utils import WyckoffScreener
 
     screener = WyckoffScreener()
 
@@ -72,7 +72,7 @@ def example_local_batch_scan():
     print("示例 4: 批量扫描")
     print("=" * 60)
 
-    from tools.wyckoff_analyzer import batch_scan
+    from wyckoff.facade import batch_scan
 
     symbols = ["AAPL", "TSLA", "NVDA"]
     results = batch_scan(symbols)

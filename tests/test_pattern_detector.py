@@ -4,8 +4,8 @@ tests/test_pattern_detector.py - WyckoffPatternDetector 形态检测测试
 import pytest
 import pandas as pd
 import numpy as np
-from tools.core.pattern_detector import WyckoffPatternDetector
-from tools.config.settings import WyckoffConfig
+from wyckoff.core.pattern_detector import WyckoffPatternDetector
+from wyckoff.config.settings import WyckoffConfig
 
 
 class FakeCache:

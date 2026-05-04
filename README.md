@@ -18,11 +18,11 @@
 ```mermaid
 graph TD
     A[AI Agent / Human] -->|调用| B(SKILL.md - 决策大脑)
-    B -->|调度| C{wyckoff_analyzer.py - 门面模式}
-    C -->|数据获取| D[core/data_fetcher.py]
-    C -->|形态探测| E[core/pattern_detector.py]
-    C -->|规律分析| F[core/law_analyzer.py]
-    C -->|报告生成| G[core/report_generator.py]
+    B -->|调度| C{src/wyckoff/facade.py - 门面模式}
+    C -->|数据获取| D[src/wyckoff/core/data_fetcher.py]
+    C -->|形态探测| E[src/wyckoff/core/pattern_detector.py]
+    C -->|规律分析| F[src/wyckoff/core/law_analyzer.py]
+    C -->|报告生成| G[src/wyckoff/core/report_generator.py]
     D -.->|A股/港股| H[Baostock/YFinance]
     G -->|输出| I[结构化 JSON / 专业文本报告]
 ```
@@ -34,7 +34,7 @@ graph TD
 | 特性 | 描述 |
 | :--- | :--- |
 | **服务化架构** | 引入 `ScreenerService`，统一并行扫描与深度筛选入口，性能提升 200%。 |
-| **原生 MCP 支持** | 内置 `mcp_server.py`，支持资源安全管理（Context Management）。 |
+| **原生 MCP 支持** | 内置 `apps/mcp/server.py`，支持资源安全管理（Context Management）。 |
 | **内存与性能优化** | 集成 **LRUCache (TTL)** 缓存机制，确保在大规模扫描时内存占用稳定。 |
 | **回测与情绪引擎** | 独立 `BacktestEngine` 与 `SentimentAnalyzer`，提供历史胜率参考。 |
 | **强类型 Pydantic v2** | 全面重构 `schemas.py`，所有输出均经过严格的嵌套模型校验。 |
@@ -60,10 +60,10 @@ pip install -r requirements.txt
 ### 2. 命令行体验
 ```bash
 # 体验人类可读报告 (美股)
-python tools/wyckoff_analyzer.py AAPL
+python apps/cli/main.py analyze AAPL
 
 # 体验 AI 友好 JSON 输出 (A股)
-python tools/wyckoff_analyzer.py sh.600519 --json
+python apps/cli/main.py analyze sh.600519 --format json
 ```
 
 ### 3. MCP 接入 (AI Agent 推荐)
@@ -72,7 +72,7 @@ python tools/wyckoff_analyzer.py sh.600519 --json
 "mcpServers": {
   "wyckoff": {
     "command": "python",
-    "args": ["C:/绝对路径/tools/mcp_server.py"]
+    "args": ["C:/绝对路径/apps/mcp/server.py"]
   }
 }
 ```
@@ -84,11 +84,13 @@ python tools/wyckoff_analyzer.py sh.600519 --json
 ```text
 wyckoff-stock-analysis/
 ├── SKILL.md                 # [大脑] AI Agent 系统指令与路由规则
-├── tools/                   # [执行] 量化工具库
+├── src/wyckoff/             # [库层] 纯分析库（不可反向依赖 apps）
 │   ├── core/                #   └── 核心计算引擎：探测/回测/情绪/缓存
 │   ├── services/            #   └── 外部服务接口：ScreenerService (统一筛选)
 │   ├── config/              #   └── settings.py：基于 Pydantic 的阈值管理
-│   ├── mcp_server.py        #   └── MCP 协议标准服务端 (支持上下文管理)
+│   └── facade.py            #   └── 门面 API：WyckoffAnalyzer / batch_scan
+├── apps/cli/main.py         # [应用层] CLI 命令入口
+├── apps/mcp/server.py       # [应用层] MCP 协议服务端，仅调用库层 API
 │   ├── schemas.py           #   └── 强类型数据契约 (Pydantic Models)
 │   └── wyckoff_utils.py     #   └── 数据池仓库 (STOCK_POOLS)
 └── tests/                   # [质量] 50+ 单元测试，覆盖全核心路径

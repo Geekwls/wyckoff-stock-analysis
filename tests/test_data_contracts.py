@@ -7,10 +7,10 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, Set
 
-from tools.core.detectors.classic_pattern_detector import ClassicPatternDetector
-from tools.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
-from tools.config.settings import WyckoffConfig, WyckoffThresholds
-from tools.core.cache import LRUCache
+from wyckoff.core.detectors.classic_pattern_detector import ClassicPatternDetector
+from wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
+from wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
+from wyckoff.core.cache import LRUCache
 
 
 def _make_test_df(n: int = 100) -> pd.DataFrame:
@@ -208,7 +208,7 @@ class TestReportReaderContract:
         """验证报告层读取recovery_days（复数）"""
         # 这个测试通过代码检查来验证
         import inspect
-        from tools.core.report_generator import WyckoffReportGenerator
+        from wyckoff.core.report_generator import WyckoffReportGenerator
         
         source = inspect.getsource(WyckoffReportGenerator.generate_report)
         
