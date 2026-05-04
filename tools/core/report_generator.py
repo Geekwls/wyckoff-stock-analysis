@@ -32,6 +32,7 @@ class WyckoffReportGenerator:
         self.symbol = analyzer.symbol
         self.pattern_detector = getattr(analyzer, 'pattern_detector', None)
         self.law_analyzer = getattr(analyzer, 'law_analyzer', None)
+        self.rec_engine = getattr(analyzer, 'orchestrator', Any).rec_engine if hasattr(analyzer, 'orchestrator') else RecommendationEngine(self.config)
         self.thresholds = WyckoffThresholds()
 
     def generate_report(self) -> str:
@@ -90,9 +91,9 @@ class WyckoffReportGenerator:
 【形态检测】
 """
 
-        # 检测各种形态
+        # 检测各种形态（优先使用孟洪涛增强方法）
         trading_range = self.pattern_detector.detect_trading_range()
-        spring = self.pattern_detector.detect_spring()
+        spring = self.pattern_detector.detect_spring_menhongtao()  # 使用孟洪涛5重过滤
         upthrust = self.pattern_detector.detect_upthrust()
         sos = self.pattern_detector.detect_sos()
         sow = self.pattern_detector.detect_sow()
@@ -118,6 +119,7 @@ class WyckoffReportGenerator:
    收回价: {latest['recovery_price']:.2f}
    收回天数: {latest['recovery_days']}天
    ✓ 真Spring（3天内收回且放量）
+   💡 孟洪涛建议：Spring是积累期最重要的买入信号之一。如果收回时伴随成交量放大，说明主力已完成洗盘，准备拉升。
 """
 
         if upthrust.get('detected'):
@@ -131,29 +133,31 @@ class WyckoffReportGenerator:
    回落天数: {latest['rejection_days']}天
    收盘距高点: {latest['close_from_high']*100:.1f}%
    ✓ 真Upthrust（3天内回落且放量）
+   💡 孟洪涛建议：Upthrust是派发期最危险的信号。在阻力位上方的短暂突破往往是诱多，若无法站稳应果断减仓。
 """
 
-        if sos.get('detected'):
+        if sos.get('detected') and sos.get('latest'):
             latest = sos['latest']
             report += f"""
 ✅ 检测到SOS（Sign of Strength）:
-   日期: {latest['date'].strftime('%Y-%m-%d')}
-   价格: {latest['price']:.2f}
-   成交量倍数: {latest['volume_ratio']:.1f}x
-   涨幅: {latest['price_change']*100:.1f}%
-   突破位: {latest['breakthrough_level']:.2f}
+   日期: {latest.get('date', 'N/A')}
+   价格: {latest.get('price', 0):.2f}
+   成交量倍数: {latest.get('volume_ratio', 0):.1f}x
+   涨幅: {latest.get('price_change', 0)*100:.1f}%
+   突破位: {latest.get('breakthrough_level', 0):.2f}
    ✓ 强势信号（放量突破）
+   💡 孟洪涛建议：SOS确认了需求主导地位。在JOC（跃过小溪）后的SOS往往标志着趋势进入加速期。
 """
 
-        if sow.get('detected'):
+        if sow.get('detected') and sow.get('latest'):
             latest = sow['latest']
             report += f"""
 ✅ 检测到SOW（Sign of Weakness）:
-   日期: {latest['date'].strftime('%Y-%m-%d')}
-   价格: {latest['price']:.2f}
-   成交量倍数: {latest['volume_ratio']:.1f}x
-   跌幅: {latest['price_change']*100:.1f}%
-   跌破位: {latest['breakdown_level']:.2f}
+   日期: {latest.get('date', 'N/A')}
+   价格: {latest.get('price', 0):.2f}
+   成交量倍数: {latest.get('volume_ratio', 0):.1f}x
+   跌幅: {latest.get('price_change', 0)*100:.1f}%
+   跌破位: {latest.get('breakdown_level', 0):.2f}
    ✓ 弱势信号（放量跌破）
 """
 
@@ -178,9 +182,10 @@ class WyckoffReportGenerator:
 """
 
         # ── 新威科夫操盘法信号 (孟洪涛) ──────────────────────────
-        joc = self.pattern_detector.detect_joc()
+        # 优先使用孟洪涛增强检测方法
+        joc = self.pattern_detector.detect_joc_menhongtao()
         fti = self.pattern_detector.detect_fti()
-        vsa = self.pattern_detector.detect_vsa_signals()
+        vsa = self.pattern_detector.detect_vsa_menhongtao()
 
         if joc.get('detected') or fti.get('detected') or any(
             vsa.get(k, {}).get('detected') for k in ('no_supply', 'no_demand', 'stopping_vol')
@@ -198,13 +203,18 @@ class WyckoffReportGenerator:
                 test_info = f"\n   回测确认: {td}（缩量{joc.get('test_vol_ratio', 0):.2f}x） ✓"
             else:
                 test_info = "\n   回测确认: 等待回测（Test of JOC）中"
+
+            # 添加孟洪涛方法标识
+            method_note = " [孟洪涛5重过滤]" if joc.get('method') == 'meng_hongtao_joc' else ""
+            confidence = joc.get('confidence', 0) * 100 if isinstance(joc.get('confidence'), (int, float)) else 75
+
             report += f"""
-🚀 检测到JOC（跃过小溪 / Jump Across the Creek）:
+🚀 检测到JOC（跃过小溪 / Jump Across the Creek）{method_note}:
    日期: {joc_date}
    小溪阻力位: {joc['creek_level']:.2f}
    突破收盘: {joc['close_price']:.2f} (+{joc['breakout_pct']:.1f}%)
    成交量: {joc['volume_ratio']:.1f}x 均量{test_info}
-   置信度: {joc['confidence']*100:.0f}%
+   置信度: {confidence:.0f}%
    ⭐ 趋势跟踪买入信号（等待缩量回测 JOC 位入场）
 """
 
@@ -258,11 +268,14 @@ class WyckoffReportGenerator:
 目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
 """
 
-        # ── 核心结论评估（加权信号 + 冲突检测 + 阈值门控） ──────────────────
+        # ── 核心结论评估 (委派至建议引擎) ──────────────────
         current_price = self.data['Close'].iloc[-1]
-        signal_quality_data = self.calculate_signal_quality({'environment': self.analyzer._analyze_market_environment().get('environment')})
-        quality_score = signal_quality_data.get('score', 0)
-        max_score = signal_quality_data.get('max_score', 10)
+        market_env_res = self.analyzer._analyze_market_environment()
+        market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
+        
+        signal_quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
+        quality_score = signal_quality_data.score
+        max_score = signal_quality_data.max_score
         
         # 阈值门控：如果评分过低或置信度太低，强制观望
         if quality_score < 4 or phase_conf < 0.5:
@@ -279,9 +292,11 @@ class WyckoffReportGenerator:
             bullish_signals = []
             bearish_signals = []
             if joc.get('detected'): bullish_signals.append("JOC")
+            if sos.get('detected'): bullish_signals.append("SOS")
             if lps.get('detected'): bullish_signals.append("LPS")
             if spring.get('detected'): bullish_signals.append("Spring")
             if fti.get('detected'): bearish_signals.append("FTI")
+            if sow.get('detected'): bearish_signals.append("SOW")
             if lpsy.get('detected'): bearish_signals.append("LPSY")
             if upthrust.get('detected'): bearish_signals.append("Upthrust")
             
@@ -359,67 +374,6 @@ class WyckoffReportGenerator:
             return [self._round_floats(x) for x in obj]
         return obj
 
-    def calculate_signal_quality(self, market_phase) -> dict:
-        """计算信号质量评分 - 显式配置化"""
-        cfg = self.thresholds.SCORING
-        score = 0
-        reasons = []
-        phase_str = 'Unknown'
-
-        if self.data is not None:
-            vol_ratio = self.data['Volume'].iloc[-1] / max(self.data['Volume_MA20'].iloc[-1], 1)
-            phase_res = self.pattern_detector.identify_phase()
-            phase_str = phase_res.get('phase', 'Unknown')
-            
-            # 1. 技术确认度 (成交量配合)
-            is_bullish_side = PhaseAdapter.get_market_side(phase_str) == MarketSide.BULLISH
-            
-            if is_bullish_side:
-                if vol_ratio > 1.5:
-                    score += cfg.vol_strong_weight
-                    reasons.append(f"成交量强力确认 (+{cfg.vol_strong_weight}分)")
-                elif vol_ratio > 1.0:
-                    score += cfg.vol_moderate_weight
-                    reasons.append(f"成交量温和配合 (+{cfg.vol_moderate_weight}分)")
-            else:
-                if vol_ratio > 1.5:
-                    score += cfg.vol_strong_weight
-                    reasons.append(f"成交量强力确认 (放量下跌) (+{cfg.vol_strong_weight}分)")
-        
-            # 2. 趋势一致性
-            current_price = self.data['Close'].iloc[-1]
-            ma50 = self.data['MA50'].iloc[-1]
-            ma200 = self.data['MA200'].iloc[-1]
-            
-            if (current_price > ma50 > ma200) or (current_price < ma50 < ma200):
-                score += cfg.trend_alignment_weight
-                reasons.append(f"多时间框架一致 (+{cfg.trend_alignment_weight}分)")
-
-        # 3. 市场环境配合
-        market_env = market_phase.get('environment', MarketEnvironment.UNKNOWN)
-        is_market_bullish = market_env in [MarketEnvironment.STRONG_BULL, MarketEnvironment.BULL]
-        is_market_bearish = market_env in [MarketEnvironment.STRONG_BEAR, MarketEnvironment.BEAR]
-        
-        current_side = PhaseAdapter.get_market_side(phase_str)
-        
-        if is_market_bullish:
-            if current_side == MarketSide.BULLISH:
-                score += cfg.market_bullish_weight
-                reasons.append(f"顺应大盘多头 (+{cfg.market_bullish_weight}分)")
-        elif is_market_bearish:
-            if current_side == MarketSide.BEARISH:
-                score += cfg.market_bearish_weight
-                reasons.append(f"顺应大盘空头 (+{cfg.market_bearish_weight}分)")
-        elif market_env == MarketEnvironment.RANGE_BOUND:
-            score += cfg.market_range_bonus
-            reasons.append(f"大盘震荡中性 (+{cfg.market_range_bonus}分)")
-
-        return {
-            "score": score,
-            "max_score": cfg.max_score,
-            "confidence": "高" if score >= (cfg.max_score * 0.7) else "中" if score >= (cfg.max_score * 0.4) else "低",
-            "reasons": reasons
-        }
 
     def get_relevant_terms(self, phase: str, events: dict) -> dict:
         """获取相关术语的大白话解释"""
@@ -609,7 +563,7 @@ class WyckoffReportGenerator:
             spring=SpringModel(**self.pattern_detector.detect_spring()),
             upthrust=UpthrustModel(**self.pattern_detector.detect_upthrust()),
             sos=SosModel(**self.pattern_detector.detect_sos()),
-            sow=SosModel(**self.pattern_detector.detect_sow()) if 'sow' in dir(self.pattern_detector) else WyckoffEventModel(detected=False), # Fallback
+            sow=SowModel(**self.pattern_detector.detect_sow()),
             lps=LpsModel(**self.pattern_detector.detect_lps()),
             lpsy=LpsyModel(**self.pattern_detector.detect_lpsy())
         )
@@ -668,9 +622,8 @@ class WyckoffReportGenerator:
         )
         global_sentiment = GlobalSentimentModel(**global_sentiment_data)
         
-        # 增加信号质量评分和交易计划
-        signal_quality_data = self.calculate_signal_quality(market_context.model_dump())
-        signal_quality = SignalQualityModel(**signal_quality_data)
+        # 增加信号质量评分 (委派至建议引擎)
+        signal_quality = self.rec_engine.calculate_signal_quality(self.data, phase_dict, market_context.environment)
         
         # 使用TradingPlanGenerator生成交易计划
         trading_plan_generator = TradingPlanGenerator(self.data, self.pattern_detector)
@@ -684,13 +637,8 @@ class WyckoffReportGenerator:
             cause_effect_law=CauseEffectModel(**self.law_analyzer.analyze_cause_effect_law_enhanced())
         )
 
-        # 增加风险建议
-        risk_advice_data = self.generate_risk_advice(signal_quality_data, trading_plan_data)
-        risk_advice = RiskAdviceModel(
-            conservative=RiskAdviceItem(**risk_advice_data.get('conservative', {})),
-            moderate=RiskAdviceItem(**risk_advice_data.get('moderate', {})),
-            aggressive=RiskAdviceItem(**risk_advice_data.get('aggressive', {}))
-        )
+        # 增加风险建议 (委派至建议引擎)
+        risk_advice = self.rec_engine.generate_risk_advice(signal_quality, trading_plan)
         
         # 使用BacktestEngine获取历史表现
         backtest_engine = BacktestEngine(self.data, self.pattern_detector.thresholds)

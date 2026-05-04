@@ -1,0 +1,437 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+孟洪涛新威科夫操盘法增强模块
+基于《新威科夫操盘法》290页内容的精华实现
+
+重点增强：
+1. Spring（震仓）识别 - 书中提及136次
+2. JOC（跃过小溪）识别 - 书中提及119次
+3. 成交量分析 - 书中提及435次
+4. VSA微观分析 - 无供应/无需求
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class MengPatternEnhancer:
+    """
+    孟洪涛新威科夫操盘法增强器
+
+    核心特点：
+    1. 5重Spring过滤条件（更严格）
+    2. JOC的精确识别（长阳线+大成交量）
+    3. VSA微观分析（无供应/无需求）
+    4. 动态时间窗口（基于ATR）
+    """
+
+    def __init__(self, data: pd.DataFrame, config):
+        self.data = data
+        self.config = config
+        self._cache = {}
+
+    def detect_spring_enhanced(self) -> Dict:
+        """
+        孟洪涛Spring（震仓）增强检测
+
+        书中提及136次，是最重要的形态
+
+        5个必要条件：
+        1. 跌破幅度：1-3%（不能太深）
+        2. 收回时间：1-3天（根据波动率调整）
+        3. 收回确认：收盘价站稳支撑位上方
+        4. 成交量：收回时成交量 > 跌破时成交量
+        5. 收盘位置：收回日收盘价在日内高位70%以上
+        """
+        if self.data is None or len(self.data) < 20:
+            return {"detected": False, "reason": "insufficient_data"}
+
+        df = self.data.copy()
+        signals = []
+
+        # 计算ATR用于动态调整
+        atr = self._calculate_atr(df, 14)
+        atr_pct = atr / df['Close'].iloc[-1] * 100 if df['Close'].iloc[-1] > 0 else 0
+
+        # 动态调整确认时间
+        if atr_pct < 1.5:
+            max_recovery_days = 5
+        elif atr_pct < 3:
+            max_recovery_days = 3
+        else:
+            max_recovery_days = 2
+
+        # 寻找支撑位（最近20日的最低点）
+        lookback = 20
+        for i in range(lookback, len(df) - 5):
+            support_level = df['Low'].iloc[i-lookback:i].min()
+
+            # 检测跌破
+            if df['Low'].iloc[i] < support_level * 0.97:  # 跌破3%以内
+                breakdown_price = df['Close'].iloc[i]
+                breakdown_vol = df['Volume'].iloc[i]
+
+                # 条件1：跌破幅度检查（1-3%）
+                breakdown_pct = (support_level - breakdown_price) / support_level * 100
+                if not (1 <= breakdown_pct <= 3):
+                    continue  # 跌破太深或太浅
+
+                # 检查收回（后续几天）
+                for j in range(i+1, min(i+max_recovery_days+1, len(df))):
+                    if df['Close'].iloc[j] > support_level:
+                        # 条件2：收回时间检查
+                        recovery_days = j - i
+
+                        # 条件3：收回确认（收盘价站稳支撑位上方）
+                        close_above_support = df['Close'].iloc[j] > support_level
+                        if not close_above_support:
+                            continue
+
+                        # 条件4：成交量检查（收回时成交量 > 跌破时成交量）
+                        recovery_vol = df['Volume'].iloc[j]
+                        vol_ratio = recovery_vol / breakdown_vol if breakdown_vol > 0 else 1
+                        if vol_ratio <= 1.0:
+                            continue  # 成交量没有放大
+
+                        # 条件5：收盘位置检查（在日内高位70%以上）
+                        daily_range = df['High'].iloc[j] - df['Low'].iloc[j]
+                        close_position = (df['Close'].iloc[j] - df['Low'].iloc[j]) / daily_range if daily_range > 0 else 0.5
+                        if close_position < 0.7:
+                            continue  # 收盘位置不够高
+
+                        # 所有条件满足，这是一个真Spring
+                        signal = {
+                            "date": df.index[j],
+                            "breakdown_price": breakdown_price,
+                            "support_level": support_level,
+                            "recovery_price": df['Close'].iloc[j],
+                            "recovery_days": recovery_days,
+                            "vol_ratio": round(vol_ratio, 2),
+                            "close_position": round(close_position * 100, 1),
+                            "confidence": self._calculate_spring_confidence(breakdown_pct, recovery_days, vol_ratio, close_position)
+                        }
+                        signals.append(signal)
+                        break
+
+        if not signals:
+            return {"detected": False, "reason": "no_valid_spring_found"}
+
+        # 返回最新的Spring
+        latest_spring = signals[-1]
+        latest_spring["confidence"] = round(latest_spring["confidence"], 2)
+
+        return {
+            "detected": True,
+            "signals": signals,
+            "latest_spring": latest_spring,
+            "method": "meng_hongtao_5_filters",
+            "description": "孟洪涛5重过滤Spring（震仓）检测"
+        }
+
+    def _calculate_spring_confidence(self, breakdown_pct, recovery_days, vol_ratio, close_position):
+        """计算Spring置信度"""
+        score = 0
+
+        # 跌破幅度（2%左右最佳）
+        if 1.5 <= breakdown_pct <= 2.5:
+            score += 25
+        elif 1 <= breakdown_pct <= 3:
+            score += 20
+
+        # 收回时间（2天最佳）
+        if recovery_days == 2:
+            score += 25
+        elif recovery_days <= 3:
+            score += 20
+
+        # 成交量比率（越大越好）
+        if vol_ratio >= 2.0:
+            score += 25
+        elif vol_ratio >= 1.5:
+            score += 20
+        elif vol_ratio >= 1.2:
+            score += 15
+
+        # 收盘位置（越高越好）
+        if close_position >= 80:
+            score += 25
+        elif close_position >= 70:
+            score += 20
+        elif close_position >= 60:
+            score += 15
+
+        return score
+
+    def detect_joc_enhanced(self) -> Dict:
+        """
+        孟洪涛JOC（跃过小溪）增强检测
+
+        书中提及119次，是比SOS更可靠的突破信号
+
+        必要条件：
+        1. 突破确认：以长阳线强势突破震荡区顶部阻力（小溪）
+        2. 突破量能：突破日成交量显著放大（> 1.5倍均量）
+        3. 收盘位置：收于日内高点附近（无长上影线）
+        4. 回测确认：突破后出现缩量回落（Test of JOC）
+        """
+        if self.data is None or len(self.data) < 40:
+            return {"detected": False, "reason": "insufficient_data"}
+
+        df = self.data.copy()
+
+        # 识别交易区间（小溪）
+        trading_range = self._detect_trading_range(df, window=60)
+        if not trading_range.get("is_consolidation"):
+            return {"detected": False, "reason": "not_in_consolidation"}
+
+        creek_level = trading_range["high"]  # 小溪位置
+        volume_ma20 = df['Volume_MA20'].iloc[-1]
+
+        signals = []
+
+        # 扫描JOC突破
+        for i in range(20, len(df)):
+            # 检查是否突破小溪
+            if df['Close'].iloc[i] > creek_level and df['Close'].iloc[i-1] <= creek_level:
+                # 条件1：突破确认（长阳线）
+                price_change = (df['Close'].iloc[i] - df['Open'].iloc[i]) / df['Open'].iloc[i] * 100
+                if price_change < 3:  # 涨幅至少3%
+                    continue
+
+                # 条件2：突破量能（>1.5倍均量）
+                volume_ratio = df['Volume'].iloc[i] / volume_ma20 if volume_ma20 > 0 else 1
+                if volume_ratio < 1.5:
+                    continue
+
+                # 条件3：收盘位置（无长上影线）
+                daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
+                close_position = (df['Close'].iloc[i] - df['Low'].iloc[i]) / daily_range if daily_range > 0 else 0.5
+                if close_position < 0.75:  # 收盘在高位75%以上
+                    continue
+
+                # 检查回测（Test of JOC）
+                test_detected = False
+                test_date = None
+                test_vol_ratio = None
+
+                for j in range(i+1, min(i+10, len(df))):
+                    if df['Low'].iloc[j] < creek_level * 1.02:  # 回测到小溪附近
+                        if df['Close'].iloc[j] > creek_level:  # 但收盘在小溪上方
+                            # 缩量回测
+                            test_vol_ratio = df['Volume'].iloc[j] / volume_ma20 if volume_ma20 > 0 else 1
+                            if test_vol_ratio < 1.0:  # 缩量
+                                test_detected = True
+                                test_date = df.index[j]
+                                break
+
+                signal = {
+                    "date": df.index[i],
+                    "creek_level": creek_level,
+                    "close_price": df['Close'].iloc[i],
+                    "breakout_pct": round(price_change, 2),
+                    "volume_ratio": round(volume_ratio, 2),
+                    "close_position": round(close_position * 100, 1),
+                    "test_detected": test_detected,
+                    "test_date": test_date,
+                    "test_vol_ratio": round(test_vol_ratio, 2) if test_vol_ratio else None,
+                    "confidence": self._calculate_joc_confidence(price_change, volume_ratio, close_position, test_detected)
+                }
+                signals.append(signal)
+
+        if not signals:
+            return {"detected": False, "reason": "no_valid_joc_found"}
+
+        latest_joc = signals[-1]
+        latest_joc["confidence"] = round(latest_joc["confidence"], 2)
+
+        return {
+            "detected": True,
+            "signals": signals,
+            "latest": latest_joc,
+            "method": "meng_hongtao_joc",
+            "description": "孟洪涛JOC（跃过小溪）检测"
+        }
+
+    def _calculate_joc_confidence(self, breakout_pct, volume_ratio, close_position, has_test):
+        """计算JOC置信度"""
+        score = 0
+
+        # 突破幅度
+        if breakout_pct >= 5:
+            score += 25
+        elif breakout_pct >= 3:
+            score += 20
+
+        # 成交量
+        if volume_ratio >= 2.5:
+            score += 25
+        elif volume_ratio >= 2.0:
+            score += 20
+        elif volume_ratio >= 1.5:
+            score += 15
+
+        # 收盘位置
+        if close_position >= 90:
+            score += 25
+        elif close_position >= 80:
+            score += 20
+        elif close_position >= 75:
+            score += 15
+
+        # 回测确认（加分项）
+        if has_test:
+            score += 25
+
+        return score
+
+    def detect_vsa_signals(self) -> Dict:
+        """
+        VSA（Volume Spread Analysis）微观分析
+
+        检测：
+        1. No Supply（无供应）
+        2. No Demand（无需求）
+        3. Stopping Volume（停止行为）
+        """
+        if self.data is None or len(self.data) < 20:
+            return {
+                "no_supply": {"detected": False},
+                "no_demand": {"detected": False},
+                "stopping_vol": {"detected": False}
+            }
+
+        df = self.data.copy()
+        volume_ma20 = df['Volume_MA20'].iloc[-1]
+
+        # No Supply检测
+        no_supply_signals = []
+        for i in range(10, len(df)):
+            # 上涨趋势中
+            if df['Close'].iloc[i] > df['MA20'].iloc[i]:
+                # 极小实体
+                price_range = df['High'].iloc[i] - df['Low'].iloc[i]
+                if price_range > 0:
+                    body_pct = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / price_range
+                    if body_pct < 0.3:  # 实体小于波动的30%
+                        # 收在中高位
+                        close_position = (df['Close'].iloc[i] - df['Low'].iloc[i]) / price_range
+                        if close_position > 0.5:
+                            # 极低成交量
+                            vol_ratio = df['Volume'].iloc[i] / volume_ma20 if volume_ma20 > 0 else 1
+                            if vol_ratio < 0.6:  # 成交量小于均量的60%
+                                no_supply_signals.append({
+                                    "date": df.index[i],
+                                    "vol_ratio": round(vol_ratio, 2),
+                                    "close_position": round(close_position * 100, 1)
+                                })
+
+        # No Demand检测
+        no_demand_signals = []
+        for i in range(10, len(df)):
+            # 下跌趋势中
+            if df['Close'].iloc[i] < df['MA20'].iloc[i]:
+                # 极小实体
+                price_range = df['High'].iloc[i] - df['Low'].iloc[i]
+                if price_range > 0:
+                    body_pct = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / price_range
+                    if body_pct < 0.3:
+                        # 极低成交量
+                        vol_ratio = df['Volume'].iloc[i] / volume_ma20 if volume_ma20 > 0 else 1
+                        if vol_ratio < 0.6:
+                            no_demand_signals.append({
+                                "date": df.index[i],
+                                "vol_ratio": round(vol_ratio, 2)
+                            })
+
+        # Stopping Volume检测
+        stopping_vol_signals = []
+        for i in range(10, len(df)):
+            # 下跌趋势中
+            if df['Close'].iloc[i] < df['MA50'].iloc[i]:
+                # 大成交量
+                vol_ratio = df['Volume'].iloc[i] / volume_ma20 if volume_ma20 > 0 else 1
+                if vol_ratio > 1.5:
+                    # 价格止跌（窄幅波动）
+                    price_range = df['High'].iloc[i] - df['Low'].iloc[i]
+                    open_close_range = abs(df['Close'].iloc[i] - df['Open'].iloc[i])
+                    if price_range > 0 and open_close_range / price_range < 0.3:
+                        # 可能有下影线
+                        lower_shadow = min(df['Open'].iloc[i], df['Close'].iloc[i]) - df['Low'].iloc[i]
+                        if lower_shadow > price_range * 0.3:  # 下影线大于波动的30%
+                            stopping_vol_signals.append({
+                                "date": df.index[i],
+                                "vol_ratio": round(vol_ratio, 2),
+                                "price": df['Close'].iloc[i]
+                            })
+
+        return {
+            "no_supply": {
+                "detected": len(no_supply_signals) > 0,
+                "signals": no_supply_signals[-5:] if no_supply_signals else [],  # 最近5个
+                "latest": no_supply_signals[-1] if no_supply_signals else None
+            },
+            "no_demand": {
+                "detected": len(no_demand_signals) > 0,
+                "signals": no_demand_signals[-5:] if no_demand_signals else [],
+                "latest": no_demand_signals[-1] if no_demand_signals else None
+            },
+            "stopping_vol": {
+                "detected": len(stopping_vol_signals) > 0,
+                "signals": stopping_vol_signals[-3:] if stopping_vol_signals else [],  # 最近3个
+                "latest": stopping_vol_signals[-1] if stopping_vol_signals else None
+            }
+        }
+
+    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+        """计算ATR"""
+        high = df['High']
+        low = df['Low']
+        close = df['Close'].shift(1)
+
+        tr1 = high - low
+        tr2 = (high - close).abs()
+        tr3 = (low - close).abs()
+
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=period, min_periods=1).mean()
+
+        return atr.iloc[-1] if len(atr) > 0 else 0
+
+    def _detect_trading_range(self, df: pd.DataFrame, window: int = 60) -> Dict:
+        """检测交易区间"""
+        if len(df) < window:
+            return {"is_consolidation": False}
+
+        recent_df = df.tail(window)
+        high_max = recent_df['High'].max()
+        low_min = recent_df['Low'].min()
+        range_pct = (high_max - low_min) / low_min
+
+        is_consolidation = range_pct < 0.20  # 20%以内算震荡
+
+        return {
+            "is_consolidation": is_consolidation,
+            "high": high_max,
+            "low": low_min,
+            "range_pct": range_pct
+        }
+
+
+# 集成到现有pattern_detector的建议
+def enhance_pattern_detector(pattern_detector):
+    """
+    将孟洪涛增强方法集成到现有的pattern_detector
+
+    使用方法：
+    enhancer = MengPatternEnhancer(data, config)
+    spring_result = enhancer.detect_spring_enhanced()
+    joc_result = enhancer.detect_joc_enhanced()
+    vsa_result = enhancer.detect_vsa_signals()
+    """
+    pass

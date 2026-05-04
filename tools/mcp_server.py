@@ -17,7 +17,7 @@ if parent_dir not in sys.path:
 from tools.wyckoff_analyzer import WyckoffAnalyzer, batch_scan
 from tools.exceptions import *
 from tools.schemas import ErrorResponseModel
-from tools.core.enums import ErrorCode
+from tools.error_codes import ErrorCode
 
 mcp = FastMCP("Wyckoff Stock Analyzer")
 
@@ -37,13 +37,8 @@ def analyze_stock_wyckoff(symbol: str, period: str = "1y") -> str:
             json_result = analyzer.generate_json()
             return json_result
     except WyckoffError as e:
-        error_code = ErrorCode.ANALYSIS_ERROR
-        if isinstance(e, DataFetchError): error_code = ErrorCode.DATA_FETCH_ERROR
-        elif isinstance(e, InsufficientDataError): error_code = ErrorCode.INSUFFICIENT_DATA
-        elif isinstance(e, PatternDetectionError): error_code = ErrorCode.PATTERN_DETECTION_ERROR
-        
         resp = ErrorResponseModel(
-            error_code=error_code.value,
+            error_code=e.error_code.value,
             error=str(e),
             type=type(e).__name__,
             retriable=isinstance(e, (DataFetchError, WyckoffError))
@@ -51,7 +46,7 @@ def analyze_stock_wyckoff(symbol: str, period: str = "1y") -> str:
         return resp.model_dump_json()
     except Exception as e:
         resp = ErrorResponseModel(
-            error_code=ErrorCode.SYSTEM_ERROR.value,
+            error_code=ErrorCode.SYSTEM_UNKNOWN.value,
             error=str(e),
             type="UnknownError"
         )
@@ -70,13 +65,8 @@ def batch_analyze_sector(symbols: list[str], period: str = "1y") -> str:
         results = batch_scan(symbols, period=period, show_progress=False)
         return json.dumps(results, ensure_ascii=False, indent=2)
     except WyckoffError as e:
-        error_code = ErrorCode.ANALYSIS_ERROR
-        if isinstance(e, DataFetchError): error_code = ErrorCode.DATA_FETCH_ERROR
-        elif isinstance(e, InsufficientDataError): error_code = ErrorCode.INSUFFICIENT_DATA
-        elif isinstance(e, PatternDetectionError): error_code = ErrorCode.PATTERN_DETECTION_ERROR
-        
         resp = ErrorResponseModel(
-            error_code=error_code.value,
+            error_code=e.error_code.value,
             error=str(e),
             type=type(e).__name__,
             retriable=isinstance(e, (DataFetchError, WyckoffError))
@@ -84,7 +74,7 @@ def batch_analyze_sector(symbols: list[str], period: str = "1y") -> str:
         return resp.model_dump_json()
     except Exception as e:
         resp = ErrorResponseModel(
-            error_code=ErrorCode.SYSTEM_ERROR.value,
+            error_code=ErrorCode.SYSTEM_UNKNOWN.value,
             error=str(e),
             type="UnknownError"
         )

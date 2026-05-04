@@ -5,6 +5,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from .core.enums import MarketEnvironment, WyckoffPhase
+from .error_codes import ErrorCode
 
 
 # ============================================================
@@ -35,6 +36,16 @@ class WyckoffEventModel(BaseModel):
     date: Any = Field(default=None, description="事件日期")
     price: Optional[float] = Field(default=None, description="事件价格")
     volume: Optional[float] = Field(default=None, description="事件成交量")
+    confidence: float = Field(default=0.0, description="置信度 (0-1)")
+    description: Optional[str] = Field(default=None, description="事件描述")
+
+class BaseDetectionResult(BaseModel):
+    """通用检测结果包装器 (P0 #1)"""
+    detected: bool = Field(description="是否检测到")
+    confidence: float = Field(default=0.0, description="置信度")
+    description: Optional[str] = Field(default=None, description="文字描述")
+    evidence: Dict[str, Any] = Field(default_factory=dict, description="证据/原始数据")
+    error_code: Optional[ErrorCode] = Field(default=None, description="错误代码")
 
 
 class TradingRangeModel(BaseModel):
@@ -162,6 +173,22 @@ class LpsyModel(BaseModel):
     signals: Optional[List[LpsySignalModel]] = Field(default=None, description="信号列表")
     latest: Optional[LpsySignalModel] = Field(default=None, description="最新LPSY")
 
+class JocModel(BaseModel):
+    """JOC (Jump Over Creek) 模型"""
+    detected: bool = Field(description="是否检测到")
+    date: Any = Field(default=None, description="日期")
+    creek_level: float = Field(default=0.0, description="小溪位")
+    breakout_pct: float = Field(default=0.0, description="突破幅度")
+    confidence: float = Field(default=0.0, description="置信度")
+
+class FtiModel(BaseModel):
+    """FTI (Fall Through Ice) 模型"""
+    detected: bool = Field(description="是否检测到")
+    date: Any = Field(default=None, description="日期")
+    ice_level: float = Field(default=0.0, description="冰层位")
+    breakdown_pct: float = Field(default=0.0, description="跌破幅度")
+    confidence: float = Field(default=0.0, description="置信度")
+
 
 class EventsModel(BaseModel):
     """所有事件"""
@@ -175,6 +202,8 @@ class EventsModel(BaseModel):
     sow: SowModel = Field(description="SOW事件")
     lps: LpsModel = Field(description="LPS事件")
     lpsy: LpsyModel = Field(description="LPSY事件")
+    joc: Optional[JocModel] = Field(default=None, description="JOC事件")
+    fti: Optional[FtiModel] = Field(default=None, description="FTI事件")
 
 
 # ============================================================
@@ -336,10 +365,13 @@ class DivergenceModel(BaseModel):
 # ============================================================
 
 class PerformanceItem(BaseModel):
-    """历史表现项"""
+    """历史表现项 (P0 #1)"""
     total_occurrences: int = Field(description="总出现次数")
     success_rate: str = Field(description="成功率")
     avg_return: str = Field(description="平均收益")
+    pl_ratio: float = Field(default=0.0, description="盈亏比")
+    max_drawdown: str = Field(default="0.0%", description="最大回撤")
+    confidence_grade: str = Field(default="C", description="信心等级 (A/B/C)")
     note: Optional[str] = Field(default=None, description="备注")
 
 

@@ -10,7 +10,8 @@ import os
 from ..wyckoff_analyzer import WyckoffAnalyzer
 from ..config.settings import WyckoffConfig
 from ..exceptions import AnalysisError
-from ..core.signal_extractor import SignalExtractor
+from ..core.recommendation_engine import RecommendationEngine
+from ..core.utils import PhaseAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class ScreenerService:
         """
         self.config = config or WyckoffConfig()
         self._analyzers: Dict[str, WyckoffAnalyzer] = {}
+        self.rec_engine = RecommendationEngine(self.config)
     
     def quick_scan(self, symbols: List[str], period: str = "1y",
                    max_workers: int = None, show_progress: bool = True) -> List[Dict]:
@@ -145,18 +147,18 @@ class ScreenerService:
             
             phase_str = (phase_res.get('phase') or 'Unknown') if isinstance(phase_res, dict) else str(phase_res)
             
-            # 提取信号
-            signals = SignalExtractor.extract_signals(phase_res)
-            strength = SignalExtractor.calculate_signal_strength(signals)
-            weighted_score = SignalExtractor.calculate_weighted_score(phase_res, analyzer.thresholds)
+            # 提取信号 (使用新引擎)
+            strength = RecommendationEngine.calculate_signal_strength(phase_res)
+            # 注意：此处 market_env 为占位，未来可通过 orchestrator 获取
+            quality = self.rec_engine.calculate_signal_quality(data, phase_res, MarketEnvironment.UNKNOWN)
             
             return {
                 'symbol': symbol,
                 'phase': phase_str,
                 'confidence': round((phase_res.get('confidence') or 0.0) if isinstance(phase_res, dict) else 0.0, 2),
                 'strength': strength,
-                'weighted_score': weighted_score,
-                'is_entry': SignalExtractor.is_entry_phase(phase_res.get('phase_enum'))
+                'weighted_score': quality.score,
+                'is_entry': PhaseAdapter.is_entry_phase(phase_res.get('phase_enum'))
             }
             
         except Exception as exc:
@@ -180,29 +182,29 @@ class ScreenerService:
         
         for symbol, analyzer in self._analyzers.items():
             phase_res = analyzer.identify_phase_with_rs()
-            phase_str = SignalExtractor.get_phase_string(phase_res)
+            phase_str = phase_res.get('phase', 'Unknown')
             phase_enum = phase_res.get('phase_enum')
             
-            if not SignalExtractor.is_accumulation_phase(phase_str):
+            if not PhaseAdapter.is_accumulation(phase_str):
                 continue
             
             # 个股加权分
-            stock_score = SignalExtractor.calculate_weighted_score(phase_res, self.config.THRESHOLDS)
+            market_data = analyzer.get_market_regime()
+            quality = self.rec_engine.calculate_signal_quality(analyzer.data, phase_res, market_data['regime'])
+            stock_score = quality.score
             
             # 市场门控
-            market_data = analyzer.get_market_regime()
             industry_mult = analyzer.get_industry_multiplier()
-            
             final_score = stock_score * market_data['multiplier'] * industry_mult
             
-            # 过滤：必须是突破/震仓阶段 (C/D) 或分数极高
-            is_entry = SignalExtractor.is_entry_phase(phase_enum)
+            # 过滤
+            is_entry = PhaseAdapter.is_entry_phase(phase_enum or phase_str)
             if final_score < 40 and not is_entry:
                 continue
                 
             # 计算可执行性得分
             tr = analyzer.pattern_detector.detect_trading_range()
-            exec_score = SignalExtractor.get_execution_score(
+            exec_score = RecommendationEngine.get_execution_score(
                 analyzer.data['Close'].iloc[-1], tr['low'], tr['high'], "做多"
             )
             
@@ -230,28 +232,28 @@ class ScreenerService:
         
         for symbol, analyzer in self._analyzers.items():
             phase_res = analyzer.identify_phase_with_rs()
-            phase_str = SignalExtractor.get_phase_string(phase_res)
+            phase_str = phase_res.get('phase', 'Unknown')
             phase_enum = phase_res.get('phase_enum')
             
-            if not SignalExtractor.is_distribution_phase(phase_str):
+            if not PhaseAdapter.is_distribution(phase_str):
                 continue
             
             # 个股加权分
-            stock_score = SignalExtractor.calculate_weighted_score(phase_res, analyzer.thresholds)
-            
-            # 市场门控 (Risk-Off 时派发信号更有效)
             market_data = analyzer.get_market_regime()
-            multiplier = 1.2 if market_data['regime'] == 'risk-off' else 0.8 if market_data['regime'] == 'risk-on' else 1.0
+            quality = self.rec_engine.calculate_signal_quality(analyzer.data, phase_res, market_data['regime'])
+            stock_score = quality.score
             
+            # 市场门控
+            multiplier = 1.2 if market_data['regime'] == 'risk-off' else 0.8 if market_data['regime'] == 'risk-on' else 1.0
             final_score = stock_score * multiplier
             
             # 过滤
-            is_entry = SignalExtractor.is_entry_phase(phase_enum)
+            is_entry = PhaseAdapter.is_entry_phase(phase_enum or phase_str)
             if final_score < 40 and not is_entry:
                 continue
             
             tr = analyzer.pattern_detector.detect_trading_range()
-            exec_score = SignalExtractor.get_execution_score(
+            exec_score = RecommendationEngine.get_execution_score(
                 analyzer.data['Close'].iloc[-1], tr['low'], tr['high'], "做空"
             )
             
@@ -280,7 +282,7 @@ class ScreenerService:
                 continue
             
             phase_res = analyzer.identify_phase_with_rs()
-            phase_str = SignalExtractor.get_phase_string(phase_res)
+            phase_str = phase_res.get('phase', 'Unknown')
             
             results.append({
                 'symbol': symbol,
@@ -302,7 +304,7 @@ class ScreenerService:
                 continue
             
             phase_res = analyzer.identify_phase_with_rs()
-            phase_str = SignalExtractor.get_phase_string(phase_res)
+            phase_str = phase_res.get('phase', 'Unknown')
             
             results.append({
                 'symbol': symbol,
@@ -317,7 +319,7 @@ class ScreenerService:
     def _print_signal(self, result: Dict):
         """显示信号信息"""
         icons = []
-        if result.get('has_spring'):   icons.append('Spring')
+        # 注意：此处 result 现在直接包含标志位，由调用者决定
         if result.get('has_lps'):      icons.append('LPS')
         if result.get('has_upthrust'): icons.append('Upthrust')
         if result.get('has_lpsy'):     icons.append('LPSY')

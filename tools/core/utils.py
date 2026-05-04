@@ -26,6 +26,14 @@ class PhaseAdapter:
         return 'Markdown' in p_str or '下跌' in p_str
 
     @staticmethod
+    def is_entry_phase(phase: Union[str, WyckoffPhase]) -> bool:
+        """判断是否为可入场阶段 (C/D)"""
+        if isinstance(phase, WyckoffPhase):
+            return phase in [WyckoffPhase.PHASE_C, WyckoffPhase.PHASE_D]
+        p_str = str(phase)
+        return 'Phase C' in p_str or 'Phase D' in p_str
+
+    @staticmethod
     def get_market_side(phase: Union[str, WyckoffPhase]) -> str:
         """返回买方(bullish)或卖方(bearish)市场侧"""
         if PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase):

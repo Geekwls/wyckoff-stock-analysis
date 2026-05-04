@@ -19,6 +19,9 @@ class MockAnalyzer:
     
     def detect_trading_range(self): return {"is_consolidation": False}
     def detect_spring(self): return {"detected": False}
+    def detect_spring_menhongtao(self): return {"detected": False}
+    def detect_joc_menhongtao(self): return {"detected": False}
+    def detect_vsa_menhongtao(self): return {}
     def detect_upthrust(self): return {"detected": False}
     def detect_sos(self): return {"detected": False}
     def detect_sow(self): return {"detected": False}
@@ -138,7 +141,7 @@ def test_signal_conflict_detection():
     generator = WyckoffReportGenerator(analyzer)
     
     # Mock both JOC (Bullish) and Upthrust (Bearish) detected
-    generator.pattern_detector.detect_joc = lambda: {
+    generator.pattern_detector.detect_joc_menhongtao = lambda: {
         'detected': True, 'test_detected': True, 'creek_level': 105, 
         'date': datetime.now(), 'close_price': 108, 'breakout_pct': 0.03, 'volume_ratio': 2.0, 'confidence': 0.9
     }
@@ -151,7 +154,7 @@ def test_signal_conflict_detection():
     }
     generator.pattern_detector.detect_lps = lambda: {'detected': False}
     generator.pattern_detector.detect_lpsy = lambda: {'detected': False}
-    generator.pattern_detector.detect_spring = lambda: {'detected': False}
+    generator.pattern_detector.detect_spring_menhongtao = lambda: {'detected': False}
     generator.pattern_detector.detect_fti = lambda: {'detected': False}
     generator.pattern_detector.detect_trading_range = lambda: {
         'is_consolidation': True, 'low': 100, 'high': 110, 'range_pct': 0.1, 
@@ -159,6 +162,7 @@ def test_signal_conflict_detection():
     }
     
     report = generator.generate_report()
+    print(f"DEBUG REPORT:\n{report}")
     assert "信号冲突警示" in report
     assert "市场多空分歧剧烈" in report
 

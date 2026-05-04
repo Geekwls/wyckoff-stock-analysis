@@ -443,3 +443,44 @@ class ClassicPatternDetector:
         if df_l['Low'].min() < df_e['Low'].min() and df_l['RSI'].min() > df_e['RSI'].min():
             return {'detected': True, 'type': 'bottom_divergence', 'confidence': 0.8}
         return {'detected': False}
+    # --- Advanced Meng Hongtao Patterns ---
+    def detect_bag_holding(self) -> Dict:
+        """检测 Bag Holding (极端抛售高潮)"""
+        if self.data is None or len(self.data) < 20:
+            return {'detected': False}
+        df = self.data.tail(20)
+        vol_ma = df['Volume'].rolling(20, min_periods=1).mean()
+        
+        # 逻辑：成交量极大（>3x MA），K线实体极小，收盘在下半部
+        total_range = (df['High'] - df['Low']).replace(0, float('nan'))
+        body_size = (df['Close'] - df['Open']).abs()
+        body_ratio = body_size / total_range
+        
+        mask = (df['Volume'] > vol_ma * self.thresholds.VSA_BAG_HOLDING_VOL_RATIO) & \
+               (body_ratio < self.thresholds.VSA_STOPPING_BODY_RATIO) & \
+               (df['Low'] == df['Low'].rolling(10).min())
+               
+        if mask.any():
+            idx = df[mask].index[-1]
+            return {
+                'detected': True, 
+                'date': idx, 
+                'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2),
+                'description': 'Bag Holding - 极端放量且窄幅，庄家大量接盘'
+            }
+        return {'detected': False}
+
+    def detect_shakeout(self) -> Dict:
+        """检测 Shakeout (终极震仓)"""
+        # 逻辑：快速且深幅的下跌后迅速收回
+        spring_res = self.detect_spring()
+        if spring_res.get('detected'):
+            latest = spring_res['latest_spring']
+            if latest['breakdown_pct'] <= -self.thresholds.VSA_SHAKEOUT_DEPTH:
+                return {
+                    'detected': True, 
+                    'date': latest['date'],
+                    'depth': latest['breakdown_pct'],
+                    'description': 'Shakeout - 剧烈震仓，深度洗盘后快速回收'
+                }
+        return {'detected': False}

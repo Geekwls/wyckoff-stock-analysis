@@ -108,6 +108,8 @@ class WyckoffThresholds(BaseModel):
     VSA_STOPPING_VOL_RATIO: float = Field(1.50, description="Stopping Volume: 量能下限")
     VSA_STOPPING_BODY_RATIO: float = Field(0.40, description="Stopping Volume: 实体最大占波幅比")
     VSA_STOPPING_CLOSE_POS: float = Field(0.45, description="Stopping Volume: 收盘最低位置")
+    VSA_BAG_HOLDING_VOL_RATIO: float = Field(3.0, description="Bag Holding成交量倍数")
+    VSA_SHAKEOUT_DEPTH: float = Field(0.05, description="Shakeout深度阈值")
     
     # ── 涨跌停判断 ──────────────────────────────────────
     LIMIT_UP_THRESHOLD: float = Field(0.095, description="涨停阈值")

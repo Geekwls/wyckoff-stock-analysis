@@ -4,16 +4,20 @@
 威科夫分析系统异常层次结构
 """
 
+from .error_codes import ErrorCode
+
 class WyckoffError(Exception):
     """威科夫分析基础异常"""
-    pass
+    def __init__(self, message: str, error_code: ErrorCode = ErrorCode.SYSTEM_UNKNOWN):
+        self.error_code = error_code
+        super().__init__(message)
 
 class DataFetchError(WyckoffError):
     """数据获取失败"""
-    def __init__(self, symbol: str, reason: str):
+    def __init__(self, symbol: str, reason: str, error_code: ErrorCode = ErrorCode.DATA_FETCH_FAILED):
         self.symbol = symbol
         self.reason = reason
-        super().__init__(f"获取 {symbol} 数据失败: {reason}")
+        super().__init__(f"获取 {symbol} 数据失败: {reason}", error_code)
 
 class InsufficientDataError(WyckoffError):
     """数据不足"""
@@ -21,7 +25,7 @@ class InsufficientDataError(WyckoffError):
         self.symbol = symbol
         self.required = required
         self.actual = actual
-        super().__init__(f"{symbol} 数据不足: 需要{required}天，实际{actual}天")
+        super().__init__(f"{symbol} 数据不足: 需要{required}天，实际{actual}天", ErrorCode.DATA_INSUFFICIENT_SAMPLES)
 
 class AnalysisError(WyckoffError):
     """分析过程错误（基类）"""
@@ -32,7 +36,7 @@ class PatternDetectionError(AnalysisError):
     def __init__(self, pattern_type: str, detail: str):
         self.pattern_type = pattern_type
         self.detail = detail
-        super().__init__(f"形态检测失败 [{pattern_type}]: {detail}")
+        super().__init__(f"形态检测失败 [{pattern_type}]: {detail}", ErrorCode.PATTERN_LOGIC_ERROR)
 
 class PhaseIdentificationError(AnalysisError):
     """阶段识别错误"""
