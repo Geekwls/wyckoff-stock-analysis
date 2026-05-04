@@ -112,14 +112,25 @@ result = batch_scan(["AAPL", "MSFT", "GOOGL"])
 ```
 
 ### MCP Server
-在 Claude Desktop 配置中添加：
+在 Claude Desktop 配置中添加（需将路径替换为实际项目路径）：
 ```json
 "mcpServers": {
   "wyckoff": {
     "command": "python",
-    "args": ["C:/absolute/path/to/apps/mcp/server.py"]
+    "args": ["%PROJECT_ROOT%/apps/mcp/server.py"]
   }
 }
 ```
+**获取实际路径的方法**：
+```bash
+# Linux/Mac: 获取项目绝对路径
+cd /path/to/wyckoff-stock-analysis
+pwd
+
+# Windows: 获取项目绝对路径
+cd C:\path\to\wyckoff-stock-analysis
+cd
+```
+然后将 `pwd`/`cd` 的输出替换 `%PROJECT_ROOT%`。
 
 **Remember: Your goal is to combine the quantitative output from the Python tools with your advanced qualitative reasoning to provide actionable, risk-managed insights.**

@@ -70,14 +70,22 @@ python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 ```
 
 ### 3. MCP 接入 (AI Agent 推荐)
-在 `claude_desktop_config.json` 中添加：
+在 `claude_desktop_config.json` 中添加（需将 `%PROJECT_ROOT%` 替换为实际项目路径）：
 ```json
 "mcpServers": {
   "wyckoff": {
     "command": "python",
-    "args": ["C:/绝对路径/apps/mcp/server.py"]
+    "args": ["%PROJECT_ROOT%/apps/mcp/server.py"]
   }
 }
+```
+**获取实际路径**：
+```bash
+# Linux/Mac
+pwd  # 输出项目完整路径
+
+# Windows
+cd   # 输出项目完整路径
 ```
 
 ---
