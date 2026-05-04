@@ -82,32 +82,62 @@ python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 
 ---
 
-## 📁 项目导航
+## 📁 项目导航（核心路径版）
+
+> **⚠️ 注意**：以下为简化导航，仅展示核心文件和目录。完整目录树请运行：
+> ```bash
+> # Windows
+> tree /F /A
+> # Linux/Mac
+> tree -L 3
+> ```
 
 ```text
 wyckoff-stock-analysis/
 ├── SKILL.md                 # [大脑] AI Agent 系统指令与路由规则
+├── README.md                # [文档] 项目说明（本文件）
 ├── src/                     # [库层] 纯库代码，可被任何应用导入
 │   └── wyckoff/             #   └── 威科夫分析核心库
-│       ├── facade.py        #       └── WyckoffAnalyzer 统一入口
-│       ├── core/            #       └── 核心计算引擎：探测/回测/情绪/缓存
-│       ├── services/        #       └── 外部服务接口：ScreenerService
-│       ├── config/          #       └── settings.py：基于 Pydantic 的阈值管理
-│       ├── schemas.py       #       └── 强类型数据契约 (Pydantic Models)
+│       ├── facade.py        #       ⭐ WyckoffAnalyzer 统一入口
+│       ├── core/            #       └── 核心计算引擎（20+ 模块）
+│       │   ├── pattern_detector.py    # 形态识别
+│       │   ├── law_analyzer.py        # 威科夫定律分析
+│       │   ├── data_fetcher.py        # 数据获取
+│       │   ├── report_generator.py    # 报告生成
+│       │   └── ...                    # 其他核心模块
+│       ├── services/        #       └── 外部服务接口
+│       │   └── screener_service.py    # ⭐ 批量扫描服务
+│       ├── config/          #       └── 配置管理
+│       │   └── settings.py            # Pydantic 阈值配置
+│       ├── schemas.py       #       ⭐ 强类型数据契约
 │       ├── exceptions.py    #       └── 异常定义
 │       └── error_codes.py   #       └── 错误码定义
 ├── apps/                    # [应用层] 应用程序入口
-│   ├── cli/                 #   └── 命令行工具 (main.py)
-│   └── mcp/                 #   └── MCP 服务器 (server.py)
-└── tests/                   # [质量] 单元测试，覆盖全核心路径
+│   ├── cli/                 #   └── 命令行工具
+│   │   └── main.py          #       ⭐ CLI 入口
+│   └── mcp/                 #   └── MCP 服务器
+│       └── server.py        #       ⭐ MCP 服务器
+├── tests/                   # [质量] 单元测试（90+ 测试用例）
+│   ├── test_*.py            #   14 个测试文件
+│   └── conftest.py          #   pytest 配置
+├── references/              # [文档] 理论文档和实战指南
+│   ├── wyckoff-theory-full.md    # 完整理论
+│   ├── meng-hongtao-wyckoff-method.md  # 孟洪涛方法
+│   └── ...                         # 其他参考文档
+└── scripts/                 # [工具] 开发和维护脚本
+    └── check_repo_claims.py      # ⭐ README 校验脚本
 ```
 
-**架构原则：** 库层 (`src/wyckoff/`) 不反向依赖应用层 (`apps/`)，确保库的纯净和可复用性。
+**架构原则：**
+- 库层 (`src/wyckoff/`) 不反向依赖应用层 (`apps/`)
+- 应用层仅调用库层的公共 API
+- ⭐ 标记为常用或重要文件
 
 > **📋 项目统计**（最后校验：2026-05-04）
 > - 测试覆盖：90 个测试用例（14 个测试文件）
+> - 核心模块：20+ 个库层模块
 > - 运行 `python scripts/check_repo_claims.py` 可验证项目结构
-> - 以目录实际结构为准，文档可能滞后于代码更新
+> - ⚠️ **以目录实际结构为准，本文档可能滞后于代码更新**
 
 ---
 

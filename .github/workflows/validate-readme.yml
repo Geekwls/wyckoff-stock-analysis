@@ -11,6 +11,7 @@ jobs:
   check-readme:
     runs-on: ubuntu-latest
     name: Check README declarations
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository
@@ -22,18 +23,50 @@ jobs:
           python-version: '3.11'
 
       - name: Run README validation script
+        id: validate
         run: |
           python scripts/check_repo_claims.py --ci
+        continue-on-error: false
 
-      - name: Comment PR with results (if PR)
-        if: github.event_name == 'pull_request'
+      - name: Fail if validation failed
+        if: steps.validate.outcome == 'failure'
+        run: |
+          echo "::error::README validation failed! Please check the logs above and update README.md."
+          echo "::error::Run 'python scripts/check_repo_claims.py' locally to see detailed errors."
+          exit 1
+
+      - name: Comment PR with success message
+        if: github.event_name == 'pull_request' && steps.validate.outcome == 'success'
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            let comment = '## 🔍 README 声明校验结果\n\n';
-            comment += '✅ 所有检查通过！README 中的关键声明与仓库状态一致。\n\n';
-            comment += '建议在合并前人工审查项目导航部分是否需要更新。\n';
+            let comment = '## ✅ README 声明校验通过\n\n';
+            comment += '所有检查通过！README 中的关键声明与仓库状态一致。\n\n';
+            comment += '---\n\n';
+            comment += '💡 **提示**: 如果修改了项目结构，请记得同步更新 README.md 的"项目导航"部分。\n';
+            comment += '运行 `python scripts/check_repo_claims.py --update` 可以查看最新统计。\n';
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      - name: Comment PR with error message
+        if: github.event_name == 'pull_request' && steps.validate.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let comment = '## ❌ README 声明校验失败\n\n';
+            comment += 'README 中的某些声明与实际仓库状态不一致！\n\n';
+            comment += '请查看上方详细错误信息，并修复以下问题：\n';
+            comment += '- 检查关键文件是否存在\n';
+            comment += '- 检查测试数量声明是否合理\n';
+            comment += '- 检查目录结构是否完整\n\n';
+            comment += '修复后请重新提交 PR。\n\n';
+            comment += '---\n\n';
+            comment += '🔧 **本地调试**: 运行 `python scripts/check_repo_claims.py --ci` 查看详细错误。\n';
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
