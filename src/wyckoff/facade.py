@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-威科夫分析器 - Facade (P2 Refactored)
+威科夫分析器 - Facade (库层)
 Wyckoff Analyzer - Facade for Orchestrator and Detectors
+
+这是纯库层代码，不依赖任何应用层代码。
 """
 
 import pandas as pd
 import logging
-import os
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 
-# 基础组件
+# 库层内部导入
 from .config.settings import WyckoffConfig, WyckoffThresholds
 from .core.enums import MarketEnvironment, WyckoffPhase
 from .core.cache_service import CacheService
-
-# 编排层 (P2)
 from .core.orchestrator import WyckoffOrchestrator
-
-# 探测组件 (Facade 会持有的引用，供旧 API 使用)
 from .core.pattern_detector import WyckoffPatternDetector
 from .core.law_analyzer import WyckoffLawAnalyzer
 from .core.multi_timeframe_analyzer import MultiTimeframeAnalyzer
@@ -28,12 +25,15 @@ from .core.report_generator import WyckoffReportGenerator
 
 logger = logging.getLogger(__name__)
 
+
 class WyckoffAnalyzer:
     """
     威科夫分析器 (Facade)
-    
+
     在 P2 重构中，我们将控制流和决策逻辑移交给了 WyckoffOrchestrator 和 RecommendationEngine。
     此类作为统一入口保持向下兼容。
+
+    这是纯库层代码，可以安全地从任何应用层导入使用。
     """
 
     def __init__(
@@ -53,17 +53,17 @@ class WyckoffAnalyzer:
             max_size=256,
             ttl_seconds=3600,
         )
-        
+
         # 核心编排器
         self.orchestrator = WyckoffOrchestrator(self.config)
-        
+
         # 运行时数据与探测器 (fetch_data 后初始化)
         self.data = None
         self.pattern_detector = None
         self.law_analyzer = None
         self.mtf_analyzer = None
         self.rs_analyzer = None
-        
+
         self._index_analyzer_cache: Optional['WyckoffAnalyzer'] = None
 
     def __enter__(self): return self
@@ -72,6 +72,7 @@ class WyckoffAnalyzer:
         return False
 
     def close(self):
+        """清理资源"""
         self._analysis_cache.invalidate()
         if hasattr(self.orchestrator.data_fetcher, 'logout_baostock'):
             self.orchestrator.data_fetcher.logout_baostock()
@@ -97,10 +98,16 @@ class WyckoffAnalyzer:
     # ----------------------------------------------------------
     # 代理旧方法 (为了兼容性)
     # ----------------------------------------------------------
-    def identify_phase(self): return self.pattern_detector.identify_phase()
-    def detect_trading_range(self): return self.pattern_detector.detect_trading_range()
-    
+    def identify_phase(self):
+        """识别威科夫阶段"""
+        return self.pattern_detector.identify_phase()
+
+    def detect_trading_range(self):
+        """检测交易区间"""
+        return self.pattern_detector.detect_trading_range()
+
     def _get_baseline_index_symbol(self) -> str:
+        """获取基准指数代码"""
         from .core.symbol_resolver import SymbolResolver, MarketType
         info = SymbolResolver().resolve(self.symbol)
         if info.market == MarketType.A_SHARE:
@@ -109,13 +116,17 @@ class WyckoffAnalyzer:
         return "SPY"
 
     def _analyze_market_environment(self) -> Dict:
+        """分析市场环境"""
         # 这里为了演示，暂时调用编排器的占位逻辑
         return {"environment": MarketEnvironment.UNKNOWN}
 
     def calculate_cause_effect(self) -> Dict:
-        if not self.pattern_detector: return {}
+        """计算因果效应"""
+        if not self.pattern_detector:
+            return {}
         tr = self.pattern_detector.detect_trading_range()
-        if not tr.get('is_consolidation'): return {}
+        if not tr.get('is_consolidation'):
+            return {}
         size = tr['high'] - tr['low']
         return {
             'cause_size': round(size, 2),

@@ -60,10 +60,13 @@ pip install -r requirements.txt
 ### 2. 命令行体验
 ```bash
 # 体验人类可读报告 (美股)
-python tools/wyckoff_analyzer.py AAPL
+python -m apps.cli.main AAPL
 
 # 体验 AI 友好 JSON 输出 (A股)
-python tools/wyckoff_analyzer.py sh.600519 --json
+python -m apps.cli.main sh.600519 --format json
+
+# 批量扫描多只股票
+python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 ```
 
 ### 3. MCP 接入 (AI Agent 推荐)
@@ -72,7 +75,7 @@ python tools/wyckoff_analyzer.py sh.600519 --json
 "mcpServers": {
   "wyckoff": {
     "command": "python",
-    "args": ["C:/绝对路径/tools/mcp_server.py"]
+    "args": ["C:/绝对路径/apps/mcp/server.py"]
   }
 }
 ```
@@ -84,15 +87,22 @@ python tools/wyckoff_analyzer.py sh.600519 --json
 ```text
 wyckoff-stock-analysis/
 ├── SKILL.md                 # [大脑] AI Agent 系统指令与路由规则
-├── tools/                   # [执行] 量化工具库
-│   ├── core/                #   └── 核心计算引擎：探测/回测/情绪/缓存
-│   ├── services/            #   └── 外部服务接口：ScreenerService (统一筛选)
-│   ├── config/              #   └── settings.py：基于 Pydantic 的阈值管理
-│   ├── mcp_server.py        #   └── MCP 协议标准服务端 (支持上下文管理)
-│   ├── schemas.py           #   └── 强类型数据契约 (Pydantic Models)
-│   └── wyckoff_utils.py     #   └── 数据池仓库 (STOCK_POOLS)
+├── src/                     # [库层] 纯库代码，可被任何应用导入
+│   └── wyckoff/             #   └── 威科夫分析核心库
+│       ├── facade.py        #       └── WyckoffAnalyzer 统一入口
+│       ├── core/            #       └── 核心计算引擎：探测/回测/情绪/缓存
+│       ├── services/        #       └── 外部服务接口：ScreenerService
+│       ├── config/          #       └── settings.py：基于 Pydantic 的阈值管理
+│       ├── schemas.py       #       └── 强类型数据契约 (Pydantic Models)
+│       ├── exceptions.py    #       └── 异常定义
+│       └── error_codes.py   #       └── 错误码定义
+├── apps/                    # [应用层] 应用程序入口
+│   ├── cli/                 #   └── 命令行工具 (main.py)
+│   └── mcp/                 #   └── MCP 服务器 (server.py)
 └── tests/                   # [质量] 50+ 单元测试，覆盖全核心路径
 ```
+
+**架构原则：** 库层 (`src/wyckoff/`) 不反向依赖应用层 (`apps/`)，确保库的纯净和可复用性。
 
 ---
 
