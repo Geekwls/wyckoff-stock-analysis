@@ -120,6 +120,46 @@ class WyckoffAnalyzer:
         # 这里为了演示，暂时调用编排器的占位逻辑
         return {"environment": MarketEnvironment.UNKNOWN}
 
+
+    def analyze_timeframe_resonance(self) -> Dict:
+        """分析多时间框架共振（兼容旧接口）"""
+        if not self.mtf_analyzer:
+            return {
+                'resonance_level': 'unknown',
+                'implication': 'data_not_ready',
+                'weekly_trend': 'unknown',
+                'monthly_trend': 'unknown',
+            }
+
+        result = self.mtf_analyzer.analyze_resonance()
+        level = result.get('resonance_level', 'no_resonance')
+        implication_map = {
+            'strong_resonance': 'high_conviction',
+            'moderate_resonance': 'confirm_with_risk_control',
+            'weak_resonance': 'watch_for_confirmation',
+            'no_resonance': 'mixed_signals',
+        }
+        result['implication'] = implication_map.get(level, 'mixed_signals')
+        return result
+
+    def identify_phase_multi_timeframe(self) -> Dict:
+        """识别阶段并附加多时间框架趋势（兼容旧接口）"""
+        if self.pattern_detector:
+            try:
+                phase_result = self.identify_phase()
+            except Exception as e:
+                logger.warning(f'Failed to identify phase in multi-timeframe view, fallback to unknown: {e}')
+                phase_result = {'phase': 'unknown'}
+        else:
+            phase_result = {'phase': 'unknown'}
+        weekly = self.mtf_analyzer.get_weekly_trend() if self.mtf_analyzer else 'unknown'
+        monthly = self.mtf_analyzer.get_monthly_trend() if self.mtf_analyzer else 'unknown'
+
+        merged = dict(phase_result)
+        merged['weekly_trend'] = weekly
+        merged['monthly_trend'] = monthly
+        return merged
+
     def calculate_cause_effect(self) -> Dict:
         """计算因果效应"""
         if not self.pattern_detector:
