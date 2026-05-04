@@ -19,6 +19,7 @@ from ..schemas import (
     CauseEffectAnalysisModel
 )
 from .backtest_engine import BacktestEngine
+from .multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from .sentiment_analyzer import SentimentAnalyzer
 from .trading_plan_generator import TradingPlanGenerator
 import logging
@@ -361,6 +362,22 @@ class WyckoffReportGenerator:
         if vsa_lines:
             report += "\n📊 VSA辅助信号（量价微观分析）:\n" + "\n".join(vsa_lines) + "\n"
 
+        # BOREDOM_ZONE 量化（枯燥区）
+        boredom = self._quantify_boredom_zone()
+        report += """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【BOREDOM_ZONE 检测】
+"""
+        report += f"""
+枯燥区评分: {boredom.get('score', 0)}/100 {'🔥' if boredom.get('detected') else ''}
+近20日振幅: {boredom.get('range_pct', 0)*100:.2f}%
+近20日波动率: {boredom.get('close_std_pct', 0)*100:.2f}%
+量能干涸度: {boredom.get('volume_dryness', 0):.2f} (<1 越枯燥)
+整理持续: {boredom.get('duration_days', 0)} 天
+结论: {'进入高价值枯燥区，警惕后续爆发。' if boredom.get('detected') else '暂未形成典型枯燥区。'}
+"""
+
         # 因果测算
         cause_effect = self.analyzer.calculate_cause_effect()
         targets_ok = cause_effect and 'targets' in cause_effect
@@ -380,13 +397,30 @@ class WyckoffReportGenerator:
         current_price = self.data['Close'].iloc[-1]
         market_env_res = self.analyzer._analyze_market_environment()
         market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
+        
+        signal_quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
 
-        signal_quality_data = self.rec_engine.calculate_signal_quality(self.data, phase_result, market_env)
+        mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
+        conflict = self._cross_timeframe_conflict_warning(
+            phase=phase_str,
+            weekly_trend=mtf.get('weekly_trend', 'unknown'),
+            monthly_trend=mtf.get('monthly_trend', 'unknown')
+        )
         quality_score = signal_quality_data.score
         max_score = signal_quality_data.max_score
+
+        if conflict.get('has_conflict'):
+            report += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【跨周期冲突警告】
+⚠️ 日线方向与周/月趋势冲突，已触发仲裁降级
+   日线: {conflict.get('daily_side')} | 周线: {conflict.get('weekly_trend')} | 月线: {conflict.get('monthly_trend')}
+   仲裁动作: 延迟执行，等待跨周期一致后再开仓。
+"""
         
         # 阈值门控：如果评分过低或置信度太低，强制观望
-        if quality_score < 4 or phase_conf < 0.5:
+        if quality_score < 4 or phase_conf < 0.5 or conflict.get('has_conflict'):
             report += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -471,6 +505,61 @@ class WyckoffReportGenerator:
 """
 
         return report
+
+
+    def _quantify_boredom_zone(self, window: int = 20) -> dict:
+        """量化 BOREDOM_ZONE（日线枯燥区）"""
+        if self.data is None or len(self.data) < max(window, 30):
+            return {"detected": False, "score": 0, "reason": "insufficient_data"}
+
+        recent = self.data.tail(window).copy()
+        tr = self.pattern_detector.detect_trading_range() if self.pattern_detector else {}
+
+        range_pct = float((recent['High'].max() - recent['Low'].min()) / max(recent['Close'].iloc[-1], 1e-9))
+        close_std_pct = float(recent['Close'].pct_change().dropna().std() or 0.0)
+
+        vol_ma20 = self.data['Volume'].rolling(20, min_periods=5).mean().iloc[-1]
+        vol_recent = recent['Volume'].mean()
+        volume_dryness = float(vol_recent / max(vol_ma20, 1e-9))
+
+        in_consolidation = bool(tr.get('is_consolidation', False))
+        duration_days = int(tr.get('consolidation_duration_days', window)) if in_consolidation else window
+
+        tightness_score = max(0.0, 1.0 - min(range_pct / 0.18, 1.0))
+        quiet_score = max(0.0, 1.0 - min(close_std_pct / 0.02, 1.0))
+        dry_score = max(0.0, 1.0 - min(volume_dryness / 1.1, 1.0))
+        duration_score = min(duration_days / 80.0, 1.0)
+
+        score = int(round((tightness_score * 0.35 + quiet_score * 0.30 + dry_score * 0.20 + duration_score * 0.15) * 100))
+        detected = score >= 70 and in_consolidation
+
+        return {
+            "detected": detected,
+            "score": score,
+            "range_pct": range_pct,
+            "close_std_pct": close_std_pct,
+            "volume_dryness": volume_dryness,
+            "duration_days": duration_days,
+            "in_consolidation": in_consolidation
+        }
+
+    def _cross_timeframe_conflict_warning(self, phase: str, weekly_trend: str, monthly_trend: str) -> dict:
+        """跨周期冲突仲裁：日线方向与周/月趋势冲突时降级执行建议"""
+        side = PhaseAdapter.get_market_side(phase)
+        higher_tf_bull = (weekly_trend == 'bullish' and monthly_trend != 'bearish')
+        higher_tf_bear = (weekly_trend == 'bearish' and monthly_trend != 'bullish')
+
+        bullish_conflict = side == MarketSide.BULLISH and higher_tf_bear
+        bearish_conflict = side == MarketSide.BEARISH and higher_tf_bull
+        has_conflict = bullish_conflict or bearish_conflict
+
+        return {
+            "has_conflict": has_conflict,
+            "daily_side": side.value if hasattr(side, 'value') else str(side),
+            "weekly_trend": weekly_trend,
+            "monthly_trend": monthly_trend,
+            "action": "defer_execution" if has_conflict else "normal"
+        }
 
     def _round_floats(self, obj):
         """递归遍历字典/列表，将浮点数截断至3位小数"""
@@ -747,6 +836,11 @@ class WyckoffReportGenerator:
 
         # 增加风险建议 (委派至建议引擎)
         risk_advice = self.rec_engine.generate_risk_advice(signal_quality, trading_plan)
+
+        mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
+        conflict = self._cross_timeframe_conflict_warning(phase_str, mtf.get('weekly_trend', 'unknown'), mtf.get('monthly_trend', 'unknown'))
+        if conflict.get('has_conflict'):
+            risk_advice.moderate.reason = (risk_advice.moderate.reason or '') + '；跨周期冲突，建议延迟执行'
         
         # 使用BacktestEngine获取历史表现
         backtest_engine = BacktestEngine(self.data, self.pattern_detector.thresholds)
