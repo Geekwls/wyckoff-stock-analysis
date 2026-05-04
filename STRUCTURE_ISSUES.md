@@ -12,16 +12,16 @@
 
 **问题：** 两个 `utils.py` 文件，功能不同但命名相同
 
-| 文件 | 功能 | 大小 |
+| 文件 | 功能 | 状态 |
 |------|------|------|
-| `src/wyckoff/utils.py` | 股票池常量（STOCK_POOLS） | 1.6KB |
-| `src/wyckoff/core/utils.py` | 工具类（PhaseAdapter 等） | ~3KB |
+| `src/wyckoff/utils.py` | 股票池常量（STOCK_POOLS） | ❌ 已重命名为 stock_pools.py |
+| `src/wyckoff/core/utils.py` | 工具类（PhaseAdapter 等） | ✅ 保留 |
 
-**影响：**
+**✅ 已修复：**
 ```python
-# 可能造成混淆
-from src.wyckoff import utils           # 股票池
-from src.wyckoff.core import utils     # 工具类
+# 现在导入更清晰
+from src.wyckoff import stock_pools      # 股票池
+from src.wyckoff.core.utils import PhaseAdapter  # 工具类
 ```
 
 **建议：**
