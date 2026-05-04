@@ -216,10 +216,63 @@ class WyckoffLawAnalyzer:
             overall_assessment = "NEUTRAL"
             wyckoff_guidance = "量价关系正常，无明确信号"
 
+        volume_health = self._analyze_volume_health_context()
+
         return {
             "overall_assessment": overall_assessment,
             "wyckoff_guidance": wyckoff_guidance,
-            "timeframe_analysis": effort_result_analysis
+            "timeframe_analysis": effort_result_analysis,
+            "volume_health": volume_health
+        }
+
+    def _analyze_volume_health_context(self) -> dict:
+        """成交量健康度：从量比走向量价博弈性质。"""
+        df = self.data.copy()
+        if len(df) < 25:
+            return {"status": "insufficient_data"}
+
+        prev = df.iloc[-2]
+        curr = df.iloc[-1]
+        vol_ratio = curr['Volume'] / max(prev['Volume'], 1)
+        prev_spread = max(prev['High'] - prev['Low'], 1e-9)
+        curr_spread = max(curr['High'] - curr['Low'], 1e-9)
+        spread_ratio = curr_spread / prev_spread
+        evr = vol_ratio >= 1.5 and spread_ratio <= 0.8
+
+        tr_window = df.tail(60)
+        range_high = tr_window['High'].max()
+        range_low = tr_window['Low'].min()
+        close = curr['Close']
+        pos = (close - range_low) / max(range_high - range_low, 1e-9)
+        is_high_zone = pos >= 0.7
+        is_low_zone = pos <= 0.3
+
+        vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
+        shrink = curr['Volume'] < vol_ma20 * 0.85
+
+        contraction_signal = "neutral"
+        contraction_meaning = "缩量信号不明确"
+        if shrink and is_high_zone:
+            contraction_signal = "LPSY_RISK"
+            contraction_meaning = "高位缩量上涨/横盘，需求衰竭，警惕LPSY前兆"
+        elif shrink and is_low_zone:
+            contraction_signal = "LPS_CANDIDATE"
+            contraction_meaning = "低位缩量止跌，供应耗尽，符合LPS测试特征"
+
+        return {
+            "status": "alert" if evr else "normal",
+            "evr": {
+                "detected": bool(evr),
+                "label": "红色预警：停止行为" if evr else "未见显著停止行为",
+                "volume_expansion_ratio": round(vol_ratio, 2),
+                "spread_change_ratio": round(spread_ratio, 2)
+            },
+            "contraction_context": {
+                "detected": bool(shrink),
+                "price_position": "high" if is_high_zone else "low" if is_low_zone else "middle",
+                "signal": contraction_signal,
+                "meaning": contraction_meaning,
+            }
         }
 
     def analyze_cause_effect_law_enhanced(self) -> dict:
@@ -232,6 +285,7 @@ class WyckoffLawAnalyzer:
 
         # 增强因果分析
         trading_range = self.pattern_detector.detect_trading_range()
+        tr_story = self._build_tr_story()
         
         # 优先使用阶段识别器结果，避免仅用 MA60 推断造成语义偏差；失败时再降级到 MA60。
         current_close = self.data['Close'].iloc[-1]
@@ -318,7 +372,8 @@ class WyckoffLawAnalyzer:
                 "basic_analysis": basic_cause_effect,
                 "enhanced_analysis": {
                     "accumulation_distribution_effort": accumulation_effort,
-                    "projected_effects": cause_effect_interpretation
+                    "projected_effects": cause_effect_interpretation,
+                    "tr_story": tr_story,
                 }
             }
 
@@ -338,9 +393,54 @@ class WyckoffLawAnalyzer:
             return {
                 "basic_analysis": basic_cause_effect,
                 "enhanced_analysis": {
-                    "trend_mode_cause_effect": trend_analysis
+                    "trend_mode_cause_effect": trend_analysis,
+                    "tr_story": tr_story,
                 }
             }
+
+    def _build_tr_story(self) -> dict:
+        """BC/ST 锁定TR并给出破位目标，同时动态区分再派发与吸筹。"""
+        df = self.data.copy()
+        if len(df) < 80:
+            return {"status": "insufficient_data"}
+
+        recent = df.tail(80)
+        high = recent['High'].max()
+        low = recent['Low'].min()
+        width = high - low
+        close = recent['Close'].iloc[-1]
+        broke_down = close < low
+        downside_target_1 = low - width if broke_down else None
+
+        upthrust = self.pattern_detector.detect_upthrust() if self.pattern_detector else {}
+        spring = self.pattern_detector.detect_spring() if self.pattern_detector else {}
+        rebound_vol = recent['Volume'].tail(10).mean()
+        base_vol = recent['Volume'].head(40).mean()
+        weak_rebound = rebound_vol < base_vol * 0.9
+
+        mode = "neutral"
+        confidence_bias = 0
+        if spring.get('detected'):
+            mode = "accumulation_monitor"
+            confidence_bias = -10
+        elif upthrust.get('detected') and weak_rebound:
+            mode = "redistribution"
+            confidence_bias = 15
+
+        return {
+            "status": "active",
+            "tr_range": {
+                "resistance": round(high, 2),
+                "support": round(low, 2),
+                "width": round(width, 2)
+            },
+            "breakdown": {
+                "detected": bool(broke_down),
+                "downside_target_1": round(downside_target_1, 2) if downside_target_1 is not None else None
+            },
+            "phase_mode": mode,
+            "confidence_bias": confidence_bias
+        }
 
     def _detect_preliminary_support(self) -> dict:
         """检测初步支撑（积累期Phase A特征）- 价格急跌后出现大量接盘"""
