@@ -75,14 +75,14 @@ class SkillAuditor:
 
     def analyze_code_implementation(self) -> Dict:
         """分析代码实现完整性"""
-        # 检查整个tools目录
-        tools_path = os.path.join(self.project_path, "tools")
-        if not os.path.exists(tools_path):
-            return {"error": "tools directory not found"}
+        # 检查src/wyckoff目录（库层）
+        lib_path = os.path.join(self.project_path, "src/wyckoff")
+        if not os.path.exists(lib_path):
+            return {"error": "src/wyckoff directory not found"}
 
         # 读取所有Python文件
         all_code = ""
-        for root, dirs, files in os.walk(tools_path):
+        for root, dirs, files in os.walk(lib_path):
             for file in files:
                 if file.endswith('.py'):
                     file_path = os.path.join(root, file)
@@ -171,12 +171,16 @@ class SkillAuditor:
             content = f.read()
 
         platform_checks = {
-            "cursor_compatible": "Cursor" in content or "VS Code" in content,
-            "claude_code_compatible": "Claude Code" in content or "claude" in content.lower(),
+            "cursor_compatible": "Cursor" in content,
+            "claude_code_compatible": "Claude Code" in content,
+            "windsurf_compatible": "Windsurf" in content,
             "chatgpt_compatible": "ChatGPT" in content or "GPT" in content,
-            "cli_tool_support": "python -m apps.cli.main" in content.lower() or "命令行" in content,
-            "path_independence": any(keyword in content for keyword in ["apps/cli", "src/wyckoff", "当前目录", "working directory"]),
-            "universal_instructions": any(keyword in content for keyword in ["AI Agent", "大语言模型", "LLM"])
+            "mcp_support": "MCP" in content or "Claude Desktop" in content,
+            "cli_tool_support": "python -m apps.cli.main" in content or "Command Line Interface" in content,
+            "library_import": "from src.wyckoff import" in content or "Python Library" in content,
+            "dependency_instructions": "pip install" in content and "requirements.txt" in content,
+            "path_independence": any(keyword in content for keyword in ["apps/cli", "src/wyckoff", "%PROJECT_ROOT%"]),
+            "ai_agent_universal": any(keyword in content for keyword in ["AI Agent", "AI Agent Skill", "LLM"])
         }
 
         score = sum(platform_checks.values()) / len(platform_checks) * 100
@@ -206,7 +210,9 @@ class SkillAuditor:
             "error_recovery": any(keyword in skill_content for keyword in ["fail", "失败", "error", "错误"]),
             "quality_indicators": any(keyword in skill_content for keyword in ["confidence", "置信度", "score", "评分"]),
             "risk_warnings": any(keyword in skill_content for keyword in ["risk", "风险", "warning", "警告", "disclaimer", "免责"]),
-            "data_source_requirements": "data" in skill_content.lower() and "source" in skill_content.lower()
+            "data_source_requirements": "data" in skill_content.lower() and "source" in skill_content.lower(),
+            "dependency_install_help": "pip install" in skill_content and "requirements.txt" in skill_content,
+            "module_error_handling": "ModuleNotFoundError" in skill_content or "ImportError" in skill_content
         }
 
         score = sum(reliability_features.values()) / len(reliability_features) * 100
@@ -276,7 +282,7 @@ class SkillAuditor:
     def analyze_integration(self) -> Dict:
         """分析集成就绪度"""
         if not os.path.exists(self.analyzer_path):
-            return {"error": "wyckoff_analyzer.py not found"}
+            return {"error": "src/wyckoff/facade.py not found"}
 
         with open(self.analyzer_path, 'r', encoding='utf-8') as f:
             code = f.read()
