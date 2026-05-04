@@ -64,7 +64,11 @@ class MultiTimeframeAnalyzer:
 
     def analyze_resonance(self) -> Dict:
         """增强的多时间框架共振分析"""
-        daily_analysis = self.pattern_detector.identify_phase()
+        try:
+            daily_analysis = self.pattern_detector.identify_phase()
+        except Exception as e:
+            logger.warning(f'Failed to identify daily phase for resonance, fallback to unknown: {e}')
+            daily_analysis = {'phase': 'unknown', 'events_detected': {}}
         daily_events = daily_analysis.get('events_detected', {}) or {}
 
         weekly_resonance = self._check_signal_resonance('weekly')
