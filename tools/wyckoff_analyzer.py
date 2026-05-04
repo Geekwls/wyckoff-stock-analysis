@@ -114,3 +114,51 @@ class WyckoffAnalyzer:
                 'target_3': round(tr['high'] + size * 1.618, 2),
             }
         }
+
+
+def batch_scan(symbols: List[str], period: str = "1y",
+               scan_mode: str = "quick", config: WyckoffConfig = None,
+               **kwargs) -> Dict[str, Any]:
+    """
+    批量扫描股票（便捷函数）
+
+    Args:
+        symbols: 股票代码列表，如 ["AAPL", "MSFT", "GOOGL"]
+        period: 数据周期，默认 "1y"
+        scan_mode: 扫描模式
+            - "quick": 快速扫描（并行，返回摘要）✅ 当前支持
+            - "deep"/"accumulation"/"distribution"/"lps"/"lpsy": 深度筛选（待适配新版接口）
+        config: WyckoffConfig配置
+        **kwargs: 额外参数
+            - max_workers: 最大并行线程数（quick模式，默认自动检测）
+            - show_progress: 是否显示进度（默认True）
+
+    Returns:
+        扫描结果字典:
+        {
+            "results": List[Dict],      # 扫描结果列表
+            "summary": Dict,             # 统计摘要
+            "top_picks": List[Dict],     # 顶级机会（TOP 10）
+            "failed": List[str],         # 失败的股票
+            "scan_mode": str             # 扫描模式
+        }
+
+    Examples:
+        >>> # 快速扫描多只股票
+        >>> result = batch_scan(["AAPL", "MSFT", "GOOGL"])
+        >>> print(f"扫描完成: {result['summary']['total_scanned']} 只股票")
+        >>> print(f"发现信号: {result['summary']['signal_count']} 个")
+        >>>
+        >>> # 查看顶级机会
+        >>> for pick in result['top_picks']:
+        ...     print(f"{pick['symbol']}: {pick['phase']} (评分: {pick.get('weighted_score', pick.get('strength'))})")
+
+    Note:
+        - 需要安装 tqdm 库以显示进度条
+        - 并行扫描可显著提升效率（建议 4-8 线程）
+        - 不同市场可能需要不同的数据周期（A股建议 2y）
+    """
+    from .services.screener_service import ScreenerService
+
+    screener = ScreenerService(config)
+    return screener.batch_scan(symbols, period, scan_mode, **kwargs)

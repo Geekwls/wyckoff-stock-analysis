@@ -350,6 +350,100 @@ class ScreenerService:
                 print(f"  {i}. {stock['symbol']} - {stock['phase']} ({score_str})")
 
 
+    def batch_scan(self, symbols: List[str], period: str = "1y",
+                   scan_mode: str = "quick", **kwargs) -> Dict[str, Any]:
+        """
+        批量扫描（统一入口）
+
+        Args:
+            symbols: 股票代码列表
+            period: 数据周期
+            scan_mode: 扫描模式
+                - "quick": 快速扫描（并行，返回摘要）
+            **kwargs: 额外参数
+                - max_workers: 最大并行线程数（quick模式）
+                - show_progress: 是否显示进度（默认True）
+                - min_score: 最低评分过滤（默认0）
+
+        Returns:
+            扫描结果字典:
+            {
+                "results": List[Dict],  # 扫描结果列表
+                "summary": Dict,         # 统计摘要
+                "top_picks": List[Dict], # 顶级机会
+                "failed": List[str]      # 失败的股票
+            }
+
+        Examples:
+            >>> screener = ScreenerService()
+            >>> result = screener.batch_scan(["AAPL", "MSFT"], scan_mode="quick")
+        """
+        logger.info(f"启动批量扫描: {len(symbols)} 只股票, 模式={scan_mode}")
+
+        # 当前只支持 quick 模式
+        if scan_mode == "quick":
+            results = self.quick_scan(symbols, period, **kwargs)
+            failed = [r.get('symbol', 'unknown') for r in results if 'error' in r]
+            return self._format_batch_results(results, failed, scan_mode)
+        else:
+            raise ValueError(
+                f"不支持的扫描模式: {scan_mode}。"
+                f"当前仅支持 'quick' 模式。"
+                f"其他模式（accumulation/distribution/lps/lpsy）需要适配新版 WyckoffAnalyzer 接口。"
+            )
+
+    def _format_batch_results(self, results: List[Dict], failed: List[str],
+                              scan_mode: str) -> Dict[str, Any]:
+        """
+        格式化批量扫描结果
+
+        Args:
+            results: 扫描结果列表
+            failed: 失败的股票列表
+            scan_mode: 扫描模式
+
+        Returns:
+            格式化的结果字典
+        """
+        # 计算统计信息
+        total_scanned = len(results)
+        signal_count = sum(1 for r in results if r.get('strength', 0) >= 1)
+        entry_count = sum(1 for r in results if r.get('is_entry', False))
+        high_score_count = sum(1 for r in results if r.get('weighted_score', 0) >= 60)
+
+        # 找出顶级机会（按评分排序）
+        top_picks = sorted(
+            results,
+            key=lambda x: x.get('weighted_score', x.get('strength', 0)),
+            reverse=True
+        )[:10]
+
+        # 按阶段分组
+        phase_groups = {}
+        for r in results:
+            phase = r.get('phase', 'Unknown')
+            if phase not in phase_groups:
+                phase_groups[phase] = []
+            phase_groups[phase].append(r.get('symbol', 'unknown'))
+
+        summary = {
+            "total_scanned": total_scanned,
+            "signal_count": signal_count,
+            "entry_count": entry_count,
+            "high_score_count": high_score_count,
+            "failed_count": len(failed),
+            "phase_distribution": {k: len(v) for k, v in phase_groups.items()}
+        }
+
+        return {
+            "results": results,
+            "summary": summary,
+            "top_picks": top_picks,
+            "failed": failed,
+            "scan_mode": scan_mode
+        }
+
+
 # 预定义股票池已迁移至 tools/wyckoff_utils.py
 try:
     from ..wyckoff_utils import STOCK_POOLS
