@@ -20,6 +20,34 @@ sys.path.insert(0, project_root)
 from src.wyckoff.facade import WyckoffAnalyzer, batch_scan
 from src.wyckoff.config.settings import WyckoffConfig
 
+
+def check_dependencies():
+    """检查关键依赖是否已安装"""
+    missing = []
+    dependencies = {
+        'pandas': 'pandas',
+        'yfinance': 'yfinance',
+        'baostock': 'baostock',
+        'pydantic': 'pydantic',
+        'tqdm': 'tqdm',
+        'numpy': 'numpy',
+    }
+
+    for module_name, package_name in dependencies.items():
+        try:
+            __import__(module_name)
+        except ImportError:
+            missing.append(package_name)
+
+    if missing:
+        print("❌ 缺少依赖包:", ", ".join(missing), file=sys.stderr)
+        print("\n请运行以下命令安装依赖:", file=sys.stderr)
+        print(f"  pip install -r requirements.txt", file=sys.stderr)
+        print("\n或单独安装:", file=sys.stderr)
+        print(f"  pip install {' '.join(missing)}", file=sys.stderr)
+        sys.exit(1)
+
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -96,6 +124,9 @@ def analyze_batch(args):
 
 def main():
     """主入口"""
+    # 检查依赖
+    check_dependencies()
+
     parser = argparse.ArgumentParser(
         description='威科夫分析器 - 命令行工具',
         formatter_class=argparse.RawDescriptionHelpFormatter,
