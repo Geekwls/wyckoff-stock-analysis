@@ -7,7 +7,7 @@ from typing import List, Dict, Optional, Any
 import logging
 import os
 
-from ..wyckoff_analyzer import WyckoffAnalyzer
+from ..facade import WyckoffAnalyzer
 from ..config.settings import WyckoffConfig
 from ..exceptions import AnalysisError
 from ..core.recommendation_engine import RecommendationEngine
@@ -444,8 +444,8 @@ class ScreenerService:
         }
 
 
-# 预定义股票池已迁移至 tools/wyckoff_utils.py
+# 预定义股票池已迁移至 src/wyckoff/stock_pools.py
 try:
-    from ..wyckoff_utils import STOCK_POOLS
+    from ..stock_pools import STOCK_POOLS
 except ImportError:
     STOCK_POOLS = {}
