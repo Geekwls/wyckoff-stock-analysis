@@ -82,21 +82,36 @@ Your internal prompt context is deliberately kept small. If you are unsure about
 ## 🛡️ Error Handling
 
 If the Python tool fails or returns an error:
-1. **Check network connectivity** and explicitly mention this to the user.
-2. **Verify symbol format** for the target market:
+1. **Check for missing dependencies**:
+   - If you see `ModuleNotFoundError` or `ImportError`
+   - Or if you see `No module named 'pandas'`, `'baostock'`, `'yfinance'`, etc.
+   - **Solution**: Execute `pip install -r requirements.txt` to install all dependencies
+   - Inform the user: "Installing required dependencies..." and run the install command
+2. **Check network connectivity** and explicitly mention this to the user.
+3. **Verify symbol format** for the target market:
    - **A-Share**: `sh.600519` (Shanghai) or `sz.000001` (Shenzhen) or Chinese names
    - **US Market**: `AAPL`, `MSFT`, `GOOGL` (ticker symbols)
    - **HK Market**: `0700.HK` (4-5 digit code + .HK suffix)
-3. **Fall back to manual analysis** ONLY IF the user provides raw OHLCV data, but include clear disclaimers.
-4. **Never hallucinate quantitative data** if the fetch fails.
+4. **Fall back to manual analysis** ONLY IF the user provides raw OHLCV data, but include clear disclaimers.
+5. **Never hallucinate quantitative data** if the fetch fails.
 
 ## ⚙️ Compatibility
 
 - **Minimum Claude Version**: 3.5 (Sonnet/Opus)
 - **Required Tools**: Python 3.8+, pandas>=1.5.0
+- **Dependencies Installation**: Run `pip install -r requirements.txt` before first use
+  - Key dependencies: yfinance, baostock, pandas, pydantic, tqdm, numpy, mcp
 - **Tested Platforms**: Cursor, Claude Code, Windsurf, ChatGPT Plus, Claude Desktop (via MCP)
 
 ## 🛠️ Tooling
+
+### Prerequisites
+**Before running any commands**, ensure dependencies are installed:
+```bash
+pip install -r requirements.txt
+```
+
+If you encounter `ModuleNotFoundError` or `ImportError`, run the above command first.
 
 ### Command Line Interface
 ```bash
