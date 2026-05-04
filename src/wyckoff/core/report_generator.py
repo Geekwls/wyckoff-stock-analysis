@@ -78,7 +78,84 @@ class WyckoffReportGenerator:
    信号评级: {seq_rating}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
 
+        # 添加孟洪涛核心证据清单
+        core_evidence = phase_result.get('core_evidence', {})
+        if core_evidence and 'error' not in core_evidence:
+            evidence = core_evidence.get('evidence', {})
+            evidence_count = core_evidence.get('evidence_count', 0)
+            total_checks = core_evidence.get('total_checks', 4)
+            strength = core_evidence.get('strength', 'none')
+
+            report += f"""
+【核心证据清单】（孟洪涛方法）
+   Phase A 确认度: {evidence_count}/{total_checks} ({strength.upper()})
+"""
+
+            # SC (恐慌性抛售)
+            sc = evidence.get('sc', {})
+            if sc.get('detected'):
+                report += f"""
+   ✓ SC (恐慌抛售): {sc['date']} 价格{sc['price']:.2f} 量比{sc['volume_ratio']:.1f}x 置信度{sc['confidence']:.0f}%
+"""
+            else:
+                report += f"""
+   ✗ SC (恐慌抛售): 未检测到
+"""
+
+            # PS (初步支撑)
+            ps = evidence.get('ps', {})
+            if ps.get('detected'):
+                report += f"""
+   ✓ PS (初步支撑): 反弹{ps['rebound_pct']:.1f}% ({ps['sc_date']} → {ps['ps_date']}) 置信度{ps['confidence']:.0f}%
+"""
+            else:
+                report += f"""
+   ✗ PS (初步支撑): 未检测到
+"""
+
+            # SOT (停止行为)
+            sot = evidence.get('sot', {})
+            if sot.get('detected'):
+                report += f"""
+   ✓ SOT (停止行为): {sot['date']} 量比{sot['volume_ratio']:.1f}x 实体比{sot['body_ratio']*100:.0f}% 置信度{sot['confidence']:.0f}%
+"""
+            else:
+                report += f"""
+   ✗ SOT (停止行为): 未检测到（放量滞跌）
+"""
+
+            # Spring (弹簧)
+            spring = evidence.get('spring', {})
+            if spring.get('detected'):
+                report += f"""
+   ✓ Spring (弹簧): {spring['date']} 收盘{spring['close']:.2f} 滤网{spring['filters_passed']}/5 置信度{spring['confidence']:.0f}%
+"""
+            else:
+                report += f"""
+   ✗ Spring (弹簧): 未检测到
+"""
+
+            # 证据强度总结
+            if strength == 'strong':
+                report += f"""
+   >>> 强 Phase A ({evidence_count}/{total_checks}) - 可考虑LPS入场
+"""
+            elif strength == 'weak':
+                report += f"""
+   >>> 弱 Phase A ({evidence_count}/{total_checks}) - 建议等待更多证据
+"""
+            else:
+                report += f"""
+   >>> 无 Phase A 证据 ({evidence_count}/{total_checks}) - 不建议入场
+"""
+
+            report += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+        report += f"""
 【基础数据】
 当前价格: {self.data['Close'].iloc[-1]:.2f}
 52周最高: {self.data['High'].tail(252).max():.2f}
@@ -110,8 +187,23 @@ class WyckoffReportGenerator:
 """
 
         if spring.get('detected'):
-            latest = spring['latest_spring']
-            report += f"""
+            # 孟洪涛Spring检测返回格式
+            if 'filters_passed' in spring:
+                report += f"""
+✅ 检测到Spring（孟洪涛5滤网）:
+   日期: {spring.get('date', 'N/A')}
+   最低价: {spring.get('low', 0):.2f}
+   收盘价: {spring.get('close', 0):.2f}
+   下影线: {spring.get('lower_wick', 0):.2f}
+   成交量倍数: {spring.get('volume_ratio', 0):.1f}x
+   通过滤网: {spring.get('filters_passed', 0)}/5
+   置信度: {spring.get('confidence', 0):.0f}%
+   💡 孟洪涛建议：Spring是积累期最重要的买入信号之一。必须满足5个滤网条件才能确认，特别是要有充分的底部准备（因）。
+"""
+            # 传统Spring检测返回格式
+            elif 'latest_spring' in spring:
+                latest = spring['latest_spring']
+                report += f"""
 ✅ 检测到Spring:
    日期: {latest['date'].strftime('%Y-%m-%d')}
    跌破价: {latest['breakdown_price']:.2f}
@@ -162,7 +254,9 @@ class WyckoffReportGenerator:
 """
 
         if lps.get('detected'):
-            report += f"""
+            # 检查是否有date字段
+            if 'date' in lps:
+                report += f"""
 ✅ 检测到LPS（Last Point of Support）:
    日期: {lps['date'].strftime('%Y-%m-%d')}
    价格: {lps['price']:.2f}
@@ -170,14 +264,28 @@ class WyckoffReportGenerator:
    成交量缩小: 是
    ⭐ 建议做多入场点
 """
+            else:
+                report += f"""
+✅ 检测到LPS（Last Point of Support）:
+   价格: {lps.get('price', 0):.2f}
+   ⭐ 建议做多入场点
+"""
 
         if lpsy.get('detected'):
-            report += f"""
+            # 检查是否有date字段
+            if 'date' in lpsy:
+                report += f"""
 ✅ 检测到LPSY（Last Point of Supply）:
    日期: {lpsy['date'].strftime('%Y-%m-%d')}
    价格: {lpsy['price']:.2f}
    反弹幅度: {lpsy['rally_pct']*100:.1f}%
    成交量缩小: 是
+   ⭐ 建议做空入场点
+"""
+            else:
+                report += f"""
+✅ 检测到LPSY（Last Point of Supply）:
+   价格: {lpsy.get('price', 0):.2f}
    ⭐ 建议做空入场点
 """
 
@@ -272,8 +380,8 @@ class WyckoffReportGenerator:
         current_price = self.data['Close'].iloc[-1]
         market_env_res = self.analyzer._analyze_market_environment()
         market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
-        
-        signal_quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
+
+        signal_quality_data = self.rec_engine.calculate_signal_quality(self.data, phase_result, market_env)
         quality_score = signal_quality_data.score
         max_score = signal_quality_data.max_score
         
