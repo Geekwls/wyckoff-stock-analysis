@@ -22,6 +22,7 @@ from .core.law_analyzer import WyckoffLawAnalyzer
 from .core.multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from .core.relative_strength_analyzer import RelativeStrengthAnalyzer
 from .core.report_generator import WyckoffReportGenerator
+from .core.point_and_figure import PointAndFigureCalculator, calculate_cause_effect_from_pnf
 
 logger = logging.getLogger(__name__)
 
@@ -112,18 +113,126 @@ class WyckoffAnalyzer:
         return self.pattern_detector.detect_trading_range()
 
     def _get_baseline_index_symbol(self) -> str:
-        """获取基准指数代码"""
+        """
+        获取基准指数代码
+        
+        A股市场分类：
+        - 上证主板：600/601/603/605开头 → sh.000001 (上证综指)
+        - 科创板：688开头 → sh.000688 (科创50) 或 sh.000001
+        - 深证主板：000/001/002/003开头 → sz.399001 (深证成指)
+        - 创业板：300/301开头 → sz.399006 (创业板指)
+        - 北交所：8/4开头 → bj.899050 (北证50)
+        """
         from .core.symbol_resolver import SymbolResolver, MarketType
         info = SymbolResolver().resolve(self.symbol)
         if info.market == MarketType.A_SHARE:
             code = info.normalized.split('.')[-1]
-            return "sh.000001" if code.startswith('6') else "sz.399001"
+            prefix = info.normalized.split('.')[0]
+            
+            # 北交所：8或4开头（430/830/870等）
+            if code.startswith(('8', '4')) and prefix == 'BJ':
+                return "bj.899050"  # 北证50
+            
+            # 科创板：688开头
+            if code.startswith('688'):
+                return "sh.000688"  # 科创50
+            
+            # 创业板：300/301开头
+            if code.startswith(('300', '301')):
+                return "sz.399006"  # 创业板指
+            
+            # 上证主板：600/601/603/605开头
+            if code.startswith('6'):
+                return "sh.000001"  # 上证综指
+            
+            # 深证主板：000/001/002/003开头
+            return "sz.399001"  # 深证成指
+        
+        # 美股
         return "SPY"
 
     def _analyze_market_environment(self) -> Dict:
-        """分析市场环境"""
-        # 这里为了演示，暂时调用编排器的占位逻辑
-        return {"environment": MarketEnvironment.UNKNOWN}
+        """
+        分析市场环境
+        
+        基于指数的均线排列判断大盘环境：
+        - BULLISH: MA20 > MA50 > MA200 (多头排列)
+        - BEARISH: MA20 < MA50 < MA200 (空头排列)
+        - NEUTRAL: 其他情况
+        """
+        try:
+            # 获取基准指数代码
+            index_symbol = self._get_baseline_index_symbol()
+            
+            # 获取指数分析器
+            idx_analyzer = self._get_cached_index_analyzer()
+            if not idx_analyzer or idx_analyzer.data is None or len(idx_analyzer.data) < 200:
+                # 数据不足，返回未知
+                return {
+                    "environment": MarketEnvironment.UNKNOWN,
+                    "reason": "指数数据不足200日",
+                    "index_symbol": index_symbol
+                }
+            
+            data = idx_analyzer.data
+            
+            # 计算均线
+            close = data['Close']
+            ma20 = close.rolling(20).mean().iloc[-1]
+            ma50 = close.rolling(50).mean().iloc[-1]
+            ma200 = close.rolling(200).mean().iloc[-1]
+            current_price = close.iloc[-1]
+            
+            # 判断均线排列
+            # 多头排列：MA20 > MA50 > MA200 且价格在MA20之上
+            if ma20 > ma50 > ma200 and current_price > ma20:
+                environment = MarketEnvironment.STRONG_BULL
+                description = "多头排列：MA20>MA50>MA200，顺势做多"
+                trend_strength = "strong"
+            # 弱势多头：MA20 > MA50 但 MA50 < MA200
+            elif ma20 > ma50:
+                environment = MarketEnvironment.WEAK_BULL
+                description = "弱势多头：短期均线向上，中期均线承压"
+                trend_strength = "weak"
+            # 空头排列：MA20 < MA50 < MA200 且价格在MA20之下
+            elif ma20 < ma50 < ma200 and current_price < ma20:
+                environment = MarketEnvironment.STRONG_BEAR
+                description = "空头排列：MA20<MA50<MA200，顺势做空"
+                trend_strength = "strong"
+            # 弱势空头：MA20 < MA50 但 MA50 > MA200
+            elif ma20 < ma50:
+                environment = MarketEnvironment.BEAR
+                description = "弱势空头：短期均线向下，中期均线支撑"
+                trend_strength = "weak"
+            # 震荡/中性
+            else:
+                environment = MarketEnvironment.RANGE_BOUND
+                description = "震荡整理：均线交织，方向不明"
+                trend_strength = "neutral"
+            
+            # 计算价格相对MA200的位置（判断是否在牛熊分界线之上）
+            price_vs_ma200 = (current_price - ma200) / ma200 * 100
+            
+            return {
+                "environment": environment,
+                "description": description,
+                "trend_strength": trend_strength,
+                "index_symbol": index_symbol,
+                "current_price": round(float(current_price), 2),
+                "ma20": round(float(ma20), 2),
+                "ma50": round(float(ma50), 2),
+                "ma200": round(float(ma200), 2),
+                "price_vs_ma200_pct": round(float(price_vs_ma200), 2),
+                "ma_alignment": f"MA20={ma20:.2f}, MA50={ma50:.2f}, MA200={ma200:.2f}"
+            }
+            
+        except Exception as e:
+            logger.warning(f"市场环境分析失败: {e}")
+            return {
+                "environment": MarketEnvironment.UNKNOWN,
+                "reason": f"分析异常: {str(e)}",
+                "index_symbol": self._get_baseline_index_symbol()
+            }
 
 
     def analyze_timeframe_resonance(self) -> Dict:
@@ -204,21 +313,108 @@ class WyckoffAnalyzer:
             return None
 
     def calculate_cause_effect(self) -> Dict:
-        """计算因果效应"""
+        """
+        计算因果效应 (基于点数图水平计数)
+        
+        威科夫因果法则核心：
+        - 因（Cause）：水平准备（横向盘整的规模，用点数图列数衡量）
+        - 果（Effect）：垂直运动（价格突破后的目标幅度）
+        
+        正确方法：使用点数图（P&F）的水平计数来预测垂直目标
+        简单的"天数×ATR×斐波那契"不是威科夫方法
+        """
         if not self.pattern_detector:
             return {}
+        
+        # 获取交易区间信息
         tr = self.pattern_detector.detect_trading_range()
         if not tr.get('is_consolidation'):
             return {}
-        size = tr['high'] - tr['low']
-        return {
-            'cause_size': round(size, 2),
-            'targets': {
-                'target_1': round(tr['high'] + size * 0.618, 2),
-                'target_2': round(tr['high'] + size, 2),
-                'target_3': round(tr['high'] + size * 1.618, 2),
+        
+        try:
+            # 使用点数图计算因果效应
+            # box_size_pct=1.0 表示每个箱体为价格的1%
+            # reversal_boxes=3 表示需要3个箱体的反转才改变方向
+            pnf_result = calculate_cause_effect_from_pnf(
+                self.data, 
+                box_size_pct=1.0,
+                reversal_boxes=3
+            )
+            
+            # 如果点数图计算成功
+            if pnf_result.get('horizontal_count', 0) >= 3:
+                return {
+                    'method': 'point_and_figure',
+                    'cause_bars': pnf_result.get('horizontal_count', 0),
+                    'vertical_count': pnf_result.get('vertical_count', 0),
+                    'accumulation_range': pnf_result.get('accumulation_range', {}),
+                    'base_effect': pnf_result.get('base_effect', 0),
+                    'breakout_direction': pnf_result.get('breakout_direction', 'up'),
+                    'description': pnf_result.get('description', ''),
+                    'targets': pnf_result.get('targets', {}),
+                    'theory': '威科夫因果法则：水平计数决定垂直目标'
+                }
+            else:
+                # 如果点数图计算失败，使用改进的估算方法
+                # 基于波动率收缩和时间积累的综合估算
+                cause_bars = tr.get('consolidation_duration_days', 40)
+                
+                # 计算波动率收缩程度（真正的"因"）
+                recent_data = self.data.tail(cause_bars)
+                if len(recent_data) < 10:
+                    return {}
+                
+                # 使用ATR的百分比变化来衡量波动率收缩
+                atr_series = (recent_data['High'] - recent_data['Low']).rolling(window=5).mean()
+                atr_start = atr_series.iloc[0] if len(atr_series) > 0 else 0
+                atr_end = atr_series.iloc[-1] if len(atr_series) > 0 else 0
+                
+                # 波动率收缩越明显，积累的能量越大
+                volatility_contraction = 1 - (atr_end / atr_start) if atr_start > 0 else 0
+                
+                # 基于波动率收缩和时间积累计算潜力
+                base_price = tr['high']
+                price_range = tr['high'] - tr['low']
+                
+                # 使用波动率收缩系数调整目标
+                # 收缩越明显，突破潜力越大
+                contraction_factor = max(0.5, 1 + volatility_contraction * 2)
+                potential_move = price_range * contraction_factor * (cause_bars / 30)
+                
+                return {
+                    'method': 'volatility_contraction',
+                    'cause_bars': cause_bars,
+                    'volatility_contraction': round(volatility_contraction * 100, 1),
+                    'contraction_factor': round(contraction_factor, 2),
+                    'description': f"基于波动率收缩{volatility_contraction*100:.1f}%和{cause_bars}天积累，"
+                                  f"预计突破幅度为{potential_move/base_price*100:.1f}%",
+                    'targets': {
+                        'target_1': round(base_price + potential_move * 0.618, 2),
+                        'target_2': round(base_price + potential_move, 2),
+                        'target_3': round(base_price + potential_move * 1.618, 2),
+                    },
+                    'theory': '改进估算：基于波动率收缩和时间积累'
+                }
+                
+        except Exception as e:
+            logger.warning(f"点数图计算失败，使用备用方法: {e}")
+            # 备用方法
+            cause_bars = tr.get('consolidation_duration_days', 40)
+            base_price = tr['high']
+            price_range = tr['high'] - tr['low']
+            potential_move = price_range * 1.0
+            
+            return {
+                'method': 'fallback',
+                'cause_bars': cause_bars,
+                'description': f"备用估算：横盘{cause_bars}天，预计突破幅度为{potential_move/base_price*100:.1f}%",
+                'targets': {
+                    'target_1': round(base_price + potential_move * 0.618, 2),
+                    'target_2': round(base_price + potential_move, 2),
+                    'target_3': round(base_price + potential_move * 1.618, 2),
+                },
+                'theory': '备用估算方法'
             }
-        }
 
 
 def batch_scan(symbols: List[str], period: str = "1y",

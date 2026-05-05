@@ -5,6 +5,7 @@ from datetime import datetime
 from ..config.settings import WyckoffConfig
 from .utils import PhaseAdapter
 from ..exceptions import InsufficientDataError, LawAnalysisError
+from .point_and_figure import PointAndFigureCalculator, calculate_cause_effect_from_pnf
 import logging
 logger = logging.getLogger(__name__)
 
@@ -406,46 +407,114 @@ class WyckoffLawAnalyzer:
                 "effort_quality": "HIGH" if range_tightness < 0.15 else "MEDIUM" if range_tightness < 0.25 else "LOW"
             }
 
-            # 2. 预测"效果" - 基于Wyckoff理论的目标计算
+            # 2. 预测"效果" - 基于点数图水平计数的目标计算
             current_position = trading_range.get("position", 0.5)
-
-            if current_position > 0.5:
-                # 向上突破的因果预测
-                breakout_point = range_high
-                cause = range_high - range_low
-
-                targets = {
-                    "minimum_target": breakout_point + cause * 1.0,    # 保守目标
-                    "likely_target": breakout_point + cause * 1.618,   # 黄金分割目标
-                    "maximum_target": breakout_point + cause * 2.618    # 激进目标
+            cause = range_high - range_low
+            
+            # 使用点数图计算因果效应
+            try:
+                pnf_result = calculate_cause_effect_from_pnf(
+                    self.data, 
+                    box_size_pct=1.0,
+                    reversal_boxes=3
+                )
+                
+                if pnf_result.get('horizontal_count', 0) >= 3:
+                    # 点数图计算成功
+                    targets = pnf_result.get('targets', {})
+                    projected_direction = "UPSIDE" if pnf_result.get('breakout_direction') == 'up' else "DOWNSIDE"
+                    effect_probability = self._calculate_breakout_probability(phase, pnf_result.get('breakout_direction', 'up'))
+                    
+                    cause_effect_interpretation = {
+                        "method": "point_and_figure",
+                        "current_situation": f"当前处于{phase}，点数图水平计数{pnf_result.get('horizontal_count', 0)}列",
+                        "effort_assessment": f"积累/派发努力质量为{accumulation_effort['effort_quality']}",
+                        "projected_direction": projected_direction,
+                        "breakout_probability": effect_probability,
+                        "target_projections": targets,
+                        "wyckoff_logic": pnf_result.get('description', ''),
+                        "theory": "威科夫因果法则：水平计数决定垂直目标"
+                    }
+                else:
+                    # 备用方法：基于波动率收缩和时间积累
+                    atr = self.data['ATR'].iloc[-1] if 'ATR' in self.data.columns else (range_high - range_low) / 5
+                    
+                    # 计算波动率收缩程度
+                    recent_data = self.data.tail(range_duration)
+                    atr_series = (recent_data['High'] - recent_data['Low']).rolling(window=5).mean()
+                    atr_start = atr_series.iloc[0] if len(atr_series) > 0 else 0
+                    atr_end = atr_series.iloc[-1] if len(atr_series) > 0 else 0
+                    volatility_contraction = 1 - (atr_end / atr_start) if atr_start > 0 else 0
+                    
+                    # 基于波动率收缩和时间积累计算潜力
+                    contraction_factor = max(0.5, 1 + volatility_contraction * 2)
+                    horizontal_potential = cause * contraction_factor * (range_duration / 30)
+                    
+                    if current_position > 0.5:
+                        breakout_point = range_high
+                        targets = {
+                            "minimum_target": float(round(breakout_point + horizontal_potential * 0.618, 2)),
+                            "likely_target": float(round(breakout_point + horizontal_potential, 2)),
+                            "maximum_target": float(round(breakout_point + horizontal_potential * 1.618, 2))
+                        }
+                        projected_direction = "UPSIDE"
+                        effect_probability = self._calculate_breakout_probability(phase, "up")
+                    else:
+                        breakdown_point = range_low
+                        targets = {
+                            "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
+                            "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
+                            "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
+                        }
+                        projected_direction = "DOWNSIDE"
+                        effect_probability = self._calculate_breakout_probability(phase, "down")
+                    
+                    cause_effect_interpretation = {
+                        "method": "volatility_contraction",
+                        "current_situation": f"当前处于{phase}，波动率收缩{volatility_contraction*100:.1f}%",
+                        "effort_assessment": f"积累/派发努力质量为{accumulation_effort['effort_quality']}",
+                        "projected_direction": projected_direction,
+                        "breakout_probability": effect_probability,
+                        "target_projections": targets,
+                        "wyckoff_logic": f"基于波动率收缩{volatility_contraction*100:.1f}%和{range_duration}天积累，预计{cause:.2f}点的积累/派发努力",
+                        "theory": "改进估算：基于波动率收缩和时间积累"
+                    }
+                    
+            except Exception as e:
+                logger.warning(f"点数图计算失败，使用备用方法: {e}")
+                # 备用方法
+                atr = self.data['ATR'].iloc[-1] if 'ATR' in self.data.columns else (range_high - range_low) / 5
+                horizontal_potential = range_duration * atr * 0.25
+                
+                if current_position > 0.5:
+                    breakout_point = range_high
+                    targets = {
+                        "minimum_target": float(round(breakout_point + horizontal_potential * 0.618, 2)),
+                        "likely_target": float(round(breakout_point + horizontal_potential, 2)),
+                        "maximum_target": float(round(breakout_point + horizontal_potential * 1.618, 2))
+                    }
+                    projected_direction = "UPSIDE"
+                    effect_probability = self._calculate_breakout_probability(phase, "up")
+                else:
+                    breakdown_point = range_low
+                    targets = {
+                        "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
+                        "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
+                        "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
+                    }
+                    projected_direction = "DOWNSIDE"
+                    effect_probability = self._calculate_breakout_probability(phase, "down")
+                
+                cause_effect_interpretation = {
+                    "method": "fallback",
+                    "current_situation": f"当前处于{phase}，因果幅度为{cause:.2f}点",
+                    "effort_assessment": f"积累/派发努力质量为{accumulation_effort['effort_quality']}",
+                    "projected_direction": projected_direction,
+                    "breakout_probability": effect_probability,
+                    "target_projections": targets,
+                    "wyckoff_logic": f"备用估算：根据Wyckoff因果定律，{cause:.2f}点的积累/派发努力",
+                    "theory": "备用估算方法"
                 }
-
-                projected_direction = "UPSIDE"
-                effect_probability = self._calculate_breakout_probability(phase, "up")
-
-            else:
-                # 向下突破的因果预测
-                breakdown_point = range_low
-                cause = range_high - range_low
-
-                targets = {
-                    "minimum_target": breakdown_point - cause * 1.0,
-                    "likely_target": breakdown_point - cause * 1.618,
-                    "maximum_target": breakdown_point - cause * 2.618
-                }
-
-                projected_direction = "DOWNSIDE"
-                effect_probability = self._calculate_breakout_probability(phase, "down")
-
-            # 3. Wyckoff因果关系的解读
-            cause_effect_interpretation = {
-                "current_situation": f"当前处于{phase}，因果幅度为{cause:.2f}点",
-                "effort_assessment": f"积累/派发努力质量为{accumulation_effort['effort_quality']}",
-                "projected_direction": projected_direction,
-                "breakout_probability": effect_probability,
-                "target_projections": targets,
-                "wyckoff_logic": f"根据Wyckoff因果定律，{cause:.2f}点的积累/派发努力，预计产生{targets['likely_target']:.2f}点的效果"
-            }
 
             return {
                 "basic_analysis": basic_cause_effect,
@@ -628,7 +697,15 @@ class WyckoffLawAnalyzer:
             return "MEDIUM (50-65%)"
 
     def _basic_cause_effect_analysis(self) -> dict:
-        """基础因果分析 - 作为fallback方法"""
+        """
+        基础因果分析 - 使用点数图水平计数
+        
+        威科夫因果法则核心：
+        - 因（Cause）：水平准备（横向盘整的规模，用点数图列数衡量）
+        - 果（Effect）：垂直运动（价格突破后的目标幅度）
+        
+        正确方法：使用点数图（P&F）的水平计数来预测垂直目标
+        """
         try:
             # 计算交易区间
             recent_data = self.data.tail(60)
@@ -636,20 +713,67 @@ class WyckoffLawAnalyzer:
             trading_range_low = recent_data['Low'].min()
             cause_size = trading_range_high - trading_range_low
 
-            # 计算目标位
+            # 使用点数图计算因果效应
+            try:
+                pnf_result = calculate_cause_effect_from_pnf(
+                    self.data, 
+                    box_size_pct=1.0,
+                    reversal_boxes=3
+                )
+                
+                if pnf_result.get('horizontal_count', 0) >= 3:
+                    # 点数图计算成功
+                    return {
+                        "method": "point_and_figure",
+                        "cause_size": cause_size,
+                        "horizontal_count": pnf_result.get('horizontal_count', 0),
+                        "vertical_count": pnf_result.get('vertical_count', 0),
+                        "accumulation_range": pnf_result.get('accumulation_range', {}),
+                        "base_effect": pnf_result.get('base_effect', 0),
+                        "breakout_direction": pnf_result.get('breakout_direction', 'up'),
+                        "breakout_point": trading_range_high,
+                        "targets": pnf_result.get('targets', {}),
+                        "current_position": (self.data['Close'].iloc[-1] - trading_range_low) / cause_size if cause_size > 0 else 0,
+                        "consolidation_duration_days": 60,
+                        "description": pnf_result.get('description', ''),
+                        "theory": "威科夫因果法则：水平计数决定垂直目标"
+                    }
+            except Exception as e:
+                logger.warning(f"点数图计算失败，使用备用方法: {e}")
+            
+            # 备用方法：基于波动率收缩和时间积累
+            duration = 60
+            atr = self.data['ATR'].iloc[-1] if 'ATR' in self.data.columns else (trading_range_high - trading_range_low) / 5
+            
+            # 计算波动率收缩程度
+            atr_series = (recent_data['High'] - recent_data['Low']).rolling(window=5).mean()
+            atr_start = atr_series.iloc[0] if len(atr_series) > 0 else 0
+            atr_end = atr_series.iloc[-1] if len(atr_series) > 0 else 0
+            volatility_contraction = 1 - (atr_end / atr_start) if atr_start > 0 else 0
+            
+            # 基于波动率收缩和时间积累计算潜力
+            contraction_factor = max(0.5, 1 + volatility_contraction * 2)
+            potential = cause_size * contraction_factor * (duration / 30)
+            
             breakout_point = trading_range_high
             targets = {
-                "target_1": breakout_point + cause_size * 0.618,
-                "target_2": breakout_point + cause_size * 1.0,
-                "target_3": breakout_point + cause_size * 1.618
+                "target_1": round(breakout_point + potential * 0.618, 2),
+                "target_2": round(breakout_point + potential, 2),
+                "target_3": round(breakout_point + potential * 1.618, 2)
             }
 
             return {
+                "method": "volatility_contraction",
                 "cause_size": cause_size,
+                "volatility_contraction": round(volatility_contraction * 100, 1),
+                "contraction_factor": round(contraction_factor, 2),
                 "breakout_point": breakout_point,
                 "targets": targets,
                 "current_position": (self.data['Close'].iloc[-1] - trading_range_low) / cause_size if cause_size > 0 else 0,
-                "consolidation_duration_days": 60
+                "consolidation_duration_days": duration,
+                "description": f"基于波动率收缩{volatility_contraction*100:.1f}%和{duration}天积累",
+                "theory": "改进估算：基于波动率收缩和时间积累"
             }
         except Exception as e:
             raise LawAnalysisError("因果分析", str(e)) from e
+  

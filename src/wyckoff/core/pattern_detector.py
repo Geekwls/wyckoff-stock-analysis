@@ -12,6 +12,7 @@ from ..schemas import (
     SosModel, SowModel, LpsModel, LpsyModel, TradingRangeModel,
     JocModel, FtiModel
 )
+from ..exceptions import PatternDetectionError, AnalysisError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,50 @@ class WyckoffPatternDetector:
 
         # 初始化孟洪涛增强检测器
         self.meng_enhancer = MengPatternEnhancer(data, config)
+        
+        # 计算ATR百分比用于动态阈值
+        self._atr_pct = self._calculate_atr_pct()
+    
+    def _calculate_atr_pct(self) -> float:
+        """
+        计算ATR占价格的百分比
+        
+        Returns:
+            ATR百分比（如0.03表示3%）
+        """
+        try:
+            if 'ATR' in self.data.columns and len(self.data) > 0:
+                atr = self.data['ATR'].iloc[-1]
+                price = self.data['Close'].iloc[-1]
+                if price > 0:
+                    return float(atr / price)
+            return 0.03  # 默认3%
+        except Exception:
+            return 0.03  # 默认3%
+    
+    def _get_dynamic_volume_threshold(self, base_threshold: float = 1.5) -> float:
+        """
+        获取动态成交量阈值
+        
+        Args:
+            base_threshold: 基础阈值
+            
+        Returns:
+            动态成交量阈值
+        """
+        return self.thresholds.get_dynamic_volume_threshold(self._atr_pct, base_threshold)
+    
+    def _get_dynamic_price_threshold(self, base_threshold: float = 0.03) -> float:
+        """
+        获取动态价格变化阈值
+        
+        Args:
+            base_threshold: 基础阈值
+            
+        Returns:
+            动态价格变化阈值
+        """
+        return self.thresholds.get_dynamic_price_threshold(self._atr_pct, base_threshold)
 
     # --- 代理方法 (Delegated Methods) ---
 
@@ -164,57 +209,26 @@ class WyckoffPatternDetector:
     def detect_spring_menhongtao(self) -> Dict:
         """
         孟洪涛Spring（震仓）增强检测
-
-        基于孟洪涛《新威科夫操盘法》的5重过滤标准：
-        1. 跌破幅度：1-3%（2%最佳）
-        2. 收回时间：1-3天（根据ATR动态调整）
-        3. 收回确认：收盘价站稳支撑位上方
-        4. 成交量：收回时 > 跌破时
-        5. 收盘位置：日内高位70%以上
-
-        Returns:
-            Dict: 包含置信度评分（0-100分）的检测结果
         """
         try:
             return self.meng_enhancer.detect_spring_enhanced()
         except Exception as e:
             logger.exception(f"孟洪涛Spring检测失败: {e}")
-            # 回退到经典检测方法
-            logger.warning("回退到经典Spring检测方法")
             return self.detect_spring()
 
     def detect_joc_menhongtao(self) -> Dict:
         """
         孟洪涛JOC（跃过小溪）增强检测
-
-        基于孟洪涛《新威科夫操盘法》的严格标准：
-        1. 突破确认：长阳线突破（涨幅>3%）
-        2. 突破量能：成交量>1.5倍均量
-        3. 收盘位置：日内高位75%以上
-        4. 回测确认：缩量回落不破阻力位
-
-        Returns:
-            Dict: 包含置信度评分（0-100分）的检测结果
         """
         try:
             return self.meng_enhancer.detect_joc_enhanced()
         except Exception as e:
             logger.exception(f"孟洪涛JOC检测失败: {e}")
-            # 回退到经典检测方法
-            logger.warning("回退到经典JOC检测方法")
             return self.detect_joc()
 
     def detect_vsa_menhongtao(self) -> Dict:
         """
         孟洪涛VSA（Volume Spread Analysis）微观分析
-
-        检测：
-        - No Supply（无供应）：绝佳买入点
-        - No Demand（无需求）：绝佳做空点
-        - Stopping Volume（停止行为）：可能筑底
-
-        Returns:
-            Dict: VSA信号检测结果
         """
         try:
             return self.meng_enhancer.detect_vsa_signals()
@@ -241,145 +255,283 @@ class WyckoffPatternDetector:
     def detect_climax_panic_selling(self, lookback_days: int = 60) -> Dict:
         """
         检测恐慌性抛售（Selling Climax, SC）
-
-        孟洪涛标准：
-        1. 价格创近期新低（60天内最低）
-        2. 成交量显著放大（>1.5倍前20日均值）
-        3. 通常是垂直下跌或跳水式下跌
-
-        Returns:
-            Dict: {
-                "detected": bool,
-                "date": str (检测日期),
-                "price": float (最低价格),
-                "volume_ratio": float (成交量倍数),
-                "confidence": float (0-100)
-            }
+        理论依据：主跌段末端，成交量极度放大，价差扩大，通常伴随长下影线。
+        
+        使用动态阈值：基于ATR适配不同波动率的资产
         """
         try:
             recent_data = self.data.tail(lookback_days)
-            min_idx = recent_data['Low'].idxmin()
-            min_price = recent_data['Low'].min()
-            min_vol = recent_data.loc[min_idx, 'Volume']
+            # 不直接取最低点，而是寻找符合高潮特征的 Bar
+            vol_ma = recent_data['Volume_MA20'] if 'Volume_MA20' in recent_data.columns else recent_data['Volume'].rolling(20).mean()
+            
+            # 计算价差 ATR 参考
+            high_low_range = recent_data['High'] - recent_data['Low']
+            avg_range = high_low_range.rolling(20).mean()
+            
+            # 动态阈值：基于ATR适配
+            # 高波动资产需要更高的成交量确认
+            climax_vol_threshold = self._get_dynamic_volume_threshold(1.8)
+            climax_range_threshold = self._get_dynamic_volume_threshold(1.5)  # 使用相同逻辑适配价差
+            fallback_vol_threshold = self._get_dynamic_volume_threshold(1.3)
+            
+            # 高潮候选者：成交量 > 动态阈值倍均量 且 价差 > 动态阈值倍均价差
+            candidates = recent_data[
+                (recent_data['Volume'] > vol_ma * climax_vol_threshold) & 
+                (high_low_range > avg_range * climax_range_threshold) &
+                (recent_data['Close'] < recent_data['Open']) # 必须是阴线或低收
+            ]
+            
+            if candidates.empty:
+                # 降级：如果找不到完美高潮，找最低点且量能尚可的
+                min_idx = recent_data['Low'].idxmin()
+                min_row = recent_data.loc[min_idx]
+                vol_ratio = min_row['Volume'] / vol_ma.loc[min_idx] if vol_ma.loc[min_idx] > 0 else 1.0
+                if vol_ratio > fallback_vol_threshold:
+                    is_climax = True
+                    sc_idx = min_idx
+                else:
+                    return {"detected": False, "reason": "No climactic volume found at lows"}
+            else:
+                # 取最后一个符合条件的作为 SC (通常 SC 后会有 AR)
+                sc_idx = candidates.index[-1]
+                is_climax = True
 
-            # 计算前期平均成交量
-            pre_data = self.data.loc[self.data.index < min_idx]
-            if len(pre_data) < 20:
-                return {"detected": False, "reason": "Insufficient data before low"}
-
-            avg_vol_before = pre_data['Volume'].tail(20).mean()
-            vol_ratio = min_vol / avg_vol_before if avg_vol_before > 0 else 0
-
-            # 判断是否为恐慌性抛售
-            is_climax = vol_ratio > 1.5
-
-            # 计算置信度（基于成交量放大倍数）
-            confidence = min(100, (vol_ratio - 1.0) / 2.0 * 100) if is_climax else 0
+            sc_row = recent_data.loc[sc_idx]
+            vol_ratio = sc_row['Volume'] / vol_ma.loc[sc_idx]
+            
+            confidence = min(100, (vol_ratio - 1.0) * 50)
 
             return {
                 "detected": is_climax,
-                "date": min_idx.strftime("%Y-%m-%d") if is_climax else None,
-                "price": float(min_price) if is_climax else None,
+                "date": sc_idx, # 保持 Timestamp 类型以供其他检测器使用
+                "price": float(sc_row['Low']),
+                "volume": float(sc_row['Volume']),
+                "type": "selling_climax",
                 "volume_ratio": float(vol_ratio),
                 "confidence": float(confidence)
             }
-
-        except Exception as e:
+        except (KeyError, ValueError, TypeError) as e:
             logger.exception(f"SC检测失败: {e}")
             return {"detected": False, "error": str(e)}
+        except Exception as e:
+            logger.exception(f"SC检测失败: 未知异常: {e}")
+            raise PatternDetectionError("SC", f"未知异常: {e}") from e
 
-    def detect_preliminary_support(self, lookback_days: int = 60) -> Dict:
+    def detect_automatic_rally(self, lookback_days: int = 60) -> Dict:
         """
-        检测初步支撑（Preliminary Support, PS）
-
-        孟洪涛标准：
-        1. 在恐慌性抛售（SC）后出现
-        2. 反弹幅度>10%（说明有强劲需求接盘）
-        3. 成交量配合（不一定放量，但要有持续性）
-
-        Returns:
-            Dict: {
-                "detected": bool,
-                "sc_low": float (恐慌低点),
-                "ps_high": float (反弹高点),
-                "rebound_pct": float (反弹百分比),
-                "confidence": float (0-100)
-            }
+        检测自然反弹（Automatic Rally, AR）
         """
         try:
-            recent_data = self.data.tail(lookback_days)
-            min_idx = recent_data['Low'].idxmin()
-            sc_low = recent_data['Low'].min()
+            sc_res = self.detect_climax_panic_selling(60) # 复用 SC 检测结果
+            if not sc_res['detected']:
+                return {"detected": False, "reason": "No SC found to baseline AR"}
+            
+            sc_date = pd.to_datetime(sc_res['date'])
+            sc_low = sc_res['price']
 
-            # 检查SC之后的反弹
-            after_sc = self.data.loc[self.data.index > min_idx]
-            if len(after_sc) == 0:
+            after_sc = self.data.loc[self.data.index > sc_date]
+            if len(after_sc) < 2:
                 return {"detected": False, "reason": "Insufficient data after SC"}
 
-            ps_high = after_sc['High'].max()
-            ps_idx = after_sc['High'].idxmax()
+            ar_high = after_sc['High'].max()
+            ar_idx = after_sc['High'].idxmax()
 
-            # 计算反弹幅度
-            rebound_pct = (ps_high - sc_low) / sc_low * 100
-
-            # 判断是否为初步支撑（反弹>8%，降低阈值以增加检测灵敏度）
-            is_ps = rebound_pct > 8
-
-            # 置信度基于反弹幅度
-            confidence = min(100, (rebound_pct - 5) / 2.0 * 10) if is_ps else 0
+            rebound_pct = (ar_high - sc_low) / sc_low * 100
+            # 威科夫理论中，AR 通常非常剧烈
+            is_ar = rebound_pct > 5 
 
             return {
-                "detected": is_ps,
-                "sc_date": min_idx.strftime("%Y-%m-%d"),
+                "detected": is_ar,
+                "sc_date": sc_date,
                 "sc_low": float(sc_low),
-                "ps_date": ps_idx.strftime("%Y-%m-%d"),
-                "ps_high": float(ps_high),
+                "ar_date": ar_idx,
+                "date": ar_idx, # 兼容性
+                "price": float(ar_high), # 兼容性
+                "ar_high": float(ar_high),
                 "rebound_pct": float(rebound_pct),
-                "confidence": float(confidence)
+                "confidence": min(100, (rebound_pct - 3) * 10) if is_ar else 0
             }
-
+        except (KeyError, ValueError, TypeError) as e:
+            logger.exception(f"AR检测失败: {e}")
+            return {"detected": False, "error": str(e)}
         except Exception as e:
+            logger.exception(f"AR检测失败: 未知异常: {e}")
+            raise PatternDetectionError("AR", f"未知异常: {e}") from e
+
+    def detect_preliminary_support(self, lookback_days: int = 90) -> Dict:
+        """
+        检测初次支撑（Preliminary Support, PS）
+        
+        威科夫理论定义：
+        - PS 是主跌段中的第一次抄底尝试
+        - 发生在 SC（恐慌抛售）之前
+        - 特征：成交量放大 + 价格止跌/反弹 + 下影线抵抗
+        - PS 失败后会引发恐慌抛售（SC）
+        
+        时序关系：PS → SC → AR → ST
+        """
+        try:
+            # 获取足够历史数据
+            data = self.data.tail(lookback_days)
+            if len(data) < 20:
+                return {"detected": False, "reason": "Insufficient data"}
+            
+            # 步骤1：识别主跌段
+            # 主跌段定义：价格持续下跌，低于20日均线
+            ma20 = data['Close'].rolling(window=20).mean()
+            downtrend_mask = data['Close'] < ma20
+            
+            if not downtrend_mask.any():
+                return {"detected": False, "reason": "No downtrend found"}
+            
+            # 找到主跌段的起点（价格跌破MA20的位置）
+            downtrend_start = None
+            for i in range(len(data)):
+                if downtrend_mask.iloc[i]:
+                    downtrend_start = i
+                    break
+            
+            if downtrend_start is None or downtrend_start >= len(data) - 5:
+                return {"detected": False, "reason": "Downtrend too short"}
+            
+            # 步骤2：在主跌段中寻找PS
+            # PS特征：
+            # 1. 成交量放大（超过MA20的动态阈值倍）
+            # 2. 价格止跌或反弹（收盘价高于前一日）
+            # 3. 下影线较长（显示买盘抵抗）
+            
+            # 动态阈值：基于ATR适配
+            ps_vol_threshold = self._get_dynamic_volume_threshold(1.2)
+            ps_vol_strong_threshold = self._get_dynamic_volume_threshold(1.5)
+            
+            potential_ps = []
+            downtrend_data = data.iloc[downtrend_start:]
+            
+            for i in range(2, len(downtrend_data) - 1):
+                current = downtrend_data.iloc[i]
+                prev = downtrend_data.iloc[i-1]
+                next_day = downtrend_data.iloc[i+1] if i + 1 < len(downtrend_data) else None
+                
+                # 获取成交量均线
+                vol_ma = current.get('Volume_MA20', data['Volume'].iloc[:downtrend_start + i].tail(20).mean())
+                
+                # 条件1：成交量放大（使用动态阈值）
+                vol_ratio = current['Volume'] / vol_ma if vol_ma > 0 else 0
+                vol_heavy = vol_ratio > ps_vol_threshold
+                
+                # 条件2：价格止跌或反弹
+                # 收盘价高于前一日收盘，或者当日收阳
+                price_stabilized = (current['Close'] > prev['Close']) or (current['Close'] > current['Open'])
+                
+                # 条件3：下影线抵抗
+                # 下影线长度 > 实体长度的0.5倍
+                body = abs(current['Close'] - current['Open'])
+                lower_shadow = min(current['Open'], current['Close']) - current['Low']
+                shadow_resistance = lower_shadow > body * 0.5 if body > 0 else lower_shadow > 0
+                
+                # 综合判断
+                if vol_heavy and price_stabilized and shadow_resistance:
+                    # 计算置信度
+                    confidence = 50
+                    if vol_ratio > ps_vol_strong_threshold:
+                        confidence += 15
+                    if current['Close'] > current['Open']:  # 收阳线
+                        confidence += 10
+                    if lower_shadow > body:  # 下影线长于实体
+                        confidence += 10
+                    if next_day is not None and next_day['Close'] > current['Close']:  # 次日继续上涨
+                        confidence += 15
+                    
+                    potential_ps.append({
+                        'idx': downtrend_start + i,
+                        'date': data.index[downtrend_start + i],
+                        'price': float(current['Close']),
+                        'low': float(current['Low']),
+                        'vol_ratio': float(vol_ratio),
+                        'lower_shadow_ratio': float(lower_shadow / (body + 0.001)),
+                        'confidence': min(100, confidence)
+                    })
+            
+            if not potential_ps:
+                return {"detected": False, "reason": "No PS pattern found in downtrend"}
+            
+            # 选择置信度最高的PS
+            best_ps = max(potential_ps, key=lambda x: x['confidence'])
+            
+            # 验证：PS之后应该有SC（恐慌抛售）
+            # 检查PS之后是否出现价格创新低且成交量放大的情况
+            ps_idx = best_ps['idx']
+            post_ps_data = data.iloc[ps_idx + 1:]
+            
+            # 寻找可能的SC（在PS之后，价格创新低）
+            sc_found = False
+            sc_price = None
+            for i in range(len(post_ps_data)):
+                row = post_ps_data.iloc[i]
+                if row['Low'] < best_ps['low']:  # 价格创新低
+                    vol_ma = row.get('Volume_MA20', data['Volume'].iloc[:ps_idx + i + 1].tail(20).mean())
+                    if row['Volume'] > vol_ma * 1.5:  # 成交量放大
+                        sc_found = True
+                        sc_price = float(row['Low'])
+                        break
+            
+            return {
+                "detected": True,
+                "ps_date": best_ps['date'].strftime("%Y-%m-%d"),
+                "ps_price": best_ps['price'],
+                "ps_low": best_ps['low'],
+                "vol_ratio": best_ps['vol_ratio'],
+                "lower_shadow_ratio": best_ps['lower_shadow_ratio'],
+                "confidence": best_ps['confidence'],
+                "sc_confirmed_after": sc_found,
+                "sc_price": sc_price,
+                "theory": "PS是主跌段中的第一次抄底尝试，发生在SC之前"
+            }
+        except (KeyError, ValueError, TypeError) as e:
             logger.exception(f"PS检测失败: {e}")
             return {"detected": False, "error": str(e)}
+        except Exception as e:
+            logger.exception(f"PS检测失败: 未知异常: {e}")
+            raise PatternDetectionError("PS", f"未知异常: {e}") from e
 
     def detect_stopping_of_transient(self, lookback_days: int = 20) -> Dict:
         """
         检测停止行为（Stopping of Transient, SOT）
-
-        孟洪涛标准：努力无结果（Effort without Result）
-        1. 成交量显著放大（>1.3倍50日均量）
-        2. 价格下跌幅度很小（实体<当日的30%）
-        3. 说明供应被需求吸收，不再能压低价格
-
-        Returns:
-            Dict: {
-                "detected": bool,
-                "date": str (检测日期),
-                "volume_ratio": float (成交量倍数),
-                "body_ratio": float (实体占当日振幅比例),
-                "confidence": float (0-100)
-            }
+        
+        注意：使用动态rolling mean避免前瞻偏差
+        每一天的基准成交量只使用该天及之前的数据计算
         """
         try:
             recent_data = self.data.tail(lookback_days)
-            avg_vol = self.data['Volume'].tail(50).mean()
-
+            if len(recent_data) < 10:
+                return {"detected": False, "reason": "Insufficient data"}
+            
+            # 使用动态计算的rolling mean，避免前瞻偏差
+            # 对于每一天，只使用该天及之前的数据计算平均成交量
+            volume_series = self.data['Volume']
+            
             for idx in range(len(recent_data) - 5, len(recent_data)):
                 row = recent_data.iloc[idx]
+                global_idx = len(self.data) - lookback_days + idx
+                
+                # 动态计算：只使用当前行及之前的数据
+                # 使用20日窗口，但确保不使用未来数据
+                window_start = max(0, global_idx - 19)  # 20日窗口
+                window_data = volume_series.iloc[window_start:global_idx + 1]
+                avg_vol = window_data.mean() if len(window_data) > 0 else 0
+                
                 body = abs(row['Close'] - row['Open'])
                 range_size = row['High'] - row['Low']
-
-                if range_size == 0:
-                    continue
+                if range_size == 0: continue
 
                 vol_ratio = row['Volume'] / avg_vol if avg_vol > 0 else 0
                 body_ratio = body / range_size
 
-                # SOT判断：放量 + 小实体
-                is_sot = vol_ratio > 1.3 and body_ratio < 0.3
-
-                if is_sot:
-                    confidence = min(100, vol_ratio * 40)
+                # 动态阈值：基于ATR适配
+                sot_vol_threshold = self._get_dynamic_volume_threshold(1.3)
+                sot_body_threshold = 0.3  # 实体占比阈值保持固定，因为这是形态特征而非波动率特征
+                
+                if vol_ratio > sot_vol_threshold and body_ratio < sot_body_threshold:
                     return {
                         "detected": True,
                         "date": row.name.strftime("%Y-%m-%d"),
@@ -387,55 +539,63 @@ class WyckoffPatternDetector:
                         "body_ratio": float(body_ratio),
                         "close": float(row['Close']),
                         "volume": float(row['Volume']),
-                        "confidence": float(confidence)
+                        "confidence": min(100, vol_ratio * 40),
+                        "avg_vol_window": int(len(window_data)),
+                        "note": "使用动态rolling mean避免前瞻偏差",
+                        "dynamic_thresholds": {
+                            "vol_threshold": sot_vol_threshold,
+                            "body_threshold": sot_body_threshold,
+                            "atr_pct": self._atr_pct
+                        }
                     }
 
             return {"detected": False, "reason": "No SOT pattern found"}
-
-        except Exception as e:
+        except (KeyError, ValueError, TypeError) as e:
             logger.exception(f"SOT检测失败: {e}")
             return {"detected": False, "error": str(e)}
-
+        except Exception as e:
+            logger.exception(f"SOT检测失败: 未知异常: {e}")
+            raise PatternDetectionError("SOT", f"未知异常: {e}") from e
 
     def analyze_phase_a_evidence(self) -> Dict:
         """
-        综合分析 Phase A 的核心证据
-
-        孟洪涛方法：Phase A 不能只看价格位置，必须检查核心证据
-
-        Returns:
-            Dict: {
-                "phase_a_confirmed": bool,
-                "strength": str ("strong" | "weak" | "none"),
-                "evidence": {
-                    "sc": {...},
-                    "ps": {...},
-                    "sot": {...},
-                    "spring": {...}
-                },
-                "evidence_count": int,
-                "total_checks": 4
-            }
+        综合分析 Phase A 的核心证据 (PS -> SC -> AR -> ST)
         """
         try:
-            # 检测4个核心证据
-            sc_result = self.detect_climax_panic_selling()
-            ps_result = self.detect_preliminary_support()
-            sot_result = self.detect_stopping_of_transient()
-            spring_result = self.detect_spring_menhongtao()
+            sc_res = self.detect_climax_panic_selling()
+            ps_res = self.detect_preliminary_support()
+            ar_res = self.detect_automatic_rally()
+            st_res = self.detect_secondary_test(sc_res, ar_res)
+            sot_res = self.detect_stopping_of_transient()
+            spring_res = self.detect_spring_menhongtao()
 
-            evidence_count = sum([
-                sc_result.get("detected", False),
-                ps_result.get("detected", False),
-                sot_result.get("detected", False),
-                spring_result.get("detected", False)
-            ])
+            checks = [
+                {'id': 'PS', 'detected': ps_res.get("detected", False), 'weight': 1},
+                {'id': 'SC', 'detected': sc_res.get("detected", False), 'weight': 2},
+                {'id': 'AR', 'detected': ar_res.get("detected", False), 'weight': 2},
+                {'id': 'ST', 'detected': st_res.get("detected", False), 'weight': 1}
+            ]
 
-            # 判断 Phase A 强度
-            if evidence_count >= 3:
+            evidence_count = sum(1 for c in checks if c['detected'])
+            detected_weight = sum(c['weight'] for c in checks if c['detected'])
+
+            is_valid_sequence = False
+            if ps_res.get('detected') and sc_res.get('detected') and ar_res.get('detected'):
+                # 兼容性处理：支持 Timestamp 或字符串
+                def to_dt(d): return pd.to_datetime(d) if d else None
+                
+                ps_date = to_dt(ps_res.get('ps_date'))
+                sc_date = to_dt(sc_res.get('date'))
+                ar_date = to_dt(ar_res.get('ar_date'))
+                
+                if ps_date and sc_date and ar_date:
+                    if ps_date < sc_date < ar_date:
+                        is_valid_sequence = True
+
+            if detected_weight >= 4 and is_valid_sequence:
                 strength = "strong"
                 phase_a_confirmed = True
-            elif evidence_count >= 2:
+            elif detected_weight >= 2:
                 strength = "weak"
                 phase_a_confirmed = True
             else:
@@ -445,20 +605,21 @@ class WyckoffPatternDetector:
             return {
                 "phase_a_confirmed": phase_a_confirmed,
                 "strength": strength,
+                "is_valid_sequence": is_valid_sequence,
                 "evidence_count": evidence_count,
                 "total_checks": 4,
                 "evidence": {
-                    "sc": sc_result,
-                    "ps": ps_result,
-                    "sot": sot_result,
-                    "spring": spring_result
+                    "sc": sc_res,
+                    "ps": ps_res,
+                    "ar": ar_res,
+                    "st": st_res,
+                    "sot": sot_res,
+                    "spring": spring_res
                 }
             }
-
-        except Exception as e:
+        except (KeyError, ValueError, TypeError) as e:
             logger.exception(f"Phase A证据分析失败: {e}")
-            return {
-                "phase_a_confirmed": False,
-                "strength": "none",
-                "error": str(e)
-            }
+            return {"phase_a_confirmed": False, "strength": "none", "error": str(e)}
+        except Exception as e:
+            logger.exception(f"Phase A证据分析失败: 未知异常: {e}")
+            raise AnalysisError(f"Phase A证据分析失败: {e}") from e

@@ -150,3 +150,80 @@ class WyckoffThresholds(BaseModel):
         """
         thresholds = self.VOLATILITY_THRESHOLDS.get(threshold_type, {})
         return thresholds.get(volatility_class, 0.035)
+    
+    def get_dynamic_volume_threshold(self, atr_pct: float, base_threshold: float = 1.5) -> float:
+        """
+        基于ATR百分比动态计算成交量阈值
+        
+        高波动资产（如加密货币）需要更高的成交量确认
+        低波动资产（如蓝筹股）可以使用较低的成交量确认
+        
+        Args:
+            atr_pct: ATR占价格的百分比（如0.03表示3%）
+            base_threshold: 基础阈值
+            
+        Returns:
+            动态成交量阈值
+        """
+        # ATR百分比分级
+        # 低波动：<1.5% (蓝筹股、债券ETF)
+        # 中波动：1.5%-3% (普通股票)
+        # 高波动：3%-5% (小盘股、科技股)
+        # 极高波动：>5% (加密货币、期权)
+        
+        if atr_pct < 0.015:
+            # 低波动：降低阈值
+            return base_threshold * 0.8
+        elif atr_pct < 0.03:
+            # 中波动：标准阈值
+            return base_threshold
+        elif atr_pct < 0.05:
+            # 高波动：提高阈值
+            return base_threshold * 1.2
+        else:
+            # 极高波动：大幅提高阈值
+            return base_threshold * 1.5
+    
+    def get_dynamic_price_threshold(self, atr_pct: float, base_threshold: float = 0.03) -> float:
+        """
+        基于ATR百分比动态计算价格变化阈值
+        
+        Args:
+            atr_pct: ATR占价格的百分比
+            base_threshold: 基础阈值
+            
+        Returns:
+            动态价格变化阈值
+        """
+        # 使用ATR的倍数作为阈值
+        # 低波动：1倍ATR
+        # 中波动：1.5倍ATR
+        # 高波动：2倍ATR
+        
+        if atr_pct < 0.015:
+            return max(atr_pct * 1.0, base_threshold * 0.8)
+        elif atr_pct < 0.03:
+            return max(atr_pct * 1.5, base_threshold)
+        elif atr_pct < 0.05:
+            return max(atr_pct * 2.0, base_threshold * 1.2)
+        else:
+            return max(atr_pct * 2.5, base_threshold * 1.5)
+    
+    def classify_volatility(self, atr_pct: float) -> str:
+        """
+        根据ATR百分比分类波动率
+        
+        Args:
+            atr_pct: ATR占价格的百分比
+            
+        Returns:
+            波动率分类：'low', 'medium', 'high', 'extreme'
+        """
+        if atr_pct < 0.015:
+            return 'low'
+        elif atr_pct < 0.03:
+            return 'medium'
+        elif atr_pct < 0.05:
+            return 'high'
+        else:
+            return 'extreme'

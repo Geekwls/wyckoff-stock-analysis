@@ -81,12 +81,18 @@ class WyckoffOrchestrator:
         return MarketEnvironment.UNKNOWN
 
     def _calculate_targets(self, detector: WyckoffPatternDetector) -> Dict[str, Any]:
-        # 简单因果目标计算
+        # 因果目标计算 (基于水平准备时长)
         tr = detector.detect_trading_range()
         if tr.get('is_consolidation'):
-            size = tr['high'] - tr['low']
+            duration = tr.get('consolidation_duration_days', 40)
+            # 估算波动率
+            recent_data = detector.data.tail(20)
+            atr = (recent_data['High'] - recent_data['Low']).mean()
+            potential = duration * atr * 0.25 # 修正系数
+            
             return {
-                "target_1": round(tr['high'] + size * 0.618, 2),
-                "target_2": round(tr['high'] + size * 1.0, 2)
+                "target_1": round(tr['high'] + potential * 0.618, 2),
+                "target_2": round(tr['high'] + potential, 2),
+                "target_3": round(tr['high'] + potential * 1.618, 2)
             }
         return {}
