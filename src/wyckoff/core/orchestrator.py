@@ -31,8 +31,20 @@ class WyckoffOrchestrator:
             
             # 2. 形态检测
             detector = WyckoffPatternDetector(data, self.config)
-            patterns = self._collect_patterns(detector)
+            
+            # 关键修复：在调用identify_phase()之前，先设置阶段信息
+            # 这样在identify_phase()内部调用detect_sos()时，_is_distribution_phase()才能正确返回
+            # 首先获取阶段信息（这会触发_collect_all_events()，其中会调用detect_sos()）
             phase_info = detector.identify_phase()
+            phase_str = phase_info.get('phase', '')
+            
+            # 关键修复：在调用_collect_patterns()之前，先设置阶段信息
+            # 这样在_collect_patterns()内部调用detect_sos()时，_is_distribution_phase()才能正确返回
+            if hasattr(detector, 'sw_detector') and hasattr(detector.sw_detector, 'set_current_phase'):
+                detector.sw_detector.set_current_phase(phase_str)
+            
+            # 传入阶段信息，让SOS检测器根据阶段动态调整信号分类
+            patterns = self._collect_patterns(detector, phase=phase_str)
             patterns.update(phase_info)
 
             # 3. 市场环境
@@ -64,7 +76,18 @@ class WyckoffOrchestrator:
             logger.exception(f"分析执行异常: {symbol}")
             raise
 
-    def _collect_patterns(self, detector: WyckoffPatternDetector) -> Dict[str, Any]:
+    def _collect_patterns(self, detector: WyckoffPatternDetector, phase: str = '') -> Dict[str, Any]:
+        """
+        收集形态检测结果
+        
+        关键修复：传入阶段信息，让SOS检测器根据阶段动态调整信号分类
+        - 在派发阶段，向上突破应归类为UT/UTAD
+        - 在吸筹阶段，向上突破才是SOS
+        """
+        # 关键修复：在检测SOS之前，先设置当前阶段
+        if hasattr(detector, 'sw_detector') and hasattr(detector.sw_detector, 'set_current_phase'):
+            detector.sw_detector.set_current_phase(phase)
+        
         return {
             "joc": detector.detect_joc_menhongtao(),
             "fti": detector.detect_fti(),

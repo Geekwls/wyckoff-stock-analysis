@@ -360,13 +360,11 @@ class WyckoffLawAnalyzer:
         if self.data is None or len(self.data) < 60:
             raise InsufficientDataError("因果分析", required=60, actual=len(self.data) if self.data is not None else 0)
 
-        # 获取基础因果分析 - 使用内置分析方法
-        basic_cause_effect = self._basic_cause_effect_analysis()
-
         # 增强因果分析
         trading_range = self.pattern_detector.detect_trading_range()
         tr_story = self._build_tr_story()
         
+        # 关键修复：先获取阶段信息，再进行因果分析
         # 优先使用阶段识别器结果，避免仅用 MA60 推断造成语义偏差；失败时再降级到 MA60。
         current_close = self.data['Close'].iloc[-1]
         phase_result = self.pattern_detector.identify_phase() if self.pattern_detector else {}
@@ -377,6 +375,10 @@ class WyckoffLawAnalyzer:
                 phase = "Accumulation" if current_close < ma60 else "Distribution"
             else:
                 phase = "Markup" if current_close > ma60 else "Markdown"
+
+        # 获取基础因果分析 - 使用内置分析方法
+        # 关键修复：传入阶段信息，让因果法则计算考虑阶段方向
+        basic_cause_effect = self._basic_cause_effect_analysis(phase=phase)
 
         # 1. 测量"努力" - 更准确的积累/派发努力计算
         if trading_range.get("is_consolidation"):
@@ -412,11 +414,13 @@ class WyckoffLawAnalyzer:
             cause = range_high - range_low
             
             # 使用点数图计算因果效应
+            # 关键修复：传入阶段信息，让因果法则计算考虑阶段方向
             try:
                 pnf_result = calculate_cause_effect_from_pnf(
                     self.data, 
                     box_size_pct=1.0,
-                    reversal_boxes=3
+                    reversal_boxes=3,
+                    phase=phase  # 传入阶段信息
                 )
                 
                 if pnf_result.get('horizontal_count', 0) >= 3:
@@ -696,7 +700,7 @@ class WyckoffLawAnalyzer:
         else:
             return "MEDIUM (50-65%)"
 
-    def _basic_cause_effect_analysis(self) -> dict:
+    def _basic_cause_effect_analysis(self, phase: str = '') -> dict:
         """
         基础因果分析 - 使用点数图水平计数
         
@@ -704,7 +708,9 @@ class WyckoffLawAnalyzer:
         - 因（Cause）：水平准备（横向盘整的规模，用点数图列数衡量）
         - 果（Effect）：垂直运动（价格突破后的目标幅度）
         
-        正确方法：使用点数图（P&F）的水平计数来预测垂直目标
+        重要理论约束：
+        - 派发期的"因"触发向下的"果"
+        - 吸筹期的"因"触发向上的"果"
         """
         try:
             # 计算交易区间
@@ -714,11 +720,13 @@ class WyckoffLawAnalyzer:
             cause_size = trading_range_high - trading_range_low
 
             # 使用点数图计算因果效应
+            # 关键修复：传入阶段信息，让因果法则计算考虑阶段方向
             try:
                 pnf_result = calculate_cause_effect_from_pnf(
                     self.data, 
                     box_size_pct=1.0,
-                    reversal_boxes=3
+                    reversal_boxes=3,
+                    phase=phase  # 传入阶段信息
                 )
                 
                 if pnf_result.get('horizontal_count', 0) >= 3:

@@ -122,14 +122,21 @@ class PointAndFigureCalculator:
     
     def calculate_horizontal_count(self, pnf_data: Dict, 
                                    accumulation_start: int = None,
-                                   accumulation_end: int = None) -> Dict:
+                                   accumulation_end: int = None,
+                                   phase: str = '',
+                                   **kwargs) -> Dict:
         """
         计算水平计数（威科夫因果法则的核心）
+        
+        重要理论约束：
+        - 派发期的"因"触发向下的"果"
+        - 吸筹期的"因"触发向上的"果"
         
         Args:
             pnf_data: 点数图数据
             accumulation_start: 积累区开始列索引
             accumulation_end: 积累区结束列索引
+            phase: 当前阶段（用于确定目标方向）
             
         Returns:
             水平计数结果和目标价
@@ -172,15 +179,13 @@ class PointAndFigureCalculator:
         last_column = columns[-1] if columns else None
         breakout_direction = 'up' if last_column and last_column['direction'] == 'up' else 'down'
         
-        if breakout_direction == 'up':
-            targets = {
-                'target_1': round(accumulation_high + base_effect * 0.618, 2),
-                'target_2': round(accumulation_high + base_effect, 2),
-                'target_3': round(accumulation_high + base_effect * 1.618, 2),
-                'full_target': round(accumulation_high + base_effect * 2.0, 2)
-            }
-            base_price = accumulation_high
-        else:
+        # 关键修复：根据阶段调整目标方向
+        # 派发期的"因"触发向下的"果"
+        # 吸筹期的"因"触发向上的"果"
+        is_distribution = 'distribution' in phase.lower() or '派发' in phase
+        
+        if is_distribution:
+            # 派发期：强制使用下跌目标
             targets = {
                 'target_1': round(accumulation_low - base_effect * 0.618, 2),
                 'target_2': round(accumulation_low - base_effect, 2),
@@ -188,6 +193,28 @@ class PointAndFigureCalculator:
                 'full_target': round(accumulation_low - base_effect * 2.0, 2)
             }
             base_price = accumulation_low
+            breakout_direction = 'down'  # 强制为下跌方向
+            direction_note = '派发期因果法则：水平准备触发下跌目标'
+        else:
+            # 吸筹期或上涨趋势：使用原始方向
+            if breakout_direction == 'up':
+                targets = {
+                    'target_1': round(accumulation_high + base_effect * 0.618, 2),
+                    'target_2': round(accumulation_high + base_effect, 2),
+                    'target_3': round(accumulation_high + base_effect * 1.618, 2),
+                    'full_target': round(accumulation_high + base_effect * 2.0, 2)
+                }
+                base_price = accumulation_high
+                direction_note = '吸筹期因果法则：水平准备触发上涨目标'
+            else:
+                targets = {
+                    'target_1': round(accumulation_low - base_effect * 0.618, 2),
+                    'target_2': round(accumulation_low - base_effect, 2),
+                    'target_3': round(accumulation_low - base_effect * 1.618, 2),
+                    'full_target': round(accumulation_low - base_effect * 2.0, 2)
+                }
+                base_price = accumulation_low
+                direction_note = '吸筹期因果法则：水平准备触发下跌目标'
         
         return {
             'horizontal_count': horizontal_count,
@@ -200,7 +227,10 @@ class PointAndFigureCalculator:
             'base_effect': round(base_effect, 2),
             'breakout_direction': breakout_direction,
             'base_price': base_price,
-            'targets': targets
+            'targets': targets,
+            'phase': phase,
+            'direction_note': direction_note,
+            'is_distribution': is_distribution
         }
     
     def _get_box_level(self, price: float) -> float:
@@ -267,21 +297,28 @@ class PointAndFigureCalculator:
 
 def calculate_cause_effect_from_pnf(data: pd.DataFrame, 
                                     box_size_pct: float = 1.0,
-                                    reversal_boxes: int = 3) -> Dict:
+                                    reversal_boxes: int = 3,
+                                    phase: str = '') -> Dict:
     """
     基于点数图计算威科夫因果效应（便捷函数）
+    
+    重要理论约束：
+    - 派发期的"因"触发向下的"果"
+    - 吸筹期的"因"触发向上的"果"
     
     Args:
         data: OHLCV数据
         box_size_pct: 箱体大小百分比
         reversal_boxes: 反转箱体数
+        phase: 当前阶段（用于确定目标方向）
         
     Returns:
         因果效应分析结果
     """
     calculator = PointAndFigureCalculator(box_size_pct, reversal_boxes)
     pnf_data = calculator.calculate_pnf(data)
-    result = calculator.calculate_horizontal_count(pnf_data)
+    # 关键修复：传入阶段信息，让因果法则计算考虑阶段方向
+    result = calculator.calculate_horizontal_count(pnf_data, phase=phase)
     
     return {
         'method': 'point_and_figure',

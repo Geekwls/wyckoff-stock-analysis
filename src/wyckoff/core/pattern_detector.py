@@ -151,7 +151,13 @@ class WyckoffPatternDetector:
     # --- 私有辅助方法 (保持原有逻辑或重构) ---
 
     def _collect_all_events(self) -> Dict[str, Any]:
-        """收集所有威科夫事件供阶段识别使用"""
+        """
+        收集所有威科夫事件供阶段识别使用
+        
+        关键修复：在调用detect_sos()之前，先进行初步阶段识别
+        这样在派发阶段，detect_sos()才能正确返回{'detected': False}
+        """
+        # 先收集基础事件（不依赖阶段的事件）
         climax_res = self.detect_climax()
         ar_res = self.detect_automatic_reaction(climax_res)
         st_res = self.detect_secondary_test(climax_res, ar_res)
@@ -159,6 +165,15 @@ class WyckoffPatternDetector:
         spring_res = self.detect_spring()
         upthrust_res = self.detect_upthrust()
         
+        # 关键修复：在调用detect_sos()之前，先进行初步阶段识别
+        # 基于已收集的事件（climax, ar, st, spring, upthrust）进行初步判断
+        preliminary_phase = self._preliminary_phase_identification(climax_res, ar_res, st_res, spring_res, upthrust_res)
+        
+        # 设置阶段信息，让detect_sos()能够正确判断
+        if hasattr(self, 'sw_detector') and hasattr(self.sw_detector, 'set_current_phase'):
+            self.sw_detector.set_current_phase(preliminary_phase)
+        
+        # 现在调用detect_sos()，它会根据阶段正确判断
         sos_res = self.detect_sos()
         sow_res = self.detect_sow()
         
@@ -195,6 +210,34 @@ class WyckoffPatternDetector:
             events['sos_sow'] = {'_type': 'sow', 'data': SosModel(**sow_res)} 
             
         return events
+
+    def _preliminary_phase_identification(self, climax_res: Dict, ar_res: Dict, st_res: Dict, spring_res: Dict, upthrust_res: Dict) -> str:
+        """
+        初步阶段识别：基于已收集的事件进行初步判断
+        
+        关键作用：在调用detect_sos()之前，先进行初步阶段识别
+        这样在派发阶段，detect_sos()才能正确返回{'detected': False}
+        
+        注意：这只是初步识别，最终阶段由phase_identifier.identify()确定
+        """
+        # 检查是否检测到买入高潮（BC）- 这是派发阶段的典型特征
+        if climax_res.get('detected') and climax_res.get('type') == 'buying_climax':
+            return 'Distribution Phase A'
+        
+        # 检查是否检测到卖出高潮（SC）- 这是吸筹阶段的典型特征
+        if climax_res.get('detected') and climax_res.get('type') == 'selling_climax':
+            return 'Accumulation Phase A'
+        
+        # 检查是否检测到Spring - 这是吸筹阶段的典型特征
+        if spring_res.get('detected'):
+            return 'Accumulation Phase C'
+        
+        # 检查是否检测到Upthrust - 这是派发阶段的典型特征
+        if upthrust_res.get('detected'):
+            return 'Distribution Phase C'
+        
+        # 默认返回空字符串，让后续的phase_identifier.identify()来确定
+        return ''
 
     def detect_lps(self, sos_result: Dict = None) -> Dict:
         """检测 LPS (Last Point of Support)"""

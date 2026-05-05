@@ -3,16 +3,53 @@ from typing import Dict, List, Optional, Any
 from ...config.settings import WyckoffConfig, WyckoffThresholds
 
 class StrengthWeaknessDetector:
-    """负责检测 SOS (Sign of Strength) 和 SOW (Sign of Weakness) 及其变体"""
+    """
+    负责检测 SOS (Sign of Strength) 和 SOW (Sign of Weakness) 及其变体
+    
+    重要理论约束：
+    - SOS (强势信号) 只发生在吸筹阶段末期或上涨趋势中
+    - 在派发阶段，向上突破应归类为 UT (Upthrust) 或 UTAD (派发后的上冲回落)
+    - 系统必须根据当前阶段动态调整信号分类
+    """
     def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds):
         self.data = data
         self.config = config
         self.thresholds = thresholds
+        self._current_phase = None  # 当前阶段缓存
+    
+    def set_current_phase(self, phase: str):
+        """设置当前阶段，用于动态调整信号分类"""
+        self._current_phase = phase
+    
+    def _is_distribution_phase(self) -> bool:
+        """判断当前是否处于派发阶段"""
+        if self._current_phase is None:
+            return False
+        return 'distribution' in self._current_phase.lower() or '派发' in self._current_phase
+    
+    def _is_accumulation_phase(self) -> bool:
+        """判断当前是否处于吸筹阶段"""
+        if self._current_phase is None:
+            return False
+        return 'accumulation' in self._current_phase.lower() or '吸筹' in self._current_phase
 
     def detect_sos(self, window: int = 40) -> Dict:
-        """检测标准 SOS"""
+        """
+        检测标准 SOS (Sign of Strength)
+        
+        关键约束：
+        - SOS 只发生在吸筹阶段末期或上涨趋势中
+        - 当 phase == Distribution 时，所有向上突破尝试一律归为 upthrust，不生成 sos
+        - 这是解决信号混乱最根本的一刀
+        """
         if self.data is None or len(self.data) < window:
             return {'detected': False}
+        
+        # 关键约束：在派发阶段，直接返回未检测到SOS
+        # 所有向上突破尝试一律归为 upthrust，由 detect_upthrust() 处理
+        if self._is_distribution_phase():
+            return {'detected': False, 'reason': 'distribution_phase_no_sos'}
+        
         df = self.data.tail(window).copy()
         vol_ma = df['Volume'].rolling(20).mean()
         price_pct_change = df['Close'].pct_change()
@@ -24,6 +61,8 @@ class StrengthWeaknessDetector:
         sos_mask = (df['Close'] > df['Open']) & (df['Volume'] > vol_ma * vol_ratio_threshold) & (price_pct_change > price_change_threshold)
         if sos_mask.any():
             idx = df[sos_mask].index[-1]
+            
+            # 在吸筹阶段或上涨趋势中，才是真正的SOS
             return {
                 'detected': True, 
                 'type': 'sos', 
@@ -31,7 +70,9 @@ class StrengthWeaknessDetector:
                 'price': df.loc[idx, 'Close'], 
                 'volume_ratio': round(df.loc[idx, 'Volume']/vol_ma.loc[idx], 2), 
                 'price_change': round(price_pct_change.loc[idx], 4), 
-                'breakthrough_level': df['High'].rolling(20).max().iloc[-1]
+                'breakthrough_level': df['High'].rolling(20).max().iloc[-1],
+                'phase_context': 'accumulation_or_uptrend',
+                'interpretation': '吸筹阶段的强势突破，是买入信号'
             }
         return {'detected': False}
 

@@ -189,6 +189,20 @@ class WyckoffReportGenerator:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
+        # 时间维度分析：计算结构持续时间
+        trading_range = self.pattern_detector.detect_trading_range()
+        duration_days = trading_range.get('duration_days', 0)
+        consolidation_duration = trading_range.get('consolidation_duration_days', 0)
+        
+        # 时间维度评估
+        time_assessment = ""
+        if duration_days >= 60:
+            time_assessment = "✅ 该结构已运行60天以上，已具备充足的时间基础，结构可靠性高"
+        elif duration_days >= 30:
+            time_assessment = "⚠️ 该结构已运行30-60天，时间基础尚可，结构正在形成中"
+        else:
+            time_assessment = "⏳ 该结构运行不足30天，时间基础薄弱，结构尚未成熟"
+        
         report += f"""
 【基础数据】
 当前价格: {self.data['Close'].iloc[-1]:.2f}
@@ -196,6 +210,12 @@ class WyckoffReportGenerator:
 52周最低: {self.data['Low'].tail(252).min():.2f}
 成交量: {self.data['Volume'].iloc[-1]:,.0f}
 量比: {self.data['Volume'].iloc[-1] / max(self.data['Volume_MA20'].iloc[-1], 1):.2f}
+
+【时间维度分析】
+结构持续时间: {duration_days} 天
+盘整持续时间: {consolidation_duration} 天
+时间评估: {time_assessment}
+💡 威科夫理论：时间是结构可靠性的重要维度。持续时间越长，结构越成熟，突破后的趋势延续性越强。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -206,6 +226,12 @@ class WyckoffReportGenerator:
         trading_range = self.pattern_detector.detect_trading_range()
         spring = self.pattern_detector.detect_spring_menhongtao()  # 使用孟洪涛5重过滤
         upthrust = self.pattern_detector.detect_upthrust()
+        
+        # 关键修复：在检测SOS之前，先设置当前阶段
+        # 这样SOS检测器可以根据阶段动态调整信号分类
+        if hasattr(self.pattern_detector, 'sw_detector') and hasattr(self.pattern_detector.sw_detector, 'set_current_phase'):
+            self.pattern_detector.sw_detector.set_current_phase(phase_str)
+        
         sos = self.pattern_detector.detect_sos()
         sow = self.pattern_detector.detect_sow()
         lps = self.pattern_detector.detect_lps()
@@ -264,7 +290,25 @@ class WyckoffReportGenerator:
 
         if sos.get('detected') and sos.get('latest'):
             latest = sos['latest']
-            report += f"""
+            signal_type = latest.get('type', 'sos')
+            phase_context = latest.get('phase_context', 'unknown')
+            
+            if signal_type == 'ut' or phase_context == 'distribution':
+                # 在派发阶段，向上突破应显示为UT/UTAD警告
+                report += f"""
+⚠️ 检测到UT/UTAD（派发阶段的向上突破）:
+   日期: {latest.get('date', 'N/A')}
+   价格: {latest.get('price', 0):.2f}
+   成交量倍数: {latest.get('volume_ratio', 0):.1f}x
+   涨幅: {latest.get('price_change', 0)*100:.1f}%
+   阻力位: {latest.get('resistance_level', 0):.2f}
+   ❌ 派发阶段的向上突破（诱多信号）
+   ⚠️ 警告：这是派发阶段的假突破，通常会回落，是卖出机会而非买入
+   💡 威科夫理论：在派发阶段，向上突破是主力诱多，应视为卖出信号
+"""
+            else:
+                # 在吸筹阶段或上涨趋势中，才是真正的SOS
+                report += f"""
 ✅ 检测到SOS（Sign of Strength）:
    日期: {latest.get('date', 'N/A')}
    价格: {latest.get('price', 0):.2f}
@@ -306,21 +350,56 @@ class WyckoffReportGenerator:
 """
 
         if lpsy.get('detected'):
+            # 关键修复：将LPSY与关键支撑位绑定
+            # 获取关键支撑位（自动回落AR的低点）
+            ar_res = self.pattern_detector.detect_automatic_reaction()
+            key_support = ar_res.get('price', 0) if ar_res.get('detected') else trading_range.get('low', 0)
+            
+            # 检查当前价格是否已跌破关键支撑
+            current_price = self.data['Close'].iloc[-1]
+            support_broken = current_price < key_support if key_support > 0 else False
+            
             # 检查是否有date字段
             if 'date' in lpsy:
                 report += f"""
-✅ 检测到LPSY（Last Point of Supply）:
+⚠️ 检测到LPSY（Last Point of Supply）:
    日期: {lpsy['date'].strftime('%Y-%m-%d')}
    价格: {lpsy['price']:.2f}
    反弹幅度: {lpsy['rally_pct']*100:.1f}%
    成交量缩小: 是
-   ⭐ 建议做空入场点
+   关键支撑位: {key_support:.2f} {'(已跌破)' if support_broken else '(未跌破)'}
+   ❌ 弱势反弹信号：价格已跌破支撑后的反弹回测
+   ⚠️ 警告：成交量萎缩，确认上方供应压力沉重，需求无力重返阻力区
+   💡 威科夫理论：LPSY是派发阶段的最后卖出机会，反弹无力确认下跌趋势
+   {'🔴 关键支撑已跌破，更高质量的LPSY将出现在后续反弹中' if support_broken else '🟡 当前LPSY发生在派发区内部，是弱势信号。更高质量的LPSY将出现在关键支撑被跌破后的反弹中'}
 """
             else:
-                report += f"""
-✅ 检测到LPSY（Last Point of Supply）:
+                # 获取LPSY的详细信息
+                lpsy_signals = lpsy.get('signals', [])
+                latest_lpsy = lpsy.get('latest', {})
+                
+                if latest_lpsy:
+                    report += f"""
+⚠️ 检测到LPSY（Last Point of Supply）:
+   日期: {latest_lpsy.get('date', 'N/A')}
+   价格: {latest_lpsy.get('price', 0):.2f}
+   成交量比率: {latest_lpsy.get('volume_ratio', 0):.2f}x
+   阻力位: {latest_lpsy.get('resistance_level', 0):.2f}
+   关键支撑位: {key_support:.2f} {'(已跌破)' if support_broken else '(未跌破)'}
+   ❌ 弱势反弹信号：价格已跌破支撑后的反弹回测
+   ⚠️ 警告：成交量萎缩，确认上方供应压力沉重，需求无力重返阻力区
+   💡 威科夫理论：LPSY是派发阶段的最后卖出机会，反弹无力确认下跌趋势
+   {'🔴 关键支撑已跌破，更高质量的LPSY将出现在后续反弹中' if support_broken else '🟡 当前LPSY发生在派发区内部，是弱势信号。更高质量的LPSY将出现在关键支撑被跌破后的反弹中'}
+"""
+                else:
+                    report += f"""
+⚠️ 检测到LPSY（Last Point of Supply）:
    价格: {lpsy.get('price', 0):.2f}
-   ⭐ 建议做空入场点
+   关键支撑位: {key_support:.2f} {'(已跌破)' if support_broken else '(未跌破)'}
+   ❌ 弱势反弹信号：价格已跌破支撑后的反弹回测
+   ⚠️ 警告：成交量萎缩，确认上方供应压力沉重，需求无力重返阻力区
+   💡 威科夫理论：LPSY是派发阶段的最后卖出机会，反弹无力确认下跌趋势
+   {'🔴 关键支撑已跌破，更高质量的LPSY将出现在后续反弹中' if support_broken else '🟡 当前LPSY发生在派发区内部，是弱势信号。更高质量的LPSY将出现在关键支撑被跌破后的反弹中'}
 """
 
         # ── 新威科夫操盘法信号 (孟洪涛) ──────────────────────────
@@ -407,18 +486,67 @@ class WyckoffReportGenerator:
 """
 
         # 因果测算
+        # 关键修复：把目标展示分为"未激活"与"激活"两种状态
+        # 避免在价格未跌破支撑前展示极端下跌目标，制造无谓恐慌
         cause_effect = self.analyzer.calculate_cause_effect()
         targets_ok = cause_effect and 'targets' in cause_effect
+        
+        # 检查价格是否已经突破区间
+        current_price = self.data['Close'].iloc[-1]
+        tr_high = trading_range.get('high', 0)
+        tr_low = trading_range.get('low', 0)
+        breakout_direction = cause_effect.get('breakout_direction', '') if cause_effect else ''
+        
+        # 判断目标是否已激活
+        targets_activated = False
         if targets_ok:
+            if breakout_direction == 'up' and current_price > tr_high:
+                targets_activated = True
+            elif breakout_direction == 'down' and current_price < tr_low:
+                targets_activated = True
+        
+        if targets_activated:
+            # 目标已激活：正常展示
             report += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【因果测算】
-交易区间: {trading_range.get('low', 0):.2f} - {trading_range.get('high', 0):.2f}
+交易区间: {tr_low:.2f} - {tr_high:.2f}
 因果幅度: {cause_effect['cause_size']:.2f}
+突破方向: {breakout_direction}
 目标1 (0.618倍): {cause_effect['targets']['target_1']:.2f}
 目标2 (1.0倍): {cause_effect['targets']['target_2']:.2f}
 目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
+"""
+        elif targets_ok:
+            # 目标未激活：显示"潜在目标（待触发）"状态
+            if breakout_direction == 'down':
+                # 向下突破目标未激活
+                report += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【因果测算】
+交易区间: {tr_low:.2f} - {tr_high:.2f}
+因果幅度: {cause_effect['cause_size']:.2f}
+⏸️ 潜在目标（待触发）：当价格有效跌破 {tr_low:.2f}元并确认LPSY时，上方测算逻辑失效，以下做空目标将被激活——
+   目标1 (0.618倍): {cause_effect['targets']['target_1']:.2f}
+   目标2 (1.0倍): {cause_effect['targets']['target_2']:.2f}
+   目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
+💡 威科夫理论：因果法则的目标测算，应只在价格有效突破区间后才被激活
+"""
+            else:
+                # 向上突破目标未激活
+                report += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【因果测算】
+交易区间: {tr_low:.2f} - {tr_high:.2f}
+因果幅度: {cause_effect['cause_size']:.2f}
+⏸️ 潜在目标（待触发）：当价格有效突破 {tr_high:.2f}元并确认SOS时，以下做多目标将被激活——
+   目标1 (0.618倍): {cause_effect['targets']['target_1']:.2f}
+   目标2 (1.0倍): {cause_effect['targets']['target_2']:.2f}
+   目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
+💡 威科夫理论：因果法则的目标测算，应只在价格有效突破区间后才被激活
 """
 
         # ── 核心结论评估 (委派至建议引擎) ──────────────────
@@ -464,13 +592,27 @@ class WyckoffReportGenerator:
    结论: 信号强度或可靠性低于执行阈值，建议继续观察。
 """
         else:
+            # 关键修复：判断当前阶段，严格区分上涨和下跌两个不同剧本的路径
+            is_distribution = 'Distribution' in phase_str or '派发' in phase_str
+            is_accumulation = 'Accumulation' in phase_str or '吸筹' in phase_str
+            
             # 收集信号并检测冲突
             bullish_signals = []
             bearish_signals = []
+            
+            # 关键修复：在派发阶段，SOS/LPS/Spring不应被视为看多信号
             if joc.get('detected'): bullish_signals.append("JOC")
-            if sos.get('detected'): bullish_signals.append("SOS")
-            if lps.get('detected'): bullish_signals.append("LPS")
-            if spring.get('detected'): bullish_signals.append("Spring")
+            if is_distribution:
+                # 派发阶段：SOS/LPS/Spring不是真正的看多信号
+                if sos.get('detected'): bearish_signals.append("UT/UTAD（派发阶段的假突破）")
+                if lps.get('detected'): bearish_signals.append("LPS（派发阶段的最后离场点）")
+                if spring.get('detected'): bearish_signals.append("Spring（派发阶段不适用）")
+            else:
+                # 非派发阶段：SOS/LPS/Spring是真正的看多信号
+                if sos.get('detected'): bullish_signals.append("SOS")
+                if lps.get('detected'): bullish_signals.append("LPS")
+                if spring.get('detected'): bullish_signals.append("Spring")
+            
             if fti.get('detected'): bearish_signals.append("FTI")
             if sow.get('detected'): bearish_signals.append("SOW")
             if lpsy.get('detected'): bearish_signals.append("LPSY")
@@ -487,20 +629,40 @@ class WyckoffReportGenerator:
    结论: 市场多空分歧剧烈，建议在冲突消解前保持空仓或显著收紧止损。
 """
             # 决策树逻辑
+            # 关键修复：在派发阶段，禁用LPS做多机会，只显示UTAD/LPSY做空机会
             elif joc.get('detected') and joc.get('test_detected'):
-                joc_entry = joc.get('creek_level', current_price)
-                stop_price = round(joc_entry * 0.96, 2)
-                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
-                report += f"""
+                # JOC突破确认：只有在非派发阶段才显示做多机会
+                if not is_distribution:
+                    joc_entry = joc.get('creek_level', current_price)
+                    stop_price = round(joc_entry * 0.96, 2)
+                    target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
+                    report += f"""
 🚀 趋势跟踪买入（JOC 突破确认）:
    参考入场区间: {joc_entry:.2f} ~ {round(joc_entry * 1.02, 2):.2f}
    止损: {stop_price:.2f} | 目标2: {target2:.2f}
    策略: JOC 突破位附近缩量分批买入。
 """
+                else:
+                    # 派发阶段的JOC可能是假突破
+                    report += f"""
+⚠️ JOC突破存疑（派发阶段）:
+   当前处于派发阶段，JOC突破可能是假突破。
+   策略: 等待回测确认，如果回测不破支撑，才能确认真突破。
+"""
             elif lps.get('detected'):
-                stop_price = round(lps['price'] * 0.95, 2)
-                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
-                report += f"""
+                # 关键修复：在派发阶段，LPS是最后离场点，不是做多机会
+                if is_distribution:
+                    report += f"""
+⚠️ LPS最后离场点（派发阶段）:
+   价格: {lps['price']:.2f}
+   ⚠️ 处于派发期内的 LPS，是持仓多头最后的主动离场点，并非新多开仓的买点。
+   策略: 持仓多头应在LPS附近减仓或离场，等待更明确的信号。
+"""
+                else:
+                    # 非派发阶段的LPS是做多机会
+                    stop_price = round(lps['price'] * 0.95, 2)
+                    target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
+                    report += f"""
 ✅ 做多机会（LPS 最后支撑）:
    入场价格: {lps['price']:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
 """
@@ -516,7 +678,17 @@ class WyckoffReportGenerator:
             elif lpsy.get('detected'):
                 stop_price = round(lpsy['price'] * 1.05, 2)
                 target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
-                report += f"""
+                
+                # 关键修复：在派发阶段，LPSY是做空良机
+                if is_distribution:
+                    report += f"""
+🔴 做空/减仓机会（LPSY 最后供应 - 派发阶段）:
+   价格: {lpsy['price']:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
+   ⚠️ 派发阶段的LPSY确认了上方抛压沉重，是不可错过的减仓/做空良机。
+   策略: 寻找UTAD（上冲回落）之后的LPSY（无需求反弹）进行做空。
+"""
+                else:
+                    report += f"""
 ✅ 卖出/减仓机会（LPSY 最后供应）:
    价格: {lpsy['price']:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
 """
@@ -525,7 +697,60 @@ class WyckoffReportGenerator:
             else:
                 report += "⏸️ 无明显信号: 建议继续观察。\n"
 
-        report += f"""
+        # 逻辑证伪点：明确列出什么情况下判断错了
+        # 获取关键价位
+        tr_high = trading_range.get('high', 0)
+        tr_low = trading_range.get('low', 0)
+        ar_price = 0
+        ar_res = self.pattern_detector.detect_automatic_reaction()
+        if ar_res.get('detected'):
+            ar_price = ar_res.get('price', 0)
+        
+        # 构建证伪条件
+        falsification_conditions = []
+        
+        if is_distribution:
+            # 派发逻辑的证伪条件
+            falsification_conditions.append(f"日线收盘价站稳 {tr_high:.2f}元之上（突破派发区上沿）")
+            falsification_conditions.append(f"放量突破 {tr_high:.2f}元并完成JOC回测确认")
+            falsification_conditions.append(f"相对强度RS转正并持续走强")
+            falsification_conditions.append("周线与月线趋势共振看涨")
+        elif is_accumulation:
+            # 吸筹逻辑的证伪条件
+            falsification_conditions.append(f"日线收盘价跌破 {tr_low:.2f}元（跌破吸筹区下沿）")
+            falsification_conditions.append(f"放量跌破 {tr_low:.2f}元并完成FTI回测确认")
+            falsification_conditions.append("相对强度RS持续走弱")
+        
+        # 添加证伪条件模块
+        if falsification_conditions:
+            report += f"""
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【逻辑证伪点】
+💡 顶级交易计划不仅告诉你什么情况下你对了，更明确告诉你什么情况下你判断错了。
+
+🔴 派发逻辑的证伪条件（以下任一条件满足，派发判断失效）:
+"""
+            for i, condition in enumerate(falsification_conditions, 1):
+                report += f"   {i}. {condition}\n"
+            
+            report += f"""
+📊 后续观察要点:
+   • 关键阻力位: {tr_high:.2f}元（派发区上沿）
+   • 关键支撑位: {tr_low:.2f}元（派发区下沿）
+   • 冰线位置: {ar_price:.2f}元（自动回落低点）
+   • 突破确认标准: 收盘价站稳关键位之上/之下，且成交量放大
+
+⚠️ 风险控制:
+   • 如果价格在关键位附近反复震荡，说明多空分歧剧烈，应保持观望
+   • 如果价格突破关键位但成交量萎缩，可能是假突破，需等待回测确认
+   • 严格执行止损，不抱侥幸心理
+
+{'='*60}
+"""
+        else:
+            report += f"""
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -577,8 +802,13 @@ class WyckoffReportGenerator:
             "in_consolidation": in_consolidation
         }
 
-    def _cross_timeframe_conflict_warning(self, phase: str, weekly_trend: str, monthly_trend: str) -> dict:
-        """跨周期冲突仲裁：日线方向与周/月趋势冲突时降级执行建议"""
+    def _cross_timeframe_conflict_warning(self, phase: str, weekly_trend: str, monthly_trend: str, agreement: str = 'unknown') -> dict:
+        """
+        跨周期冲突仲裁：日线方向与周/月趋势冲突时降级执行建议
+        
+        关键修复：当agreement为unknown或conflict时，核心建议强制降级为"观望"
+        而不是给出任何方向的"试错"建议
+        """
         side = PhaseAdapter.get_market_side(phase)
         higher_tf_bull = (weekly_trend == 'bullish' and monthly_trend != 'bearish')
         higher_tf_bear = (weekly_trend == 'bearish' and monthly_trend != 'bullish')
@@ -586,12 +816,22 @@ class WyckoffReportGenerator:
         bullish_conflict = side == MarketSide.BULLISH and higher_tf_bear
         bearish_conflict = side == MarketSide.BEARISH and higher_tf_bull
         has_conflict = bullish_conflict or bearish_conflict
+        
+        # 关键修复：当agreement为unknown时，也视为冲突
+        # 这种情况下，多周期方向不明确，应强制降级为"观望"
+        if agreement in ['unknown', 'conflict']:
+            has_conflict = True
+            conflict_reason = f"多周期方向不明确（agreement={agreement}）"
+        else:
+            conflict_reason = f"日线{side.value}与周线{weekly_trend}冲突" if has_conflict else ""
 
         return {
             "has_conflict": has_conflict,
             "daily_side": side.value if hasattr(side, 'value') else str(side),
             "weekly_trend": weekly_trend,
             "monthly_trend": monthly_trend,
+            "agreement": agreement,
+            "conflict_reason": conflict_reason,
             "action": "defer_execution" if has_conflict else "normal"
         }
 
@@ -607,68 +847,123 @@ class WyckoffReportGenerator:
 
 
     def get_relevant_terms(self, phase: str, events: dict) -> dict:
-        """获取相关术语的大白话解释"""
+        """
+        获取相关术语的动态解释
+        
+        关键修复：把静态术语表升级为"术语在当前阶段的应用解释"
+        让注解完全服从于"当前阶段的上下文"
+        """
+        # 判断当前阶段
+        is_distribution = 'Distribution' in phase or '派发' in phase
+        is_accumulation = 'Accumulation' in phase or '吸筹' in phase
+        
+        # 基础术语解释（静态）
         all_terms = {
             "SOS (强势信号)": {
                 "simple": "强势信号 - 价格放量突破阻力位",
                 "example": "像蓄势后的跳跃，成交量放大确认",
-                "action": "考虑买入或持有"
             },
             "SOW (弱势信号)": {
                 "simple": "弱势信号 - 价格放量跌破支撑位",
                 "example": "像突然脚软跌入坑中，供给开始主导",
-                "action": "考虑卖出或观望"
             },
             "Spring (震仓)": {
                 "simple": "震仓 - 短暂跌破支撑后快速收回",
                 "example": "像弹簧被压下去后弹起，洗出散户",
-                "action": "可能是极佳的买入机会"
             },
             "Upthrust (上冲回落)": {
                 "simple": "诱多 - 短暂突破阻力后快速跌回",
                 "example": "假装大涨吸引散户接盘，随后迅速撤退",
-                "action": "可能是做空或逃顶机会"
             },
             "Accumulation (积累期)": {
                 "simple": "建仓期 - 主力在低位悄悄买入筹码",
                 "example": "像批发商在淡季默默囤货",
-                "action": "耐心等待突破信号"
             },
             "Distribution (派发期)": {
                 "simple": "出货期 - 主力在高位分批卖出筹码",
                 "example": "像批发商在旺季大肆推销",
-                "action": "注意风险，逢高减仓"
             },
             "LPS (最后支撑点)": {
                 "simple": "最后支撑点 - 震仓后的缩量回调",
                 "example": "像弹簧压到底部的最低点，反弹概率最高",
-                "action": "强烈建议买入"
             },
             "LPSY (最后供应点)": {
                 "simple": "最后供应点 - 跌破支撑后的无力反抽",
                 "example": "像反弹无力撞上天花板",
-                "action": "强烈建议卖出"
             }
         }
         
+        # 关键修复：根据当前阶段动态调整术语解释
+        # 让注解完全服从于"当前阶段的上下文"
+        if is_distribution:
+            # 派发阶段的术语解释
+            phase_context = "派发期"
+            all_terms["SOS (强势信号)"]["action"] = "⚠️ 虽是基础理论中的看涨信号，但在当前派发阶段背景下，任何向上突破行为，都必须优先解读为 UTAD (上冲回落) 陷阱，直至价格以 JOC 形态证明不是。"
+            all_terms["SOW (弱势信号)"]["action"] = "弱势信号确认。派发阶段的放量跌破是供给主导的表现，应考虑卖出或观望。"
+            all_terms["Spring (震仓)"]["action"] = "❌ 完全不适用。在下行趋势/派发背景下，假突破动作是 UT，顶部诱多与底部诱空绝不互通。请勿混淆。"
+            all_terms["Upthrust (上冲回落)"]["action"] = "⚠️ 派发阶段的典型诱多信号。短暂突破阻力后快速跌回，是主力出货的陷阱，应视为卖出机会。"
+            all_terms["Accumulation (积累期)"]["action"] = "不适用。当前处于派发阶段，与积累期相反。"
+            all_terms["Distribution (派发期)"]["action"] = "⚠️ 已进入阶段。当前所有上涨行为都优先被视作诱多。需要绝对防御。"
+            all_terms["LPS (最后支撑点)"]["action"] = "⚠️ 处于派发期内的 LPS，是持仓多头最后的主动离场点，并非新多开仓的买点。"
+            all_terms["LPSY (最后供应点)"]["action"] = "🔴 已多次出现。这确认了上方抛压沉重。任何新的 LPSY 出现，都是不可错过的减仓/做空良机。"
+        elif is_accumulation:
+            # 吸筹阶段的术语解释
+            phase_context = "吸筹期"
+            all_terms["SOS (强势信号)"]["action"] = "✅ 吸筹阶段的强势突破，是需求完全控制市场的表现，可考虑买入或持有。"
+            all_terms["SOW (弱势信号)"]["action"] = "弱势信号。吸筹阶段的放量跌破可能是震仓陷阱，需观察是否快速收回。"
+            all_terms["Spring (震仓)"]["action"] = "✅ 吸筹阶段最重要的买入信号之一。假跌破支撑后快速收回，是主力洗盘结束的标志。"
+            all_terms["Upthrust (上冲回落)"]["action"] = "诱多信号。吸筹阶段的上冲回落可能是测试供应，需观察是否缩量。"
+            all_terms["Accumulation (积累期)"]["action"] = "✅ 已进入阶段。耐心等待Spring或SOS确认后买入。"
+            all_terms["Distribution (派发期)"]["action"] = "不适用。当前处于吸筹阶段，与派发期相反。"
+            all_terms["LPS (最后支撑点)"]["action"] = "✅ 吸筹阶段的最后支撑点，是绝佳的买入机会。震仓后的缩量回调，反弹概率最高。"
+            all_terms["LPSY (最后供应点)"]["action"] = "不适用。吸筹阶段通常不出现LPSY。"
+        else:
+            # 其他阶段（上涨/下跌趋势）
+            phase_context = "趋势阶段"
+            all_terms["SOS (强势信号)"]["action"] = "趋势阶段的强势信号，是趋势延续的表现，可考虑顺势买入或持有。"
+            all_terms["SOW (弱势信号)"]["action"] = "趋势阶段的弱势信号，是趋势反转的预警，应考虑卖出或观望。"
+            all_terms["Spring (震仓)"]["action"] = "趋势阶段的震仓可能是回调买入机会，需观察支撑是否有效。"
+            all_terms["Upthrust (上冲回落)"]["action"] = "趋势阶段的上冲回落可能是见顶信号，需观察是否放量。"
+            all_terms["Accumulation (积累期)"]["action"] = "不适用。当前处于趋势阶段。"
+            all_terms["Distribution (派发期)"]["action"] = "不适用。当前处于趋势阶段。"
+            all_terms["LPS (最后支撑点)"]["action"] = "趋势阶段的回调支撑点，是顺势买入机会。"
+            all_terms["LPSY (最后供应点)"]["action"] = "趋势阶段的反弹阻力点，是顺势卖出机会。"
+        
         relevant = {}
-        if "Accumulation" in phase:
-            relevant["Accumulation (积累期)"] = all_terms["Accumulation (积累期)"]
-        elif "Distribution" in phase:
+        
+        # 添加阶段说明
+        if is_distribution:
             relevant["Distribution (派发期)"] = all_terms["Distribution (派发期)"]
+            relevant["Distribution (派发期)"]["phase_context"] = f"当前阶段：{phase_context}"
+        elif is_accumulation:
+            relevant["Accumulation (积累期)"] = all_terms["Accumulation (积累期)"]
+            relevant["Accumulation (积累期)"]["phase_context"] = f"当前阶段：{phase_context}"
             
+        # 根据检测到的事件添加相关术语
         if events.get('sos', {}).get('detected'):
-            relevant["SOS (强势信号)"] = all_terms["SOS (强势信号)"]
+            term = all_terms["SOS (强势信号)"]
+            term["phase_context"] = f"当前阶段：{phase_context}"
+            relevant["SOS (强势信号)"] = term
         if events.get('sow', {}).get('detected'):
-            relevant["SOW (弱势信号)"] = all_terms["SOW (弱势信号)"]
+            term = all_terms["SOW (弱势信号)"]
+            term["phase_context"] = f"当前阶段：{phase_context}"
+            relevant["SOW (弱势信号)"] = term
         if events.get('spring', {}).get('detected'):
-            relevant["Spring (震仓)"] = all_terms["Spring (震仓)"]
+            term = all_terms["Spring (震仓)"]
+            term["phase_context"] = f"当前阶段：{phase_context}"
+            relevant["Spring (震仓)"] = term
         if events.get('upthrust', {}).get('detected'):
-            relevant["Upthrust (上冲回落)"] = all_terms["Upthrust (上冲回落)"]
+            term = all_terms["Upthrust (上冲回落)"]
+            term["phase_context"] = f"当前阶段：{phase_context}"
+            relevant["Upthrust (上冲回落)"] = term
         if events.get('lps', {}).get('detected'):
-            relevant["LPS (最后支撑点)"] = all_terms["LPS (最后支撑点)"]
+            term = all_terms["LPS (最后支撑点)"]
+            term["phase_context"] = f"当前阶段：{phase_context}"
+            relevant["LPS (最后支撑点)"] = term
         if events.get('lpsy', {}).get('detected'):
-            relevant["LPSY (最后供应点)"] = all_terms["LPSY (最后供应点)"]
+            term = all_terms["LPSY (最后供应点)"]
+            term["phase_context"] = f"当前阶段：{phase_context}"
+            relevant["LPSY (最后供应点)"] = term
             
         return relevant
 
@@ -868,13 +1163,24 @@ class WyckoffReportGenerator:
             cause_effect_law=CauseEffectModel(**self.law_analyzer.analyze_cause_effect_law_enhanced())
         )
 
-        # 增加风险建议 (委派至建议引擎)
-        risk_advice = self.rec_engine.generate_risk_advice(signal_quality, trading_plan)
-
+        # 关键修复：先检查跨周期冲突，再生成风险建议
+        # 这样可以让风险建议引擎根据冲突情况抑制交易建议
         mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
-        conflict = self._cross_timeframe_conflict_warning(phase_str, mtf.get('weekly_trend', 'unknown'), mtf.get('monthly_trend', 'unknown'))
-        if conflict.get('has_conflict'):
-            risk_advice.moderate.reason = (risk_advice.moderate.reason or '') + '；跨周期冲突，建议延迟执行'
+        agreement = multi_timeframe.agreement if hasattr(multi_timeframe, 'agreement') else 'unknown'
+        conflict = self._cross_timeframe_conflict_warning(
+            phase_str, 
+            mtf.get('weekly_trend', 'unknown'), 
+            mtf.get('monthly_trend', 'unknown'),
+            agreement=agreement
+        )
+        
+        # 生成风险建议，传入跨周期冲突信息
+        risk_advice = self.rec_engine.generate_risk_advice(
+            signal_quality, 
+            trading_plan,
+            has_conflict=conflict.get('has_conflict', False),
+            conflict_details=conflict.get('description', '')
+        )
         
         # 使用BacktestEngine获取历史表现
         backtest_engine = BacktestEngine(self.data, self.pattern_detector.thresholds)

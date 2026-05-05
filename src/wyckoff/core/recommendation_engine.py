@@ -179,14 +179,29 @@ class RecommendationEngine:
             holding_period="1-3个月 (波段)"
         )
 
-    def generate_risk_advice(self, quality: SignalQualityModel, plan: TradingPlanModel) -> RiskAdviceModel:
+    def generate_risk_advice(self, quality: SignalQualityModel, plan: TradingPlanModel, 
+                            has_conflict: bool = False, conflict_details: str = "") -> RiskAdviceModel:
         """
-        生成分层风险建议 (Enhanced with volatility check)
+        生成分层风险建议 (Enhanced with volatility check and conflict detection)
+        
+        重要理论约束：
+        - 当跨周期冲突时，所有方向的交易建议都应被抑制
+        - 顺周线试错拿货（等Spring），优于逆周线试错砸盘（等LPSY）
         """
         score = quality.score
         direction = plan.direction
         
         def get_item(mode: str) -> RiskAdviceItem:
+            # 关键修复：跨周期冲突时，所有方向的交易建议都应被抑制
+            if has_conflict:
+                if mode == "conservative":
+                    return RiskAdviceItem(action="绝对观望", reason=f"跨周期冲突：{conflict_details}")
+                elif mode == "moderate":
+                    return RiskAdviceItem(action="观望", reason=f"跨周期冲突：{conflict_details}")
+                else:  # aggressive
+                    # 激进策略也应抑制，但可以给出等待方向
+                    return RiskAdviceItem(action="等待信号", reason=f"跨周期冲突：{conflict_details}，等待日线级别明确信号")
+            
             if direction == "观望":
                 return RiskAdviceItem(action="观望", reason="无清晰信号")
             
@@ -197,8 +212,15 @@ class RecommendationEngine:
                 action = "按计划参与" if score >= 50 else "观望"
                 return RiskAdviceItem(action=action, reason=f"信号得分 {score}/100")
             else: # aggressive
-                action = "激进试错" if score >= 30 else "极轻仓试错"
-                return RiskAdviceItem(action=action, reason=f"评分较低，严控止损")
+                # 关键修复：激进策略的"试错"方向应在体系内设定优先级
+                # 顺周线试错拿货（等Spring），优于逆周线试错砸盘（等LPSY）
+                if score >= 30:
+                    action = "激进试错"
+                    reason = f"信号得分 {score}/100，顺周线方向试错"
+                else:
+                    action = "极轻仓试错"
+                    reason = f"评分较低，严控止损，等待日线级别明确信号"
+                return RiskAdviceItem(action=action, reason=reason)
 
         return RiskAdviceModel(
             conservative=get_item("conservative"),

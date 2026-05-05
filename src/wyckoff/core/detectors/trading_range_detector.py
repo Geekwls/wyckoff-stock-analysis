@@ -9,7 +9,13 @@ class TradingRangeDetector:
         self.config = config
 
     def detect(self, window: int = 60) -> Dict:
-        """检测交易区间"""
+        """
+        检测交易区间
+        
+        关键修复：添加缓冲区（buffer），避免因为微小差异而产生错误判断
+        例如：range_pct=30.2% 和 spring_range_threshold=30% 的差距只有0.2%，
+        但从逻辑上来说，30.2%的波动范围应该被认为是"盘整"而非"趋势"
+        """
         if self.data is None or len(self.data) < window:
             return {}
 
@@ -17,7 +23,12 @@ class TradingRangeDetector:
         high_max = df['High'].max()
         low_min = df['Low'].min()
         range_pct = (high_max - low_min) / low_min
-        is_consolidation = range_pct < self.config.spring_range_threshold
+        
+        # 关键修复：添加5%的缓冲区，避免因为微小差异而产生错误判断
+        # 例如：threshold=30%，buffer=5%，则实际阈值=35%
+        buffer_pct = 0.05  # 5%的缓冲区
+        effective_threshold = self.config.spring_range_threshold + buffer_pct
+        is_consolidation = range_pct < effective_threshold
 
         recent_mean = df['Volume'].iloc[-20:].mean()
         early_mean = df['Volume'].iloc[:-20].mean() if len(df) > 20 else recent_mean

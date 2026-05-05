@@ -332,13 +332,19 @@ class WyckoffAnalyzer:
             return {}
         
         try:
+            # 关键修复：先获取当前阶段，用于确定因果法则的目标方向
+            phase_result = self.identify_phase()
+            current_phase = phase_result.get('phase', '')
+            
             # 使用点数图计算因果效应
             # box_size_pct=1.0 表示每个箱体为价格的1%
             # reversal_boxes=3 表示需要3个箱体的反转才改变方向
+            # phase: 传入阶段信息，让因果法则计算考虑阶段方向
             pnf_result = calculate_cause_effect_from_pnf(
                 self.data, 
                 box_size_pct=1.0,
-                reversal_boxes=3
+                reversal_boxes=3,
+                phase=current_phase  # 传入阶段信息
             )
             
             # 如果点数图计算成功
