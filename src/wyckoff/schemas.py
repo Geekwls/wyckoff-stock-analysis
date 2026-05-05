@@ -38,6 +38,10 @@ class WyckoffEventModel(BaseModel):
     volume: Optional[float] = Field(default=None, description="事件成交量")
     confidence: float = Field(default=0.0, description="置信度 (0-1)")
     description: Optional[str] = Field(default=None, description="事件描述")
+    # 新增字段：反弹/回落百分比（从Climax实体中位值计算）
+    rebound_pct: Optional[float] = Field(default=None, description="反弹百分比（用于SC后的AR）")
+    decline_pct: Optional[float] = Field(default=None, description="回落百分比（用于BC后的AR）")
+    sc_benchmark: Optional[float] = Field(default=None, description="SC/BC实体中位值（计算基准）")
 
 class BaseDetectionResult(BaseModel):
     """通用检测结果包装器 (P0 #1)"""

@@ -86,9 +86,19 @@ class RecommendationEngine:
 
         # --- 孟洪涛进阶信号：枯燥区与死角突破 ---
         boring = pattern_results.get('boring_zone', {})
+        boring_score = boring.get('score', 0)
         if boring.get('detected'):
             base_score += 10
-            reasons.append(f"检测到“枯燥区” (得分:{boring['score']})，主力可能正在吸筹")
+            reasons.append(f"检测到“枯燥区” (得分:{boring_score})，主力可能正在吸筹")
+            
+            # Boring Zone 联动加权 (P2 #3.1)
+            if boring_score > 85:
+                for key in ['spring', 'joc']:
+                    info = events.get(key)
+                    if info and info.get('detected'):
+                        base_score += 15 # 高质量枯燥区后的突破极具爆发力
+                        reasons.append(f"🔥 高价值突破：{key.upper()} 紧随高质量枯燥区出现，爆发潜力极大")
+
             if boring.get('high_alert'):
                 reasons.append("🔥 高能预警：系统已进入“死角突破”严密监控模式")
 

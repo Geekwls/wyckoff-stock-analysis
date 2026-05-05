@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
 from .detectors.trading_range_detector import TradingRangeDetector
 from .detectors.classic_pattern_detector import ClassicPatternDetector
@@ -36,9 +35,21 @@ class WyckoffPatternDetector:
         # 初始化孟洪涛增强检测器
         self.meng_enhancer = MengPatternEnhancer(data, config)
         
+        # 注册所有子检测器以支持统一接口调用
+        self.all_detectors = [
+            self.range_detector, self.classic_detector, 
+            self.sw_detector, self.phase_identifier, 
+            self.meng_enhancer
+        ]
+
         # 计算ATR百分比用于动态阈值
         self._atr_pct = self._calculate_atr_pct()
     
+    def _update_all_detectors_context(self, phase: str):
+        """统一更新所有子检测器的分析上下文"""
+        for detector in self.all_detectors:
+            detector.update_analysis_context(phase)
+
     def _calculate_atr_pct(self) -> float:
         """
         计算ATR占价格的百分比
@@ -154,10 +165,11 @@ class WyckoffPatternDetector:
         """
         收集所有威科夫事件供阶段识别使用
         
-        关键修复：在调用detect_sos()之前，先进行初步阶段识别
-        这样在派发阶段，detect_sos()才能正确返回{'detected': False}
+        优化说明：
+        1. 采用“延迟定性”策略，先收集所有物理特征。
+        2. 在所有事件收集完毕后，通过 _validate_phase_consistency 进行逻辑验证和证伪。
         """
-        # 先收集基础事件（不依赖阶段的事件）
+        # 1. 收集基础价格形态（不依赖全局阶段）
         climax_res = self.detect_climax()
         ar_res = self.detect_automatic_reaction(climax_res)
         st_res = self.detect_secondary_test(climax_res, ar_res)
@@ -165,15 +177,16 @@ class WyckoffPatternDetector:
         spring_res = self.detect_spring()
         upthrust_res = self.detect_upthrust()
         
-        # 关键修复：在调用detect_sos()之前，先进行初步阶段识别
-        # 基于已收集的事件（climax, ar, st, spring, upthrust）进行初步判断
+        # 2. 获取枯燥区信息，用于后续加权（P2 #3.1）
+        boring_zone_res = self.detect_boring_zone()
+        
+        # 3. 初步阶段识别（仅作为参考上下文）
         preliminary_phase = self._preliminary_phase_identification(climax_res, ar_res, st_res, spring_res, upthrust_res)
         
-        # 设置阶段信息，让detect_sos()能够正确判断
-        if hasattr(self, 'sw_detector') and hasattr(self.sw_detector, 'set_current_phase'):
-            self.sw_detector.set_current_phase(preliminary_phase)
+        # 统一更新子检测器的分析上下文 (P2 #1 - Enhanced)
+        self._update_all_detectors_context(preliminary_phase)
         
-        # 现在调用detect_sos()，它会根据阶段正确判断
+        # 4. 收集趋势/强度信号
         sos_res = self.detect_sos()
         sow_res = self.detect_sow()
         
@@ -183,7 +196,7 @@ class WyckoffPatternDetector:
         joc_res = self.detect_joc()
         fti_res = self.detect_fti()
 
-        # 统一使用强类型模型封装
+        # 5. 统一使用强类型模型封装
         events = {
             'trading_range': TradingRangeModel(**tr_res),
             'climax': ClimaxModel(**climax_res),
@@ -196,7 +209,9 @@ class WyckoffPatternDetector:
                 'lpsy': LpsyModel(**lpsy_res)
             },
             'joc': JocModel(**joc_res) if joc_res.get('detected') else None,
-            'fti': FtiModel(**fti_res) if fti_res.get('detected') else None
+            'fti': FtiModel(**fti_res) if fti_res.get('detected') else None,
+            'boring_zone': boring_zone_res,
+            'phase_revision_log': []
         }
         
         if spring_res.get('detected'):
@@ -207,7 +222,14 @@ class WyckoffPatternDetector:
         if sos_res.get('detected'):
             events['sos_sow'] = {'_type': 'sos', 'data': SosModel(**sos_res)}
         elif sow_res.get('detected'):
-            events['sos_sow'] = {'_type': 'sow', 'data': SosModel(**sow_res)} 
+            events['sos_sow'] = {'_type': 'sow', 'data': SowModel(**sow_res)} 
+            
+        # 6. 执行证伪验证（P0 #1.2）
+        final_phase, revision_logs = self._validate_phase_consistency(preliminary_phase, events)
+        events['phase_revision_log'] = revision_logs
+        
+        # 统一更新子检测器的最终分析上下文
+        self._update_all_detectors_context(final_phase)
             
         return events
 
@@ -215,29 +237,63 @@ class WyckoffPatternDetector:
         """
         初步阶段识别：基于已收集的事件进行初步判断
         
-        关键作用：在调用detect_sos()之前，先进行初步阶段识别
-        这样在派发阶段，detect_sos()才能正确返回{'detected': False}
-        
-        注意：这只是初步识别，最终阶段由phase_identifier.identify()确定
+        优化：增加对 AR 和 ST 的协同校验，避免仅凭 BC/SC 就定性。
         """
-        # 检查是否检测到买入高潮（BC）- 这是派发阶段的典型特征
-        if climax_res.get('detected') and climax_res.get('type') == 'buying_climax':
+        is_sc = climax_res.get('detected') and climax_res.get('type') == 'selling_climax'
+        is_bc = climax_res.get('detected') and climax_res.get('type') == 'buying_climax'
+        is_ar = ar_res.get('detected')
+        is_st = st_res.get('detected')
+
+        # 派发初步迹象：BC + AR/ST
+        if is_bc and (is_ar or is_st):
             return 'Distribution Phase A'
         
-        # 检查是否检测到卖出高潮（SC）- 这是吸筹阶段的典型特征
-        if climax_res.get('detected') and climax_res.get('type') == 'selling_climax':
+        # 吸筹初步迹象：SC + AR/ST
+        if is_sc and (is_ar or is_st):
             return 'Accumulation Phase A'
         
-        # 检查是否检测到Spring - 这是吸筹阶段的典型特征
+        # 强信号覆盖
         if spring_res.get('detected'):
             return 'Accumulation Phase C'
-        
-        # 检查是否检测到Upthrust - 这是派发阶段的典型特征
         if upthrust_res.get('detected'):
             return 'Distribution Phase C'
         
-        # 默认返回空字符串，让后续的phase_identifier.identify()来确定
+        # 降级判断：仅有高潮
+        if is_bc: return 'Possible Distribution'
+        if is_sc: return 'Possible Accumulation'
+        
         return ''
+
+    def _validate_phase_consistency(self, preliminary_phase: str, events: Dict) -> Tuple[str, List[str]]:
+        """
+        阶段一致性验证与证伪机制 (P0 #1.2)
+        """
+        revisions = []
+        current_phase = preliminary_phase
+        
+        su_info = events.get('spring_upthrust') or {}
+        is_spring = su_info.get('_type') == 'spring'
+        is_upthrust = su_info.get('_type') == 'upthrust'
+        joc_detected = events.get('joc') and events['joc'].detected
+        fti_detected = events.get('fti') and events['fti'].detected
+
+        # 证伪逻辑 1：原判定为 Distribution，但出现了 Spring + JOC -> 修正为 Reaccumulation
+        if 'Distribution' in current_phase and is_spring and joc_detected:
+            current_phase = 'Accumulation (Reaccumulation)'
+            revisions.append("检测到 Spring + JOC，原 Distribution 判定被证伪，修正为再吸筹 (Reaccumulation)")
+            
+        # 证伪逻辑 2：原判定为 Accumulation，但出现了 Upthrust + FTI -> 修正为 Redistribution
+        if 'Accumulation' in current_phase and is_upthrust and fti_detected:
+            current_phase = 'Distribution (Redistribution)'
+            revisions.append("检测到 Upthrust + FTI，原 Accumulation 判定被证伪，修正为再派发 (Redistribution)")
+
+        # 逻辑冲突：检测到 SOS 但处于 Distribution 且无突破信号
+        sos_info = events.get('sos_sow') or {}
+        if 'Distribution' in current_phase and sos_info.get('_type') == 'sos' and not joc_detected:
+            # 这种情况通常是 Upthrust 的误判，或者阶段判断过早
+            revisions.append("警告：派发阶段检测到强势信号 (SOS) 但未见跳跃，需警惕诱多或阶段重判")
+
+        return current_phase, revisions
 
     def detect_lps(self, sos_result: Dict = None) -> Dict:
         """检测 LPS (Last Point of Support)"""
@@ -313,9 +369,9 @@ class WyckoffPatternDetector:
             
             # 动态阈值：基于ATR适配
             # 高波动资产需要更高的成交量确认
-            climax_vol_threshold = self._get_dynamic_volume_threshold(1.8)
-            climax_range_threshold = self._get_dynamic_volume_threshold(1.5)  # 使用相同逻辑适配价差
-            fallback_vol_threshold = self._get_dynamic_volume_threshold(1.3)
+            climax_vol_threshold = self._get_dynamic_volume_threshold(self.thresholds.VOLUME_CONFIRMATION['strong'])
+            climax_range_threshold = self._get_dynamic_volume_threshold(1.5)  # 保持 1.5 倍平均价差
+            fallback_vol_threshold = self._get_dynamic_volume_threshold(self.thresholds.VOLUME_CONFIRMATION['moderate'])
             
             # 高潮候选者：成交量 > 动态阈值倍均量 且 价差 > 动态阈值倍均价差
             candidates = recent_data[
@@ -379,7 +435,11 @@ class WyckoffPatternDetector:
             ar_high = after_sc['High'].max()
             ar_idx = after_sc['High'].idxmax()
 
-            rebound_pct = (ar_high - sc_low) / sc_low * 100
+            # 修正：反弹起点应为 SC 当日的收盘价或实体中位值，而非最低价 (P1 #2.1)
+            sc_bar = self.data.loc[sc_date]
+            baseline = (sc_bar['Open'] + sc_bar['Close']) / 2
+            
+            rebound_pct = (ar_high - baseline) / baseline * 100
             # 威科夫理论中，AR 通常非常剧烈
             is_ar = rebound_pct > 5 
 

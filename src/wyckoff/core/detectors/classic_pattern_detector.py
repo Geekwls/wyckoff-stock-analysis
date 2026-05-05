@@ -1,11 +1,12 @@
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, Optional, Tuple, List, Any
+from .base_detector import BaseDetector
 from ...config.settings import WyckoffConfig, WyckoffThresholds
 
-class ClassicPatternDetector:
+class ClassicPatternDetector(BaseDetector):
     """负责检测经典威科夫形态 (Climax, Spring, Upthrust, JOC, FTI, VSA, Divergence)"""
     def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds, analysis_cache):
+        super().__init__()
         self.data = data
         self.config = config
         self.thresholds = thresholds
@@ -59,21 +60,54 @@ class ClassicPatternDetector:
     def _detect_automatic_reaction_impl(self, climax_res: Dict) -> Dict:
         if not climax_res.get('detected'):
             return {'detected': False}
-            
+
         climax_date = climax_res['date']
         df_after = self.data[self.data.index > climax_date].head(20)
-        
+
         if len(df_after) == 0:
             return {'detected': False}
-            
+
+        # 计算SC（Climax）的实体中位值作为基准点，避免用极值造成的人为夸大
+        if isinstance(climax_date, (pd.Timestamp, str)):
+            sc_row = self.data.loc[self.data.index == climax_date]
+            if len(sc_row) > 0:
+                sc_open = sc_row['Open'].iloc[0]
+                sc_close = sc_row['Close'].iloc[0]
+                # 使用实体中位值（(Open+Close)/2）而非极值
+                sc_benchmark = (sc_open + sc_close) / 2.0
+            else:
+                sc_benchmark = climax_res['price']
+        else:
+            sc_benchmark = climax_res['price']
+
         if climax_res['type'] == 'selling_climax':
+            # 吸筹期的SC后找AR（向上反弹）
             ar_price = df_after['High'].max()
             ar_date = df_after['High'].idxmax()
-            return {'detected': True, 'type': 'automatic_rally', 'date': ar_date, 'price': ar_price}
+            # 计算从SC实体中位值的真实反弹百分比
+            rebound_pct = (ar_price - sc_benchmark) / sc_benchmark if sc_benchmark > 0 else 0
+            return {
+                'detected': True,
+                'type': 'automatic_rally',
+                'date': ar_date,
+                'price': ar_price,
+                'rebound_pct': round(rebound_pct, 4),
+                'sc_benchmark': round(sc_benchmark, 2)
+            }
         else:
+            # 派发期的BC后找AR（向下回落）
             ar_price = df_after['Low'].min()
             ar_date = df_after['Low'].idxmin()
-            return {'detected': True, 'type': 'automatic_reaction', 'date': ar_date, 'price': ar_price}
+            # 计算从BC实体中位值的真实回落百分比
+            decline_pct = (ar_price - sc_benchmark) / sc_benchmark if sc_benchmark > 0 else 0
+            return {
+                'detected': True,
+                'type': 'automatic_reaction',
+                'date': ar_date,
+                'price': ar_price,
+                'decline_pct': round(decline_pct, 4),
+                'sc_benchmark': round(sc_benchmark, 2)
+            }
 
     def detect_secondary_test(self, climax_res: Dict, ar_res: Dict) -> Dict:
         """检测二次测试 (ST)"""
@@ -187,6 +221,13 @@ class ClassicPatternDetector:
                     b_vol = df.loc[b_idx, 'Volume']
                     r_vol = df.loc[r_idx, 'Volume']
                     
+                    # 跟随确认 (P1 #3.2)：Spring 之后 3 日内需出现更高点
+                    follow_through = df[df.index > r_idx].head(3)
+                    ft_quality = 0
+                    if len(follow_through) > 0:
+                        higher_highs = (follow_through['High'] > df.loc[r_idx, 'High']).sum()
+                        ft_quality = (higher_highs / len(follow_through)) * 100
+                    
                     if r_vol > b_vol * 1.1:
                         springs.append({
                             'date': r_idx,
@@ -195,7 +236,8 @@ class ClassicPatternDetector:
                             'support_level': support_level,
                             'recovery_price': df.loc[r_idx, 'Close'],
                             'recovery_days': int(days_to_recover),
-                            'volume_ratio': round(r_vol / b_vol, 2)
+                            'volume_ratio': round(r_vol / b_vol, 2),
+                            'follow_through_quality': round(ft_quality, 2)
                         })
         return springs
 
@@ -259,6 +301,13 @@ class ClassicPatternDetector:
                     r_vol = df.loc[r_idx, 'Volume']
                     close_pos = (df.loc[r_idx, 'High'] - df.loc[r_idx, 'Close']) / (df.loc[r_idx, 'High'] - df.loc[r_idx, 'Low'] + 1e-6)
                     
+                    # 跟随确认 (P1 #3.2)：Upthrust 之后 3 日内需出现更低点
+                    follow_through = df[df.index > r_idx].head(3)
+                    ft_quality = 0
+                    if len(follow_through) > 0:
+                        lower_lows = (follow_through['Low'] < df.loc[r_idx, 'Low']).sum()
+                        ft_quality = (lower_lows / len(follow_through)) * 100
+
                     if r_vol > b_vol * 1.1 or close_pos > 0.7:
                         upthrusts.append({
                             'date': r_idx,
@@ -267,7 +316,8 @@ class ClassicPatternDetector:
                             'resistance_level': resistance_level,
                             'rejection_price': df.loc[r_idx, 'Close'],
                             'rejection_days': int(days_to_reject),
-                            'close_from_high': round(close_pos, 2)
+                            'close_from_high': round(close_pos, 2),
+                            'follow_through_quality': round(ft_quality, 2)
                         })
         return upthrusts
 

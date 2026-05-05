@@ -12,15 +12,11 @@
 """
 
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Optional, Any
-from datetime import datetime
-import logging
-
-logger = logging.getLogger(__name__)
+from typing import Dict, Optional, Tuple, List, Any, Union
+from .detectors.base_detector import BaseDetector
 
 
-class MengPatternEnhancer:
+class MengPatternEnhancer(BaseDetector):
     """
     孟洪涛新威科夫操盘法增强器
 
@@ -32,6 +28,7 @@ class MengPatternEnhancer:
     """
 
     def __init__(self, data: pd.DataFrame, config):
+        super().__init__()
         self.data = data
         self.config = config
         self._cache = {}

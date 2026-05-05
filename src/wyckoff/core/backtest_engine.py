@@ -55,19 +55,41 @@ class BacktestEngine:
             for i, dt in enumerate(self.data.index)
         }
     
-    def calculate_signal_performance(self, events: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    def calculate_signal_performance(self, events: Dict[str, Any], current_phase: str = None) -> Dict[str, Dict[str, Any]]:
         """
         计算各信号的历史表现
-        
+
+        新增功能：根据当前阶段动态调整展示顺序，优先展示相关信号
+
         Args:
             events: 事件检测结果字典
-            
+            current_phase: 当前Wyckoff阶段（用于动态排序）
+
         Returns:
-            各信号的历史表现统计
+            各信号的历史表现统计（已根据当前阶段排序）
         """
         results = {}
-        
-        for display_name, config in self.SIGNAL_MAPPING.items():
+
+        # 判断当前阶段类型
+        is_distribution = current_phase and ('Distribution' in current_phase or '派发' in current_phase)
+        is_accumulation = current_phase and ('Accumulation' in current_phase or '吸筹' in current_phase)
+
+        # 根据当前阶段定义优先级顺序
+        if is_distribution:
+            # 派发阶段：优先展示空头信号
+            priority_order = ["Upthrust (上冲回落)", "SOW (弱势信号)", "SOS (强势信号)", "Spring (震仓洗盘)"]
+        elif is_accumulation:
+            # 吸筹阶段：优先展示多头信号
+            priority_order = ["SOS (强势信号)", "Spring (震仓洗盘)", "SOW (弱势信号)", "Upthrust (上冲回落)"]
+        else:
+            # 其他阶段：默认顺序
+            priority_order = list(self.SIGNAL_MAPPING.keys())
+
+        # 按优先级顺序处理信号
+        for display_name in priority_order:
+            if display_name not in self.SIGNAL_MAPPING:
+                continue
+            config = self.SIGNAL_MAPPING[display_name]
             key = config["key"]
             is_bullish = config["is_bullish"]
             

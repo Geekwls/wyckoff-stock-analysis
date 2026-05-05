@@ -1,8 +1,9 @@
 import pandas as pd
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Tuple, List, Any
+from .base_detector import BaseDetector
 from ...config.settings import WyckoffConfig, WyckoffThresholds
 
-class StrengthWeaknessDetector:
+class StrengthWeaknessDetector(BaseDetector):
     """
     负责检测 SOS (Sign of Strength) 和 SOW (Sign of Weakness) 及其变体
     
@@ -12,14 +13,14 @@ class StrengthWeaknessDetector:
     - 系统必须根据当前阶段动态调整信号分类
     """
     def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds):
+        super().__init__()
         self.data = data
         self.config = config
         self.thresholds = thresholds
-        self._current_phase = None  # 当前阶段缓存
     
-    def set_current_phase(self, phase: str):
-        """设置当前阶段，用于动态调整信号分类"""
-        self._current_phase = phase
+    def update_analysis_context(self, phase: str):
+        """更新当前阶段，用于动态调整信号分类"""
+        super().update_analysis_context(phase)
     
     def _is_distribution_phase(self) -> bool:
         """判断当前是否处于派发阶段"""

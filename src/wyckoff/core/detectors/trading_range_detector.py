@@ -1,10 +1,12 @@
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple, List
+from .base_detector import BaseDetector
 from ...config.settings import WyckoffConfig
 
-class TradingRangeDetector:
+class TradingRangeDetector(BaseDetector):
     """负责检测交易区间（积累/分布）"""
     def __init__(self, data: pd.DataFrame, config: WyckoffConfig):
+        super().__init__()
         self.data = data
         self.config = config
 

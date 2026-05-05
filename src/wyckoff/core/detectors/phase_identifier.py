@@ -1,12 +1,14 @@
 import pandas as pd
-from typing import Dict, Tuple, List, Optional, Union
+from typing import Dict, Optional, Tuple, List, Any, Union
+from .base_detector import BaseDetector
 from ...config.settings import WyckoffConfig, WyckoffThresholds
 from ..enums import WyckoffPhase
 from ..utils import PhaseAdapter
 
-class PhaseIdentifier:
+class PhaseIdentifier(BaseDetector):
     """负责识别威科夫阶段和评分"""
     def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds):
+        super().__init__()
         self.data = data
         self.config = config
         self.thresholds = thresholds
@@ -32,14 +34,44 @@ class PhaseIdentifier:
         seq_score = self.calculate_sequence_score(events, phase_enum)
         final_conf *= seq_score.get('adjustment_factor', 1.0)
 
+        # 增加量价质量传递验证 (P2 #2.3)
+        quality_factor = self._analyze_phase_a_evidence(events)
+        final_conf *= quality_factor
+
         return {
             'phase': phase_str,
             'phase_enum': phase_enum,
             'confidence': round(min(final_conf, 1.0), 2),
             'ma_confidence': round(ma_conf, 2),
             'vol_confidence': round(vol_conf, 2),
-            'sequence_score': seq_score
+            'sequence_score': seq_score,
+            'quality_factor': round(quality_factor, 2)
         }
+
+    def _analyze_phase_a_evidence(self, events: Dict) -> float:
+        """
+        验证 Phase A 的量价质量传递 (P2 #2.3)
+        """
+        score = 1.0
+        climax = events.get('climax')
+        st = events.get('secondary_test')
+        
+        if climax and hasattr(climax, 'detected') and climax.detected and \
+           st and hasattr(st, 'detected') and st.detected:
+            try:
+                sc_vol = climax.volume
+                st_date = st.date
+                st_vol = self.data.loc[st_date, 'Volume']
+                
+                vol_ratio = st_vol / sc_vol
+                # 如果 ST 成交量显著小于 SC，说明供应萎缩，增加置信度
+                if vol_ratio < 0.4:
+                    score += 0.15
+                elif vol_ratio > 0.8:
+                    score -= 0.15
+            except Exception:
+                pass
+        return score
 
     def _determine_phase_from_events(self, events: Dict) -> Tuple[str, WyckoffPhase, float]:
         """从事件序列中判定阶段"""

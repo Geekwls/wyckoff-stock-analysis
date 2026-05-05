@@ -846,16 +846,36 @@ class WyckoffReportGenerator:
         return obj
 
 
-    def get_relevant_terms(self, phase: str, events: dict) -> dict:
+    def get_relevant_terms(self, phase: str, events: dict, market_context: dict = None, phase_dict: dict = None) -> dict:
         """
         获取相关术语的动态解释
-        
+
         关键修复：把静态术语表升级为"术语在当前阶段的应用解释"
         让注解完全服从于"当前阶段的上下文"
+
+        新增功能：检测"指数掩护下的个股派发"陷阱并添加洞察性说明
         """
         # 判断当前阶段
         is_distribution = 'Distribution' in phase or '派发' in phase
         is_accumulation = 'Accumulation' in phase or '吸筹' in phase
+
+        # 检测"指数掩护下的个股派发"情况
+        market_insight = None
+        if is_distribution and market_context and phase_dict:
+            # 获取相关数据
+            market_env = market_context.get('environment', '')
+            rs_change_20d = phase_dict.get('relative_strength', {}).get('rs_change_20d', 0)
+
+            # 判断是否满足"指数掩护下的个股派发"条件：
+            # 1. 大盘处于强势（Strong Bull）
+            # 2. 个股相对强度显著下降（<-5%）
+            if 'Strong Bull' in market_env and rs_change_20d < -5:
+                market_insight = {
+                    "title": "⚠️ 威科夫经典陷阱：指数掩护下的个股派发",
+                    "simple": "最隐蔽的派发，往往发生在大盘走强时",
+                    "example": "深证成指处于强势牛市（Markup Phase E），而比亚迪却跑输大盘近10%。指数的上涨掩盖了个股资金默默流出的真相。",
+                    "action": "这种背离是个股进入派发期的强烈信号。主力利用市场整体的乐观情绪掩护出货，普通投资者容易被指数繁荣迷惑。请警惕个股与大盘的背离。"
+                }
         
         # 基础术语解释（静态）
         all_terms = {
@@ -964,7 +984,11 @@ class WyckoffReportGenerator:
             term = all_terms["LPSY (最后供应点)"]
             term["phase_context"] = f"当前阶段：{phase_context}"
             relevant["LPSY (最后供应点)"] = term
-            
+
+        # 添加"指数掩护下的个股派发"洞察（如果检测到）
+        if market_insight:
+            relevant["🔍 市场陷阱洞察"] = market_insight
+
         return relevant
 
     def generate_risk_advice(self, signal_quality: dict, trading_plan: dict) -> dict:
@@ -1184,7 +1208,7 @@ class WyckoffReportGenerator:
         
         # 使用BacktestEngine获取历史表现
         backtest_engine = BacktestEngine(self.data, self.pattern_detector.thresholds)
-        performance_tracking = backtest_engine.calculate_signal_performance(events.model_dump())
+        performance_tracking = backtest_engine.calculate_signal_performance(events.model_dump(), current_phase=phase_str)
         
         # 构建完整报告
         report = ReportModel(
@@ -1204,7 +1228,7 @@ class WyckoffReportGenerator:
             signal_quality=signal_quality,
             trading_plan=trading_plan,
             wyckoff_laws=wyckoff_laws,
-            terminology_guide=self.get_relevant_terms(phase_str, events.model_dump()),
+            terminology_guide=self.get_relevant_terms(phase_str, events.model_dump(), market_context.model_dump(), phase_dict),
             risk_specific_advice=risk_advice,
             interactive_qa=self.generate_interactive_qa(signal_quality.model_dump(), trading_plan_data),
             performance_tracking=performance_tracking

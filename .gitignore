@@ -26,3 +26,4 @@ build/
 *.egg-info/
 scratch/
 output.json
+SRC_API_REFERENCE.md
