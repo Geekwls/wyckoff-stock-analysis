@@ -156,7 +156,7 @@ result = batch_scan(["AAPL", "MSFT", "GOOGL"])
 ```
 
 ### MCP Server
-在 Claude Desktop 配置中添加（需将路径替换为实际项目路径）：
+**For Claude Desktop Users**: See `HOW_TO_USE.md` for detailed MCP Server configuration instructions.
 ```json
 "mcpServers": {
   "wyckoff": {
@@ -165,37 +165,6 @@ result = batch_scan(["AAPL", "MSFT", "GOOGL"])
   }
 }
 ```
-**获取实际路径的方法**：
-
-**Windows 用户（推荐方式）**：
-1. 在文件资源管理器中，找到 `wyckoff-stock-analysis` 项目文件夹
-2. **右键点击**项目文件夹 → 选择"**复制为路径**"
-3. 粘贴路径替换 `%PROJECT_ROOT%`（注意路径中的反斜杠 `\` 需要改为正斜杠 `/`）
-   - 例如：`C:\Users\YourName\wyckoff-stock-analysis` → `C:/Users/YourName/wyckoff-stock-analysis`
-
-**Linux/Mac 用户**：
-```bash
-# 进入项目目录
-cd /path/to/wyckoff-stock-analysis
-
-# 获取绝对路径
-pwd
-```
-然后将 `pwd` 的输出替换 `%PROJECT_ROOT%`。
-
-**配置示例（替换后）**：
-```json
-"mcpServers": {
-  "wyckoff": {
-    "command": "python",
-    "args": ["C:/Users/YourName/wyckoff-stock-analysis/apps/mcp/server.py"]
-  }
-}
-```
-
-**Windows 路径格式提示**：
-- ✅ 正确：`C:/Users/Name/wyckoff-stock-analysis/apps/mcp/server.py`
-- ❌ 错误：`C:\Users\Name\wyckoff-stock-analysis\apps\mcp\server.py`（需要转义反斜杠）
-- 💡 技巧：复制路径后，将所有 `\` 替换为 `/` 即可
+Replace `%PROJECT_ROOT%` with your actual project path. Refer to `HOW_TO_USE.md` for platform-specific setup guides.
 
 **Remember: Your goal is to combine the quantitative output from the Python tools with your advanced qualitative reasoning to provide actionable, risk-managed insights.**

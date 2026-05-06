@@ -9,10 +9,11 @@
 ## 📚 目录
 
 1. [Claude Code 自动集成](#1-claude-code-自动集成)
-2. [其他 AI Agent 兼容指南](#2-其他-ai-agent-兼容指南)
-3. [分享与发布](#3-分享与发布)
-4. [本地代码嵌入](#4-本地代码嵌入)
-5. [常见问题排查](#5-常见问题排查)
+2. [Claude Desktop MCP 配置](#2-claude-desktop-mcp-配置)
+3. [其他 AI Agent 兼容指南](#3-其他-ai-agent-兼容指南)
+4. [分享与发布](#4-分享与发布)
+5. [本地代码嵌入](#5-本地代码嵌入)
+6. [常见问题排查](#6-常见问题排查)
 
 ---
 
@@ -32,7 +33,116 @@
 
 ---
 
-## 2. 其他 AI Agent 兼容指南
+## 2. Claude Desktop MCP 配置
+
+### 🔧 什么是 MCP？
+
+**MCP (Model Context Protocol)** 是一个开放协议，让 Claude Desktop 可以调用外部工具和服务器。配置 MCP 后，你可以在 Claude Desktop 对话中直接使用股票分析功能。
+
+### 📋 配置步骤
+
+#### 步骤 1：找到配置文件
+
+配置文件位置：
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+  - 通常在：`C:\Users\YourName\AppData\Roaming\Claude\claude_desktop_config.json`
+- **Mac**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+#### 步骤 2：添加 MCP 服务器配置
+
+打开 `claude_desktop_config.json`，在 `mcpServers` 部分添加：
+
+```json
+{
+  "mcpServers": {
+    "wyckoff": {
+      "command": "python",
+      "args": ["你的项目路径/apps/mcp/server.py"]
+    }
+  }
+}
+```
+
+#### 步骤 3：获取项目路径
+
+**Windows 用户（推荐方式）**：
+1. 在文件资源管理器中，找到 `wyckoff-stock-analysis` 项目文件夹
+2. **右键点击**项目文件夹 → 选择"**复制为路径**"
+3. 粘贴路径到配置文件（注意：需要将反斜杠 `\` 改为正斜杠 `/`）
+   - 例如：`C:\Users\YourName\wyckoff-stock-analysis` → `C:/Users/YourName/wyckoff-stock-analysis`
+
+**Linux/Mac 用户**：
+```bash
+# 进入项目目录
+cd /path/to/wyckoff-stock-analysis
+
+# 获取绝对路径
+pwd
+```
+将输出的路径粘贴到配置文件。
+
+#### 步骤 4：完整配置示例
+
+**Windows 配置示例**：
+```json
+{
+  "mcpServers": {
+    "wyckoff": {
+      "command": "python",
+      "args": ["C:/Users/YourName/wyckoff-stock-analysis/apps/mcp/server.py"]
+    }
+  }
+}
+```
+
+**Mac/Linux 配置示例**：
+```json
+{
+  "mcpServers": {
+    "wyckoff": {
+      "command": "python3",
+      "args": ["/Users/YourName/wyckoff-stock-analysis/apps/mcp/server.py"]
+    }
+  }
+}
+```
+
+### ⚠️ 路径格式注意事项
+
+**Windows 路径格式**：
+- ✅ 正确：`C:/Users/Name/wyckoff-stock-analysis/apps/mcp/server.py`
+- ❌ 错误：`C:\Users\Name\wyckoff-stock-analysis\apps\mcp\server.py`（JSON 中需要转义）
+- 💡 技巧：复制路径后，将所有 `\` 替换为 `/` 即可
+
+### 🚀 启动使用
+
+1. **保存配置文件**
+2. **重启 Claude Desktop**（必须重启才能加载新配置）
+3. **验证安装**：在 Claude Desktop 对话框中输入：
+   ```
+   请分析英维克
+   ```
+   如果 Claude 开始调用 `wyckoff` 工具并生成分析报告，说明配置成功！
+
+### 🐛 常见问题
+
+**Q: Claude Desktop 找不到 MCP 服务器？**
+- 检查路径是否正确
+- 确认 Python 已安装并添加到 PATH
+- 查看 Claude Desktop 日志：`Help` → `Developer` → `Toggle Logs`
+
+**Q: 出现 "ModuleNotFoundError" 错误？**
+- 需要安装依赖：`pip install -r requirements.txt`
+- 确保在项目根目录执行安装命令
+
+**Q: Windows 路径中有空格怎么办？**
+- JSON 中路径包含空格是正常的，不需要额外处理
+- 例如：`"C:/Users/Your Name/Documents/wyckoff-stock-analysis/..."`
+
+---
+
+## 3. 其他 AI Agent 兼容指南
 
 由于项目已经抽象为"System Prompt + JSON 输出工具"的标准化架构，它可以完美兼容各类现代 AI 平台。
 
@@ -71,7 +181,7 @@
 
 ---
 
-## 3. 分享与发布
+## 4. 分享与发布
 
 ### 📤 多种分享方式
 
@@ -97,7 +207,7 @@ zip -r wyckoff-skill.zip wyckoff-stock-analysis/
 
 ---
 
-## 4. 本地代码嵌入
+## 5. 本地代码嵌入
 
 ### 💻 Python 集成示例
 
@@ -134,7 +244,7 @@ results = ScreenerService().quick_scan(["AAPL", "MSFT", "GOOGL"])
 
 ---
 
-## 5. 常见问题排查
+## 6. 常见问题排查
 
 ### Skill在Claude Code中不生效？
 
