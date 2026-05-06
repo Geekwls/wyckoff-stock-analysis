@@ -96,7 +96,7 @@ class WyckoffReportGenerator:
 
             # SC (恐慌性抛售)
             sc = evidence.get('sc', {})
-            if sc.get('detected'):
+            if sc.get('detected') and all(k in sc for k in ['date', 'price', 'volume_ratio', 'confidence']):
                 report += f"""
    ✓ SC (恐慌抛售): {sc['date']} 价格{sc['price']:.2f} 量比{sc['volume_ratio']:.1f}x 置信度{sc['confidence']:.0f}%
 """
@@ -107,7 +107,7 @@ class WyckoffReportGenerator:
 
             # PS (初步支撑)
             ps = evidence.get('ps', {})
-            if ps.get('detected'):
+            if ps.get('detected') and all(k in ps for k in ['rebound_pct', 'sc_date', 'ps_date', 'confidence']):
                 report += f"""
    ✓ PS (初步支撑): 反弹{ps['rebound_pct']:.1f}% ({ps['sc_date']} → {ps['ps_date']}) 置信度{ps['confidence']:.0f}%
 """
@@ -118,7 +118,7 @@ class WyckoffReportGenerator:
 
             # SOT (停止行为)
             sot = evidence.get('sot', {})
-            if sot.get('detected'):
+            if sot.get('detected') and all(k in sot for k in ['date', 'volume_ratio', 'body_ratio', 'confidence']):
                 report += f"""
    ✓ SOT (停止行为): {sot['date']} 量比{sot['volume_ratio']:.1f}x 实体比{sot['body_ratio']*100:.0f}% 置信度{sot['confidence']:.0f}%
 """
@@ -129,7 +129,7 @@ class WyckoffReportGenerator:
 
             # Spring (弹簧)
             spring = evidence.get('spring', {})
-            if spring.get('detected'):
+            if spring.get('detected') and all(k in spring for k in ['date', 'close', 'filters_passed']):
                 # 尝试获取日内数据进行微观分析
                 try:
                     intraday_data = self.analyzer.get_intraday_data("60m")
@@ -352,7 +352,8 @@ class WyckoffReportGenerator:
         if lpsy.get('detected'):
             # 关键修复：将LPSY与关键支撑位绑定
             # 获取关键支撑位（自动回落AR的低点）
-            ar_res = self.pattern_detector.detect_automatic_reaction()
+            climax_res = self.pattern_detector.detect_climax()
+            ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
             key_support = ar_res.get('price', 0) if ar_res.get('detected') else trading_range.get('low', 0)
             
             # 检查当前价格是否已跌破关键支撑
@@ -490,13 +491,19 @@ class WyckoffReportGenerator:
         # 避免在价格未跌破支撑前展示极端下跌目标，制造无谓恐慌
         cause_effect = self.analyzer.calculate_cause_effect()
         targets_ok = cause_effect and 'targets' in cause_effect
-        
+
         # 检查价格是否已经突破区间
         current_price = self.data['Close'].iloc[-1]
         tr_high = trading_range.get('high', 0)
         tr_low = trading_range.get('low', 0)
         breakout_direction = cause_effect.get('breakout_direction', '') if cause_effect else ''
-        
+
+        # 计算因果幅度（交易区间宽度）
+        cause_size = tr_high - tr_low if tr_high > 0 and tr_low > 0 else 0
+        if cause_effect and 'cause_bars' in cause_effect:
+            # 如果有点数图数据，优先使用
+            cause_effect['cause_size'] = cause_size
+
         # 判断目标是否已激活
         targets_activated = False
         if targets_ok:
@@ -581,6 +588,11 @@ class WyckoffReportGenerator:
    仲裁动作: 延迟执行，等待跨周期一致后再开仓。
 """
         
+        # 关键修复：判断当前阶段，严格区分上涨和下跌两个不同剧本的路径
+        # 将变量定义移到if/else之前，确保后续代码能访问
+        is_distribution = 'Distribution' in phase_str or '派发' in phase_str
+        is_accumulation = 'Accumulation' in phase_str or '吸筹' in phase_str
+
         # 阈值门控：如果评分过低或置信度太低，强制观望
         if quality_score < 4 or phase_conf < 0.5 or conflict.get('has_conflict'):
             report += f"""
@@ -592,9 +604,6 @@ class WyckoffReportGenerator:
    结论: 信号强度或可靠性低于执行阈值，建议继续观察。
 """
         else:
-            # 关键修复：判断当前阶段，严格区分上涨和下跌两个不同剧本的路径
-            is_distribution = 'Distribution' in phase_str or '派发' in phase_str
-            is_accumulation = 'Accumulation' in phase_str or '吸筹' in phase_str
             
             # 收集信号并检测冲突
             bullish_signals = []
@@ -702,7 +711,8 @@ class WyckoffReportGenerator:
         tr_high = trading_range.get('high', 0)
         tr_low = trading_range.get('low', 0)
         ar_price = 0
-        ar_res = self.pattern_detector.detect_automatic_reaction()
+        climax_res = self.pattern_detector.detect_climax()
+        ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
         if ar_res.get('detected'):
             ar_price = ar_res.get('price', 0)
         
