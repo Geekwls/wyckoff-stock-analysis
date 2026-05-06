@@ -80,11 +80,12 @@ Your internal prompt context is deliberately kept small. If you are unsure about
 1. **Volume Dependency**: If you do not have volume data, your Confidence Score MUST NOT exceed 4/10. You must explicitly warn the user that "Effort vs Result cannot be measured without volume."
 2. **Market-Specific Rules**: Apply market-specific logic based on auto-detected market type:
    - **A-Share (China)**: Price limits vary by board (主板 10%, 科创板/创业板 20%, 北交所 30%). Limit-up/Limit-down causes extreme volume shrinkage. Do NOT interpret a limit-up with low volume as "weak demand" (which would normally be a divergence). It is a sign of extreme supply exhaustion.
-     - **Main Board (沪市/深市主板)**: 10% daily limit (including 5% for ST stocks on main board)
-     - **ChiNext (创业板)**: 20% daily limit (same for ST stocks)
-     - **STAR Market (科创板)**: 20% daily limit (same for ST stocks)
-     - **BSE (北交所)**: 30% daily limit (same for ST stocks)
-     *Note: If the system cannot auto-detect the board, default to 10% for conservative analysis.*
+     - **Main Board (沪市/深市主板)**: 10% daily limit
+     - **ChiNext (创业板)**: 20% daily limit
+     - **STAR Market (科创板)**: 20% daily limit
+     - **BSE (北交所)**: 30% daily limit
+     - **Note**: ST股票涨跌幅与正常股票相同（全面注册制新规）
+     *If the system cannot auto-detect the board, default to 10% for conservative analysis.*
    - **US Market**: No price limits, normal volume-price analysis applies.
    - **HK Market**: No price limits, but be aware of different trading hours and session breaks.
 3. **Never Invent Data**:
