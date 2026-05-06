@@ -21,7 +21,7 @@ from .exceptions import *
 from .schemas import *
 
 # 版本信息
-__version__ = "4.2.0"
+__version__ = "1.0.0"
 __author__ = "Wyckoff Analysis Team"
 
 # 公共 API 导出
