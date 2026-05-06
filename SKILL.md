@@ -58,6 +58,12 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    **# 📊 Historical Performance**
    *(Extract historical win rate data from `[performance_tracking]` corresponding to the detected key events, such as SOS/Spring success rates)*
 
+   **⚠️ Data Source Disclosure**:
+   - If the stock's historical data is insufficient (sample size < 30 similar events), explicitly state:
+     > "⚠️ 历史成功率数据来源：由于该股票历史样本不足（< 30个相似事件），以下数据基于**全市场统计基准**，仅供参考，非本股票实际统计。"
+   - Only present stock-specific statistics when sample size ≥ 30.
+   - Never hide available market-wide benchmarks due to "not inventing data" – transparency with clear labeling is preferred over withholding useful reference information.
+
    **# 🤖 Interactive Q&A**
    *(List questions from the `[interactive_qa]` array one by one to guide user inquiries)*
 
@@ -73,10 +79,20 @@ Your internal prompt context is deliberately kept small. If you are unsure about
 
 1. **Volume Dependency**: If you do not have volume data, your Confidence Score MUST NOT exceed 4/10. You must explicitly warn the user that "Effort vs Result cannot be measured without volume."
 2. **Market-Specific Rules**: Apply market-specific logic based on auto-detected market type:
-   - **A-Share (China)**: 10% or 20% price limits (Limit-up/Limit-down) cause extreme volume shrinkage. Do NOT interpret a limit-up with low volume as "weak demand" (which would normally be a divergence). It is a sign of extreme supply exhaustion.
+   - **A-Share (China)**: Price limits vary by board (主板 10%, 科创板/创业板 20%, 北交所 30%). Limit-up/Limit-down causes extreme volume shrinkage. Do NOT interpret a limit-up with low volume as "weak demand" (which would normally be a divergence). It is a sign of extreme supply exhaustion.
+     - **Main Board (沪市/深市主板)**: 10% daily limit
+     - **ChiNext (创业板)**: 20% daily limit
+     - **STAR Market (科创板)**: 20% daily limit
+     - **BSE (北交所)**: 30% daily limit
+     - **ST stocks**: 5% daily limit (special treatment)
+     *Note: If the system cannot auto-detect the board, default to 10% for conservative analysis.*
    - **US Market**: No price limits, normal volume-price analysis applies.
    - **HK Market**: No price limits, but be aware of different trading hours and session breaks.
-3. **Never Invent Data**: If you cannot find a clear Spring or Upthrust, explicitly state "No Phase C shakeout detected". Do NOT hallucinate support levels.
+3. **Never Invent Data**:
+   - If you cannot find a clear Spring or Upthrust, explicitly state "No Phase C shakeout detected". Do NOT hallucinate support levels.
+   - **Exception - Market-Wide Benchmarks**: When stock-specific data is insufficient (e.g., sample size < 30), you MAY use market-wide statistics (e.g., "historically 65% of Spring signals in similar market conditions succeed") BUT MUST clearly label it as:
+     > "⚠️ 此为全市场统计基准，非本股票历史数据"
+   - **Principle**: Transparency over withholding. It's better to provide labeled benchmarks than to hide useful reference information.
 4. **Adaptive Verbosity**: If the user asks a simple question (e.g., "What phase is AAPL in?"), provide a 1-2 sentence direct answer. Only provide a full, structured 8-part report if requested or if performing a "full analysis".
 
 ## 🛡️ Error Handling
@@ -150,15 +166,36 @@ result = batch_scan(["AAPL", "MSFT", "GOOGL"])
 }
 ```
 **获取实际路径的方法**：
-```bash
-# Linux/Mac: 获取项目绝对路径
-cd /path/to/wyckoff-stock-analysis
-pwd
 
-# Windows: 获取项目绝对路径
-cd C:\path\to\wyckoff-stock-analysis
-cd
+**Windows 用户（推荐方式）**：
+1. 在文件资源管理器中，找到 `wyckoff-stock-analysis` 项目文件夹
+2. **右键点击**项目文件夹 → 选择"**复制为路径**"
+3. 粘贴路径替换 `%PROJECT_ROOT%`（注意路径中的反斜杠 `\` 需要改为正斜杠 `/`）
+   - 例如：`C:\Users\YourName\wyckoff-stock-analysis` → `C:/Users/YourName/wyckoff-stock-analysis`
+
+**Linux/Mac 用户**：
+```bash
+# 进入项目目录
+cd /path/to/wyckoff-stock-analysis
+
+# 获取绝对路径
+pwd
 ```
-然后将 `pwd`/`cd` 的输出替换 `%PROJECT_ROOT%`。
+然后将 `pwd` 的输出替换 `%PROJECT_ROOT%`。
+
+**配置示例（替换后）**：
+```json
+"mcpServers": {
+  "wyckoff": {
+    "command": "python",
+    "args": ["C:/Users/YourName/wyckoff-stock-analysis/apps/mcp/server.py"]
+  }
+}
+```
+
+**Windows 路径格式提示**：
+- ✅ 正确：`C:/Users/Name/wyckoff-stock-analysis/apps/mcp/server.py`
+- ❌ 错误：`C:\Users\Name\wyckoff-stock-analysis\apps\mcp\server.py`（需要转义反斜杠）
+- 💡 技巧：复制路径后，将所有 `\` 替换为 `/` 即可
 
 **Remember: Your goal is to combine the quantitative output from the Python tools with your advanced qualitative reasoning to provide actionable, risk-managed insights.**
