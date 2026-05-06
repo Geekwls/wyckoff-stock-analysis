@@ -6,57 +6,54 @@ from ..exceptions import DataFetchError, InsufficientDataError, WyckoffError
 from ..config.settings import WyckoffConfig
 from .symbol_resolver import SymbolResolver, MarketType
 from .datasource_factory import DataSourceFactory
+from .data_validator import DataValidator, ChineseSymbolHandler
+from .technical_indicators import TechnicalIndicators
 
 logger = logging.getLogger(__name__)
 
-def calculate_atr(data: pd.DataFrame, period: int = 14) -> pd.Series:
-    """计算ATR（Average True Range）"""
-    high = pd.to_numeric(data['High'], errors='coerce')
-    low = pd.to_numeric(data['Low'], errors='coerce')
-    close = pd.to_numeric(data['Close'], errors='coerce').shift(1)
-
-    tr1 = high - low
-    tr2 = (high - close).abs()
-    tr3 = (low - close).abs()
-
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(window=period, min_periods=1).mean()
-
-    return pd.Series(atr, index=data.index, name='ATR')
-
 def prepare_data(data: pd.DataFrame, config: WyckoffConfig = None) -> pd.DataFrame:
-    """预计算常用指标"""
-    cfg = config or WyckoffConfig()
-    df = data.copy()
+    """
+    预计算常用指标
 
+    增强版本：
+    1. 数据质量验证
+    2. 数据清理
+    3. 指标计算
+    """
+    cfg = config or WyckoffConfig()
+
+    # 1. 数据质量验证
+    passed, errors = DataValidator.validate_dataframe(data)
+    if not passed:
+        logger.warning(f"数据质量验证发现问题: {errors}")
+        # 尝试清理数据
+        logger.info("尝试自动清理数据...")
+        df = DataValidator.clean_dataframe(data)
+    else:
+        df = data.copy()
+
+    # 2. 数据类型转换
     for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
+    # 3. 删除包含关键缺失值的行
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
 
-    df['MA20'] = df['Close'].rolling(20, min_periods=1).mean()
-    df['MA50'] = df['Close'].rolling(50, min_periods=1).mean()
-    df['MA200'] = df['Close'].rolling(200, min_periods=1).mean()
-    df['Volume_MA20'] = df['Volume'].rolling(cfg.volume_ma_period, min_periods=1).mean()
+    # 4. 计算技术指标（使用统一的工具类）
+    df['MA20'] = TechnicalIndicators.price_ma(df, 20)
+    df['MA50'] = TechnicalIndicators.price_ma(df, 50)
+    df['MA200'] = TechnicalIndicators.price_ma(df, 200)
+    df['Volume_MA20'] = TechnicalIndicators.volume_ma(df, cfg.volume_ma_period)
 
-    df['ATR'] = calculate_atr(df, cfg.atr_period)
-
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0))
-    loss = (-delta.where(delta < 0, 0))
-    
-    # 使用 Wilder's Smoothing (EMA based)
-    avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-    
-    rs = avg_gain / avg_loss.replace(0, float('nan'))
-    df['RSI'] = 100 - (100 / (1 + rs.fillna(0)))
+    # ATR 和 RSI
+    df['ATR'] = TechnicalIndicators.atr(df, cfg.atr_period)
+    df['RSI'] = TechnicalIndicators.rsi(df)
 
     # 滚动极值
     for w in [20, 60, 120]:
-        df[f'High_Max_{w}'] = df['High'].rolling(w, min_periods=1).max()
-        df[f'Low_Min_{w}'] = df['Low'].rolling(w, min_periods=1).min()
+        df[f'High_Max_{w}'] = TechnicalIndicators.rolling_max(df, 'High', w)
+        df[f'Low_Min_{w}'] = TechnicalIndicators.rolling_min(df, 'Low', w)
 
     return df
 
@@ -78,21 +75,36 @@ class WyckoffDataFetcher:
         try:
             # 1. 解析代码
             info = self.resolver.resolve(symbol)
-            
-            # 2. 特殊处理：中文名称如果未中缓存，尝试在 A 股库中搜索一次
-            if info.market == MarketType.US_STOCK and any('\u4e00' <= char <= '\u9fff' for char in symbol):
-                # 这是一个回退逻辑，如果 Resolver 没识别出 A 股且带中文，可能是还没入库的代码
+
+            # 2. 特殊处理：中文名称（使用改进的处理器）
+            if info.market == MarketType.US_STOCK and ChineseSymbolHandler.is_chinese_name(symbol):
+                # 规范化中文名称
+                normalized_name = ChineseSymbolHandler.normalize_chinese_name(symbol)
+
+                # 尝试在 A 股库中搜索
                 from .strategies.baostock_strategy import BaoStockStrategy
                 bs_search = BaoStockStrategy(self.config)
+
                 # 借用旧逻辑中的搜索
-                code = self._search_a_share_name(symbol)
+                code = self._search_a_share_name(normalized_name)
                 if code:
                     self.resolver.update_name_cache(symbol, code)
                     info = self.resolver.resolve(code)
+                else:
+                    logger.warning(f"无法找到中文名称 '{normalized_name}' 对应的股票代码")
 
             # 3. 获取对应策略并抓取
             strategy = DataSourceFactory.create(info.source, self.config)
             data = strategy.fetch(info.normalized, period, frequency=frequency)
+
+            # 4. 数据质量验证
+            if data is not None and len(data) > 0:
+                passed, errors = DataValidator.validate_dataframe(data)
+                if not passed:
+                    logger.warning(f"数据质量验证发现问题: {errors}")
+                    # 尝试清理数据
+                    logger.info("尝试自动清理数据...")
+                    data = DataValidator.clean_dataframe(data)
 
             if data is None or (frequency == "d" and len(data) < self.config.min_data_length):
                 raise InsufficientDataError(

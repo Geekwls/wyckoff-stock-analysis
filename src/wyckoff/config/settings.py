@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from typing import Dict
 
 class WyckoffConfig(BaseModel):
@@ -25,6 +25,47 @@ class WyckoffConfig(BaseModel):
         if v < 20:
             raise ValueError('数据长度至少20天')
         return v
+
+    @field_validator('atr_period')
+    @classmethod
+    def validate_atr_period(cls, v):
+        if v < 5 or v > 50:
+            raise ValueError('ATR周期必须在5-50之间')
+        return v
+
+    @field_validator('spring_range_threshold')
+    @classmethod
+    def validate_spring_range(cls, v):
+        if not 0.05 <= v <= 0.5:
+            raise ValueError('Spring范围阈值必须在0.05-0.5之间')
+        return v
+
+    @model_validator(mode='after')
+    def validate_config_dependencies(self):
+        """
+        验证配置项之间的依赖关系
+
+        确保配置值之间的一致性和合理性
+        """
+        # ATR周期应该小于最小数据长度（否则无法计算）
+        if self.atr_period >= self.min_data_length:
+            raise ValueError(
+                f'ATR周期 ({self.atr_period}) 必须小于最小数据长度 ({self.min_data_length})'
+            )
+
+        # Spring回溯窗口应该大于最小数据长度的一半
+        if self.spring_lookback < self.min_data_length / 2:
+            raise ValueError(
+                f'Spring回溯窗口 ({self.spring_lookback}) 应该至少是最小数据长度的一半 ({self.min_data_length / 2:.0f})'
+            )
+
+        # 成交量MA周期应该小于最小数据长度
+        if self.volume_ma_period >= self.min_data_length:
+            raise ValueError(
+                f'成交量MA周期 ({self.volume_ma_period}) 必须小于最小数据长度 ({self.min_data_length})'
+            )
+
+        return self
     
     model_config = ConfigDict(
         env_prefix="WYCKOFF_",
@@ -154,60 +195,86 @@ class WyckoffThresholds(BaseModel):
     def get_dynamic_volume_threshold(self, atr_pct: float, base_threshold: float = 1.5) -> float:
         """
         基于ATR百分比动态计算成交量阈值
-        
+
         高波动资产（如加密货币）需要更高的成交量确认
         低波动资产（如蓝筹股）可以使用较低的成交量确认
-        
+
         Args:
             atr_pct: ATR占价格的百分比（如0.03表示3%）
             base_threshold: 基础阈值
-            
+
         Returns:
-            动态成交量阈值
+            动态成交量阈值（范围：0.5-5.0）
+
+        Raises:
+            ValueError: 如果输入参数无效
         """
+        # 输入验证
+        if atr_pct <= 0 or base_threshold <= 0:
+            raise ValueError(f'ATR百分比和基础阈值必须为正数 (atr_pct={atr_pct}, base_threshold={base_threshold})')
+
+        if atr_pct > 0.5:  # 50%以上的波动率通常是错误数据
+            raise ValueError(f'ATR百分比异常高 (atr_pct={atr_pct})，请检查数据')
+
         # ATR百分比分级
         # 低波动：<1.5% (蓝筹股、债券ETF)
         # 中波动：1.5%-3% (普通股票)
         # 高波动：3%-5% (小盘股、科技股)
         # 极高波动：>5% (加密货币、期权)
-        
+
         if atr_pct < 0.015:
             # 低波动：降低阈值
-            return base_threshold * 0.8
+            result = base_threshold * 0.8
         elif atr_pct < 0.03:
             # 中波动：标准阈值
-            return base_threshold
+            result = base_threshold
         elif atr_pct < 0.05:
             # 高波动：提高阈值
-            return base_threshold * 1.2
+            result = base_threshold * 1.2
         else:
             # 极高波动：大幅提高阈值
-            return base_threshold * 1.5
+            result = base_threshold * 1.5
+
+        # 确保结果在合理范围内
+        return max(0.5, min(result, 5.0))
     
     def get_dynamic_price_threshold(self, atr_pct: float, base_threshold: float = 0.03) -> float:
         """
         基于ATR百分比动态计算价格变化阈值
-        
+
         Args:
             atr_pct: ATR占价格的百分比
             base_threshold: 基础阈值
-            
+
         Returns:
-            动态价格变化阈值
+            动态价格变化阈值（范围：0.005-0.2）
+
+        Raises:
+            ValueError: 如果输入参数无效
         """
+        # 输入验证
+        if atr_pct <= 0 or base_threshold <= 0:
+            raise ValueError(f'ATR百分比和基础阈值必须为正数 (atr_pct={atr_pct}, base_threshold={base_threshold})')
+
+        if atr_pct > 0.5:  # 50%以上的波动率通常是错误数据
+            raise ValueError(f'ATR百分比异常高 (atr_pct={atr_pct})，请检查数据')
+
         # 使用ATR的倍数作为阈值
         # 低波动：1倍ATR
         # 中波动：1.5倍ATR
         # 高波动：2倍ATR
-        
+
         if atr_pct < 0.015:
-            return max(atr_pct * 1.0, base_threshold * 0.8)
+            result = max(atr_pct * 1.0, base_threshold * 0.8)
         elif atr_pct < 0.03:
-            return max(atr_pct * 1.5, base_threshold)
+            result = max(atr_pct * 1.5, base_threshold)
         elif atr_pct < 0.05:
-            return max(atr_pct * 2.0, base_threshold * 1.2)
+            result = max(atr_pct * 2.0, base_threshold * 1.2)
         else:
-            return max(atr_pct * 2.5, base_threshold * 1.5)
+            result = max(atr_pct * 2.5, base_threshold * 1.5)
+
+        # 确保结果在合理范围内（0.5%-20%）
+        return max(0.005, min(result, 0.2))
     
     def classify_volatility(self, atr_pct: float) -> str:
         """

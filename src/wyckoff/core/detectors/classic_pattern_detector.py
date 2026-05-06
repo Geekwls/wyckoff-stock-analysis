@@ -2,6 +2,7 @@ import pandas as pd
 from typing import Dict, Optional, Tuple, List, Any
 from .base_detector import BaseDetector
 from ...config.settings import WyckoffConfig, WyckoffThresholds
+from ..utils import TypeConverter
 
 class ClassicPatternDetector(BaseDetector):
     """负责检测经典威科夫形态 (Climax, Spring, Upthrust, JOC, FTI, VSA, Divergence)"""
@@ -68,8 +69,10 @@ class ClassicPatternDetector(BaseDetector):
             return {'detected': False}
 
         # 计算SC（Climax）的实体中位值作为基准点，避免用极值造成的人为夸大
-        if isinstance(climax_date, (pd.Timestamp, str)):
-            sc_row = self.data.loc[self.data.index == climax_date]
+        # 使用统一的类型转换工具（替换分散的类型检查）
+        if TypeConverter.is_date_like(climax_date):
+            climax_ts = TypeConverter.to_timestamp(climax_date)
+            sc_row = self.data.loc[self.data.index == climax_ts]
             if len(sc_row) > 0:
                 sc_open = sc_row['Open'].iloc[0]
                 sc_close = sc_row['Close'].iloc[0]

@@ -72,13 +72,15 @@ class CacheKey:
         """生成缓存键"""
         # 使用SHA256哈希确保键的唯一性和一致性
         key_str = ":".join([namespace] + [str(p) for p in parts])
-        return hashlib.sha256(key_str.encode()).hexdigest()[:16]
+        # 使用完整哈希避免碰撞风险（之前截断到16位可能增加碰撞概率）
+        return hashlib.sha256(key_str.encode()).hexdigest()
 
     @staticmethod
     def generate_version_key(symbol: str, period: str, data_timestamp: float) -> str:
         """生成版本键（基于数据时间戳）"""
         version_str = f"{symbol}:{period}:{int(data_timestamp)}"
-        return hashlib.sha256(version_str.encode()).hexdigest()[:16]
+        # 使用完整哈希避免碰撞风险（之前截断到16位可能增加碰撞概率）
+        return hashlib.sha256(version_str.encode()).hexdigest()
 
 
 class MemoryCache:

@@ -9,7 +9,7 @@ This keeps backward-compatible imports for tests/tools that previously used
 from .facade import WyckoffAnalyzer
 from .exceptions import WyckoffError, DataFetchError
 from .schemas import ErrorResponseModel
-from .error_codes import ErrorCode
+from .core.enums import ErrorCode
 
 
 def analyze_stock_wyckoff(symbol: str, period: str = "1y") -> str:

@@ -5,6 +5,7 @@ from .detectors.classic_pattern_detector import ClassicPatternDetector
 from .detectors.strength_weakness_detector import StrengthWeaknessDetector
 from .detectors.phase_identifier import PhaseIdentifier
 from .meng_pattern_enhancer import MengPatternEnhancer
+from .phase_coordinator import PhaseCoordinator
 from ..config.settings import WyckoffConfig, WyckoffThresholds
 from ..schemas import (
     ClimaxModel, WyckoffEventModel, SpringModel, UpthrustModel,
@@ -34,11 +35,14 @@ class WyckoffPatternDetector:
 
         # 初始化孟洪涛增强检测器
         self.meng_enhancer = MengPatternEnhancer(data, config)
-        
+
+        # 初始化阶段协调器（负责事件收集和阶段验证）
+        self.phase_coordinator = PhaseCoordinator(self)
+
         # 注册所有子检测器以支持统一接口调用
         self.all_detectors = [
-            self.range_detector, self.classic_detector, 
-            self.sw_detector, self.phase_identifier, 
+            self.range_detector, self.classic_detector,
+            self.sw_detector, self.phase_identifier,
             self.meng_enhancer
         ]
 
@@ -136,8 +140,8 @@ class WyckoffPatternDetector:
         return self.classic_detector.detect_divergence(window)
 
     def identify_phase(self) -> Dict:
-        # 收集事件后识别
-        events = self._collect_all_events()
+        # 收集事件后识别（使用阶段协调器）
+        events = self.phase_coordinator.collect_all_events()
         phase_result = self.phase_identifier.identify(events)
 
         # 集成孟洪涛核心证据分析
@@ -159,141 +163,18 @@ class WyckoffPatternDetector:
 
         return phase_result
 
-    # --- 私有辅助方法 (保持原有逻辑或重构) ---
+    # --- 私有辅助方法 ---
+
+    # 以下复杂方法已迁移到 PhaseCoordinator 类以减少代码复杂度
+    # 委托给协调器处理，保持向后兼容性
 
     def _collect_all_events(self) -> Dict[str, Any]:
         """
-        收集所有威科夫事件供阶段识别使用
-        
-        优化说明：
-        1. 采用“延迟定性”策略，先收集所有物理特征。
-        2. 在所有事件收集完毕后，通过 _validate_phase_consistency 进行逻辑验证和证伪。
+        收集所有威科夫事件（委托给阶段协调器）
+
+        此方法保留以保持向后兼容性，实际逻辑由 PhaseCoordinator 处理
         """
-        # 1. 收集基础价格形态（不依赖全局阶段）
-        climax_res = self.detect_climax()
-        ar_res = self.detect_automatic_reaction(climax_res)
-        st_res = self.detect_secondary_test(climax_res, ar_res)
-        
-        spring_res = self.detect_spring()
-        upthrust_res = self.detect_upthrust()
-        
-        # 2. 获取枯燥区信息，用于后续加权（P2 #3.1）
-        boring_zone_res = self.detect_boring_zone()
-        
-        # 3. 初步阶段识别（仅作为参考上下文）
-        preliminary_phase = self._preliminary_phase_identification(climax_res, ar_res, st_res, spring_res, upthrust_res)
-        
-        # 统一更新子检测器的分析上下文 (P2 #1 - Enhanced)
-        self._update_all_detectors_context(preliminary_phase)
-        
-        # 4. 收集趋势/强度信号
-        sos_res = self.detect_sos()
-        sow_res = self.detect_sow()
-        
-        tr_res = self.detect_trading_range()
-        lps_res = self.detect_lps(sos_res)
-        lpsy_res = self.detect_lpsy(sow_res)
-        joc_res = self.detect_joc()
-        fti_res = self.detect_fti()
-
-        # 5. 统一使用强类型模型封装
-        events = {
-            'trading_range': TradingRangeModel(**tr_res),
-            'climax': ClimaxModel(**climax_res),
-            'automatic_reaction': WyckoffEventModel(**ar_res) if ar_res.get('detected') else WyckoffEventModel(detected=False),
-            'secondary_test': WyckoffEventModel(**st_res) if st_res.get('detected') else WyckoffEventModel(detected=False),
-            'spring_upthrust': None,
-            'sos_sow': None,
-            'lps_lpsy': {
-                'lps': LpsModel(**lps_res),
-                'lpsy': LpsyModel(**lpsy_res)
-            },
-            'joc': JocModel(**joc_res) if joc_res.get('detected') else None,
-            'fti': FtiModel(**fti_res) if fti_res.get('detected') else None,
-            'boring_zone': boring_zone_res,
-            'phase_revision_log': []
-        }
-        
-        if spring_res.get('detected'):
-            events['spring_upthrust'] = {'_type': 'spring', 'data': SpringModel(**spring_res)}
-        elif upthrust_res.get('detected'):
-            events['spring_upthrust'] = {'_type': 'upthrust', 'data': UpthrustModel(**upthrust_res)}
-
-        if sos_res.get('detected'):
-            events['sos_sow'] = {'_type': 'sos', 'data': SosModel(**sos_res)}
-        elif sow_res.get('detected'):
-            events['sos_sow'] = {'_type': 'sow', 'data': SowModel(**sow_res)} 
-            
-        # 6. 执行证伪验证（P0 #1.2）
-        final_phase, revision_logs = self._validate_phase_consistency(preliminary_phase, events)
-        events['phase_revision_log'] = revision_logs
-        
-        # 统一更新子检测器的最终分析上下文
-        self._update_all_detectors_context(final_phase)
-            
-        return events
-
-    def _preliminary_phase_identification(self, climax_res: Dict, ar_res: Dict, st_res: Dict, spring_res: Dict, upthrust_res: Dict) -> str:
-        """
-        初步阶段识别：基于已收集的事件进行初步判断
-        
-        优化：增加对 AR 和 ST 的协同校验，避免仅凭 BC/SC 就定性。
-        """
-        is_sc = climax_res.get('detected') and climax_res.get('type') == 'selling_climax'
-        is_bc = climax_res.get('detected') and climax_res.get('type') == 'buying_climax'
-        is_ar = ar_res.get('detected')
-        is_st = st_res.get('detected')
-
-        # 派发初步迹象：BC + AR/ST
-        if is_bc and (is_ar or is_st):
-            return 'Distribution Phase A'
-        
-        # 吸筹初步迹象：SC + AR/ST
-        if is_sc and (is_ar or is_st):
-            return 'Accumulation Phase A'
-        
-        # 强信号覆盖
-        if spring_res.get('detected'):
-            return 'Accumulation Phase C'
-        if upthrust_res.get('detected'):
-            return 'Distribution Phase C'
-        
-        # 降级判断：仅有高潮
-        if is_bc: return 'Possible Distribution'
-        if is_sc: return 'Possible Accumulation'
-        
-        return ''
-
-    def _validate_phase_consistency(self, preliminary_phase: str, events: Dict) -> Tuple[str, List[str]]:
-        """
-        阶段一致性验证与证伪机制 (P0 #1.2)
-        """
-        revisions = []
-        current_phase = preliminary_phase
-        
-        su_info = events.get('spring_upthrust') or {}
-        is_spring = su_info.get('_type') == 'spring'
-        is_upthrust = su_info.get('_type') == 'upthrust'
-        joc_detected = events.get('joc') and events['joc'].detected
-        fti_detected = events.get('fti') and events['fti'].detected
-
-        # 证伪逻辑 1：原判定为 Distribution，但出现了 Spring + JOC -> 修正为 Reaccumulation
-        if 'Distribution' in current_phase and is_spring and joc_detected:
-            current_phase = 'Accumulation (Reaccumulation)'
-            revisions.append("检测到 Spring + JOC，原 Distribution 判定被证伪，修正为再吸筹 (Reaccumulation)")
-            
-        # 证伪逻辑 2：原判定为 Accumulation，但出现了 Upthrust + FTI -> 修正为 Redistribution
-        if 'Accumulation' in current_phase and is_upthrust and fti_detected:
-            current_phase = 'Distribution (Redistribution)'
-            revisions.append("检测到 Upthrust + FTI，原 Accumulation 判定被证伪，修正为再派发 (Redistribution)")
-
-        # 逻辑冲突：检测到 SOS 但处于 Distribution 且无突破信号
-        sos_info = events.get('sos_sow') or {}
-        if 'Distribution' in current_phase and sos_info.get('_type') == 'sos' and not joc_detected:
-            # 这种情况通常是 Upthrust 的误判，或者阶段判断过早
-            revisions.append("警告：派发阶段检测到强势信号 (SOS) 但未见跳跃，需警惕诱多或阶段重判")
-
-        return current_phase, revisions
+        return self.phase_coordinator.collect_all_events()
 
     def detect_lps(self, sos_result: Dict = None) -> Dict:
         """检测 LPS (Last Point of Support)"""

@@ -5,7 +5,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from .core.enums import MarketEnvironment, WyckoffPhase
-from .error_codes import ErrorCode
+from .core.enums import ErrorCode
 
 
 # ============================================================

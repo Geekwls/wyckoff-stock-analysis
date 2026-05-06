@@ -4,7 +4,7 @@
 威科夫分析系统异常层次结构
 """
 
-from .error_codes import ErrorCode
+from .core.enums import ErrorCode
 
 class WyckoffError(Exception):
     """威科夫分析基础异常"""
