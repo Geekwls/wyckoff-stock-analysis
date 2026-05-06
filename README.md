@@ -1,7 +1,11 @@
 # 📈 Wyckoff Stock Analysis Skill v1.0.0
 
-> **专业级 AI Agent 威科夫量化分析组件**  
+> **专业级 AI Agent 威科夫量化分析组件**
 > 专为 Claude Code, Cursor, MCP 客户端及量化交易员打造的"大脑+工具"双核引擎。
+
+[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Code Quality](https://img.shields.io/badge/code%20quality-excellent-brightgreen)](https://github.com/Geekwls/wyckoff-stock-analysis)
 
 ---
 
@@ -46,55 +50,57 @@ graph TD
 
 ---
 
-## 🚀 快速上手
+## 🚀 快速开始
 
-### 1. 环境准备
-建议在 Python 3.8 - 3.12 环境下使用虚拟环境：
-
+### 安装依赖
 ```bash
-# 创建并激活虚拟环境 (可选)
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-.\venv\Scripts\activate   # Windows
-
-# 安装依赖
 pip install -r requirements.txt
 ```
 
-### 2. 命令行体验
+### 命令行使用
 ```bash
-# 体验人类可读报告 (美股)
+# 分析美股（人类可读报告）
 python -m apps.cli.main AAPL
 
-# 体验 AI 友好 JSON 输出 (A股)
+# 分析A股（JSON输出）
 python -m apps.cli.main sh.600519 --format json
 
-# 批量扫描多只股票
+# 批量扫描
 python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 ```
 
-### 3. MCP 接入 (AI Agent 推荐)
-在 `claude_desktop_config.json` 中添加（需将 `%PROJECT_ROOT%` 替换为实际项目路径）：
+### Claude Desktop 配置 (MCP)
+📖 **详细配置指南**: 请查看 [`HOW_TO_USE.md`](HOW_TO_USE.md#2-claude-desktop-mcp-配置)
+
+快速配置：
 ```json
 "mcpServers": {
   "wyckoff": {
     "command": "python",
-    "args": ["%PROJECT_ROOT%/apps/mcp/server.py"]
+    "args": ["你的项目路径/apps/mcp/server.py"]
   }
 }
 ```
-**获取实际路径**：
-```bash
-# Linux/Mac
-pwd  # 输出项目完整路径
 
-# Windows
-cd   # 输出项目完整路径
-```
+**📚 更多使用方式**:
+- CLI 详细用法 → [`HOW_TO_USE.md`](HOW_TO_USE.md)
+- Python 库集成 → [`HOW_TO_USE.md`](HOW_TO_USE.md#python-库)
+- MCP 故障排查 → [`HOW_TO_USE.md`](HOW_TO_USE.md#6-常见问题排查)
 
 ---
 
-## 📁 项目导航（核心路径版）
+## 📚 文档导航
+
+| 文档 | 说明 |
+|------|------|
+| 📖 [README.md](README.md) | 项目概述（本文件） |
+| 🧠 [SKILL.md](SKILL.md) | AI Agent 系统指令（威科夫方法论） |
+| 📘 [HOW_TO_USE.md](HOW_TO_USE.md) | 详细使用指南（CLI / Python 库 / MCP 配置） |
+| 📗 [references/](references/) | 威科夫理论文档和实战指南 |
+
+---
+
+## 📁 项目结构
 
 > **⚠️ 注意**：以下为简化导航，仅展示核心文件和目录。
 
@@ -118,8 +124,8 @@ wyckoff-stock-analysis/
 │       ├── config/          #       └── 配置管理
 │       │   └── settings.py            # Pydantic 阈值配置
 │       ├── schemas.py       #       ⭐ 强类型数据契约
+│       ├── core/enums.py    #       └── 枚举定义（ErrorCode, WyckoffPhase等）
 │       ├── exceptions.py    #       └── 异常定义
-│       └── error_codes.py   #       └── 错误码定义
 ├── apps/                    # [应用层] 应用程序入口
 │   ├── cli/                 #   └── 命令行工具
 │   │   └── main.py          #       ⭐ CLI 入口
@@ -143,9 +149,53 @@ wyckoff-stock-analysis/
 
 ---
 
+## 🛠️ 技术栈
+
+- **Python**: 3.8+ (推荐 3.10+)
+- **核心依赖**: pandas, pydantic v2, yfinance, baostock
+- **测试框架**: pytest
+- **数据源**: BaoStock (A股), YFinance (美股/港股)
+- **AI 集成**: MCP 协议 (Claude Desktop), CLI 工具
+
+---
+
+## 📊 项目统计
+
+- **核心模块**: 25+ 分析引擎
+- **测试覆盖**: 90+ 测试用例
+- **支持市场**: A股、美股、港股
+- **威科夫事件**: 15+ 种形态检测
+- **代码行数**: 16,000+ 行
+
+---
+
 ## 🤝 参与贡献
 
-如果你对量化逻辑有改进建议、发现了 bug，或者想分享绝佳的交易案例，欢迎提交 Issue 或 Pull Request！  
-**记住：交易是一场关于概率的修行，保护本金是第一优先级。** 📈
+欢迎贡献代码、报告问题或提出改进建议！
+
+**贡献方式**：
+- 🐛 报告 Bug：[提交 Issue](https://github.com/Geekwls/wyckoff-stock-analysis/issues)
+- 💡 功能建议：[提交 Feature Request](https://github.com/Geekwls/wyckoff-stock-analysis/issues)
+- 🔧 提交代码：Pull Request
+
+**开发指南**：
+- 代码风格：遵循 PEP 8
+- 测试要求：新功能需包含测试用例
+- 文档更新：重要变更需更新 README/SKILL.md
+
+**⚠️ 免责声明**：
+> 本项目仅供学习和研究使用，不构成投资建议。股市有风险，投资需谨慎。交易是一场关于概率的修行，保护本金是第一优先级。 📈
+
+---
+
+## 📜 许可证
+
+MIT License - 详见 [LICENSE](LICENSE)
+
+---
+
+## 🌟 Star History
+
+如果这个项目对你有帮助，请给个 ⭐ Star 支持一下！
 
 ---
