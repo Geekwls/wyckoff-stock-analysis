@@ -513,8 +513,11 @@ class WyckoffReportGenerator:
             elif breakout_direction == 'down' and current_price < tr_low:
                 targets_activated = True
         
+        t1 = cause_effect['targets'].get('target_1', 0)
+        t2 = cause_effect['targets'].get('target_2', 0)
+        t3 = cause_effect['targets'].get('target_3', 0)
+
         if targets_activated:
-            # 目标已激活：正常展示
             report += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -522,38 +525,29 @@ class WyckoffReportGenerator:
 交易区间: {tr_low:.2f} - {tr_high:.2f}
 因果幅度: {cause_effect['cause_size']:.2f}
 突破方向: {breakout_direction}
-目标1 (0.618倍): {cause_effect['targets']['target_1']:.2f}
-目标2 (1.0倍): {cause_effect['targets']['target_2']:.2f}
-目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
+目标1 (保守 1.0×): {t1:.2f}
+目标2 (正常 1.618×): {t2:.2f}
+   备注: 极端情景下（连续放量阳线+回测缩量+大盘共振），最大延伸目标 {t3:.2f} (2.618×)
 """
         elif targets_ok:
-            # 目标未激活：显示"潜在目标（待触发）"状态
+            prefix = "⏸️ 潜在目标（待触发）：当价格有效突破"
+            suffix = ""
             if breakout_direction == 'down':
-                # 向下突破目标未激活
-                report += f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-【因果测算】
-交易区间: {tr_low:.2f} - {tr_high:.2f}
-因果幅度: {cause_effect['cause_size']:.2f}
-⏸️ 潜在目标（待触发）：当价格有效跌破 {tr_low:.2f}元并确认LPSY时，上方测算逻辑失效，以下做空目标将被激活——
-   目标1 (0.618倍): {cause_effect['targets']['target_1']:.2f}
-   目标2 (1.0倍): {cause_effect['targets']['target_2']:.2f}
-   目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
-💡 威科夫理论：因果法则的目标测算，应只在价格有效突破区间后才被激活
-"""
+                trigger = f"跌破 {tr_low:.2f}元并确认LPSY"
+                suffix = "上方测算逻辑失效，以下做空目标将被激活——"
             else:
-                # 向上突破目标未激活
-                report += f"""
+                trigger = f"突破 {tr_high:.2f}元并确认SOS"
+                suffix = "以下做多目标将被激活——"
+            report += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【因果测算】
 交易区间: {tr_low:.2f} - {tr_high:.2f}
 因果幅度: {cause_effect['cause_size']:.2f}
-⏸️ 潜在目标（待触发）：当价格有效突破 {tr_high:.2f}元并确认SOS时，以下做多目标将被激活——
-   目标1 (0.618倍): {cause_effect['targets']['target_1']:.2f}
-   目标2 (1.0倍): {cause_effect['targets']['target_2']:.2f}
-   目标3 (1.618倍): {cause_effect['targets']['target_3']:.2f}
+⏸️ 潜在目标（待触发）：当价格有效{trigger}时，{suffix}
+   目标1 (保守 1.0×): {t1:.2f}
+   目标2 (正常 1.618×): {t2:.2f}
+   备注: 极端情景下（连续放量阳线+回测缩量+大盘共振），最大延伸目标 {t3:.2f} (2.618×)
 💡 威科夫理论：因果法则的目标测算，应只在价格有效突破区间后才被激活
 """
 
