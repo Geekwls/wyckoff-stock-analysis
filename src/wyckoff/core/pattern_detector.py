@@ -147,6 +147,13 @@ class WyckoffPatternDetector:
         # 附加事件序列验证结果
         phase_result['sequence_validation'] = events.get('sequence_validation', {})
 
+        # 构建 events_detected（供 scoring 引擎使用）
+        # 直接使用原始检测 dict，避免 Pydantic 丢弃 volume_ratio 等字段
+        raw = events.get('_raw_events', {})
+        events_detected = {k: v for k, v in raw.items()
+                           if isinstance(v, dict) and v.get('detected')}
+        phase_result['events_detected'] = events_detected
+
         # 集成孟洪涛核心证据分析
         evidence_analysis = self.analyze_phase_a_evidence()
 

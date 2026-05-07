@@ -97,8 +97,20 @@ class PhaseCoordinator:
         sequence_validation = SequenceValidator(raw_events, self.detector.data).validate_all()
 
         # 6. 统一使用强类型模型封装
+        # 保存原始检测结果供 scoring 引擎使用
+        raw_events_map = {
+            'spring': spring_res,
+            'upthrust': upthrust_res,
+            'sos': sos_res,
+            'sow': sow_res,
+            'lps': lps_res,
+            'lpsy': lpsy_res,
+            'joc': joc_res,
+            'fti': fti_res,
+        }
         events = {
             'trading_range': TradingRangeModel(**tr_res),
+            '_raw_events': raw_events_map,
             'climax': ClimaxModel(**climax_res),
             'automatic_reaction': WyckoffEventModel(**ar_res) if ar_res.get('detected') else WyckoffEventModel(detected=False),
             'secondary_test': WyckoffEventModel(**st_res) if st_res.get('detected') else WyckoffEventModel(detected=False),
