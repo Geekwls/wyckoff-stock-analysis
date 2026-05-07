@@ -124,29 +124,61 @@ class ClassicPatternDetector(BaseDetector):
     def _detect_secondary_test_impl(self, climax_res: Dict, ar_res: Dict) -> Dict:
         if not climax_res.get('detected') or not ar_res.get('detected'):
             return {'detected': False}
-            
+
         ar_date = ar_res['date']
         df_after = self.data[self.data.index > ar_date].head(30)
-        
+
         if len(df_after) == 0:
             return {'detected': False}
-            
+
         climax_price = climax_res['price']
-        
+        climax_vol = climax_res.get('volume', 0)
+
         if climax_res['type'] == 'selling_climax':
-            # 寻找接近 SC 低点的测试 (使用 JOC_TEST_BAND 比例)
             test_mask = (df_after['Low'] <= climax_price * (1 + self.thresholds.JOC_TEST_BAND)) & \
-                        (df_after['Volume'] < climax_res['volume'] * self.thresholds.VOLUME_CONFIRMATION['weak'])
+                        (df_after['Volume'] < climax_vol * self.thresholds.VOLUME_CONFIRMATION['weak'])
             if test_mask.any():
                 idx = df_after[test_mask].index[-1]
-                return {'detected': True, 'type': 'secondary_test', 'date': idx, 'price': df_after.loc[idx, 'Low']}
+                st_vol = df_after.loc[idx, 'Volume']
+                vol_ratio = st_vol / climax_vol if climax_vol > 0 else 1.0
+                confirmed = vol_ratio < 0.4
+                return {
+                    'detected': True, 'type': 'secondary_test', 'date': idx,
+                    'price': df_after.loc[idx, 'Low'],
+                    'volume': float(st_vol),
+                    'climax_volume': float(climax_vol),
+                    'st_vol_ratio': round(vol_ratio, 3),
+                    'supply_exhausted': confirmed,
+                    'confidence': 0.8 if confirmed else 0.4,
+                    'description': (
+                        f"二次测试确认{'✅' if confirmed else '⚠️'} — "
+                        f"ST成交量/Climax成交量 = {vol_ratio:.1%}"
+                        f"{' < 40% ✓ 供应耗尽' if confirmed else ' ≥ 40% 需求尚未完全耗尽'}"
+                    ),
+                }
         else:
             test_mask = (df_after['High'] >= climax_price * (1 - self.thresholds.JOC_TEST_BAND)) & \
-                        (df_after['Volume'] < climax_res['volume'] * self.thresholds.VOLUME_CONFIRMATION['weak'])
+                        (df_after['Volume'] < climax_vol * self.thresholds.VOLUME_CONFIRMATION['weak'])
             if test_mask.any():
                 idx = df_after[test_mask].index[-1]
-                return {'detected': True, 'type': 'secondary_test', 'date': idx, 'price': df_after.loc[idx, 'High']}
-                
+                st_vol = df_after.loc[idx, 'Volume']
+                vol_ratio = st_vol / climax_vol if climax_vol > 0 else 1.0
+                confirmed = vol_ratio < 0.4
+                return {
+                    'detected': True, 'type': 'secondary_test', 'date': idx,
+                    'price': df_after.loc[idx, 'High'],
+                    'volume': float(st_vol),
+                    'climax_volume': float(climax_vol),
+                    'st_vol_ratio': round(vol_ratio, 3),
+                    'supply_exhausted': confirmed,
+                    'confidence': 0.8 if confirmed else 0.4,
+                    'description': (
+                        f"二次测试确认{'✅' if confirmed else '⚠️'} — "
+                        f"ST成交量/Climax成交量 = {vol_ratio:.1%}"
+                        f"{' < 40% ✓ 需求耗尽' if confirmed else ' ≥ 40% 抛压尚未完全释放'}"
+                    ),
+                }
+
         return {'detected': False}
 
     # --- Spring & Upthrust ---
