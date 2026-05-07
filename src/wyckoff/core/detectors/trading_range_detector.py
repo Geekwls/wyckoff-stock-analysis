@@ -26,9 +26,9 @@ class TradingRangeDetector(BaseDetector):
         low_min = df['Low'].min()
         range_pct = (high_max - low_min) / low_min
         
-        # 关键修复：添加5%的缓冲区，避免因为微小差异而产生错误判断
-        # 例如：threshold=30%，buffer=5%，则实际阈值=35%
-        buffer_pct = 0.05  # 5%的缓冲区
+        # 添加相对缓冲区，避免因为微小差异而产生错误判断
+        # 使用阈值的10%作为buffer (如threshold=30%，buffer=3%，实际阈值=33%)
+        buffer_pct = self.config.spring_range_threshold * 0.1
         effective_threshold = self.config.spring_range_threshold + buffer_pct
         is_consolidation = range_pct < effective_threshold
 

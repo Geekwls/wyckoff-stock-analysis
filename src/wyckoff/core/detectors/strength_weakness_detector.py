@@ -18,6 +18,18 @@ class StrengthWeaknessDetector(BaseDetector):
         self.config = config
         self.thresholds = thresholds
     
+    def _ensure_columns(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+        """确保所需的指标列存在，缺失时动态计算"""
+        df = df.copy()
+        col_map = {
+            'Volume_MA20': lambda d: d['Volume'].rolling(20, min_periods=1).mean(),
+            'MA20': lambda d: d['Close'].rolling(20, min_periods=1).mean(),
+        }
+        for col in columns:
+            if col not in df.columns and col in col_map:
+                df[col] = col_map[col](df)
+        return df
+
     def update_analysis_context(self, phase: str):
         """更新当前阶段，用于动态调整信号分类"""
         super().update_analysis_context(phase)
@@ -107,15 +119,14 @@ class StrengthWeaknessDetector(BaseDetector):
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
         
-        df = self.data.tail(window).copy()
-        vol_ma = self.data['Volume_MA20'].reindex(df.index)
+        df = self._ensure_columns(self.data.tail(window), ['Volume_MA20', 'MA20'])
+        df_wide = self._ensure_columns(self.data, ['Volume_MA20'])
+        vol_ma = df_wide['Volume_MA20'].reindex(df.index)
         
-        # 逻辑：价格在 MA20 之上，且回踩缩量，低点抬高
         lps_signals = []
         for i in range(5, len(df)):
             current = df.iloc[i]
             
-            # 回调缩量条件
             is_pullback = (current['Low'] < df.iloc[i-5:i]['High'].max()) and (current['Close'] > df['MA20'].iloc[i])
             low_volume = current['Volume'] < vol_ma.iloc[i] * self.thresholds.VOLUME_CONFIRMATION['weak']
             higher_low = current['Low'] > df.iloc[i-20:i-5]['Low'].min()
@@ -137,14 +148,14 @@ class StrengthWeaknessDetector(BaseDetector):
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
             
-        df = self.data.tail(window).copy()
-        vol_ma = self.data['Volume_MA20'].reindex(df.index)
+        df = self._ensure_columns(self.data.tail(window), ['Volume_MA20', 'MA20'])
+        df_wide = self._ensure_columns(self.data, ['Volume_MA20'])
+        vol_ma = df_wide['Volume_MA20'].reindex(df.index)
         
         lpsy_signals = []
         for i in range(5, len(df)):
             current = df.iloc[i]
             
-            # 逻辑：价格在 MA20 之下，反弹无力（缩量），高点降低
             is_rebound = (current['High'] > df.iloc[i-5:i]['Low'].min()) and (current['Close'] < df['MA20'].iloc[i])
             low_volume = current['Volume'] < vol_ma.iloc[i] * self.thresholds.VOLUME_CONFIRMATION['weak']
             lower_high = current['High'] < df.iloc[i-20:i-5]['High'].max()

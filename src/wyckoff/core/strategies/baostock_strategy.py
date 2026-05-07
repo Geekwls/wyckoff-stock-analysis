@@ -1,6 +1,7 @@
 import baostock as bs
 import pandas as pd
 import logging
+import threading
 from ..datasource_strategy import DataSourceStrategy
 from ...exceptions import DataFetchError
 
@@ -10,20 +11,24 @@ class BaoStockStrategy(DataSourceStrategy):
     """BaoStock 数据源策略 (A股)"""
     
     _logged_in: bool = False
+    _login_lock: threading.Lock = threading.Lock()
 
     def is_available(self) -> bool:
         if BaoStockStrategy._logged_in:
             return True
-        try:
-            lg = bs.login()
-            if lg.error_code == '0':
-                BaoStockStrategy._logged_in = True
+        with BaoStockStrategy._login_lock:
+            if BaoStockStrategy._logged_in:
                 return True
-            logger.warning(f"baostock登录失败: {lg.error_msg}")
-            return False
-        except Exception as e:
-            logger.error(f"baostock连接异常: {e}")
-            return False
+            try:
+                lg = bs.login()
+                if lg.error_code == '0':
+                    BaoStockStrategy._logged_in = True
+                    return True
+                logger.warning(f"baostock登录失败: {lg.error_msg}")
+                return False
+            except Exception as e:
+                logger.error(f"baostock连接异常: {e}")
+                return False
 
     def fetch(self, symbol: str, period: str, frequency: str = "d") -> pd.DataFrame:
         if not self.is_available():

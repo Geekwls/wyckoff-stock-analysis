@@ -78,7 +78,7 @@ class WyckoffAnalyzer:
         if hasattr(self.orchestrator.data_fetcher, 'logout_baostock'):
             self.orchestrator.data_fetcher.logout_baostock()
 
-    def fetch_data(self, frequency: str = "d") -> pd.DataFrame:
+    def fetch_data(self, frequency: str = "1d") -> pd.DataFrame:
         """获取数据并初始化所有探测器"""
         self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)
         if self.data is not None:

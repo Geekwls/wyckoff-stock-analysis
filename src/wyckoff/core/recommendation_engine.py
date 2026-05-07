@@ -23,6 +23,30 @@ class RecommendationEngine:
         self.config = config or WyckoffConfig()
         self.thresholds = WyckoffThresholds()
 
+    @staticmethod
+    def _get_attr(obj: Any, key: str, default=None):
+        """
+        安全获取属性，支持字典和Pydantic模型
+
+        Args:
+            obj: 对象（字典或Pydantic模型）
+            key: 属性名
+            default: 默认值
+
+        Returns:
+            属性值或默认值
+        """
+        if obj is None:
+            return default
+        # 如果是Pydantic模型，使用getattr
+        if hasattr(obj, 'model_dump'):
+            return getattr(obj, key, default)
+        # 如果是字典，使用get方法
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        # 其他情况，使用getattr
+        return getattr(obj, key, default)
+
     def calculate_weighted_score(self, data: Any, pattern_results: Dict[str, Any], market_env: MarketEnvironment) -> SignalQualityModel:
         """
         计算高级加权评分 (包含时间衰减与冲突惩罚)
@@ -50,34 +74,45 @@ class RecommendationEngine:
         
         for key, max_weight in important_signals:
             info = events.get(key)
-            if not info or not info.get('detected'): continue
-            
+            if not info or not self._get_attr(info, 'detected'): continue
+
             # 判断方向
             if key in ['joc', 'spring', 'sos', 'lps']: bullish_count += 1
             elif key in ['fti', 'upthrust', 'sow', 'lpsy']: bearish_count += 1
-            
+
             # 质量因子 (0.5 - 1.2)
             quality_factor = 0.8
-            
+
             # 1. 成交量因子
-            vol_ratio = info.get('volume_ratio', 1.0)
-            if vol_ratio > 1.5: 
+            vol_ratio = self._get_attr(info, 'volume_ratio', 1.0)
+            if vol_ratio > 1.5:
                 quality_factor += weights['volume_ratio']
                 reasons.append(f"{key.upper()} 成交量强力确认")
-            
+
             # 2. 置信度因子
-            conf = info.get('confidence', 0.5)
+            conf = self._get_attr(info, 'confidence', 0.5)
             quality_factor += (conf - 0.5) * weights['confidence']
-            
+
             # 3. 时间衰减 (Time Decay)
-            sig_date = info.get('date')
+            sig_date = self._get_attr(info, 'date')
             if sig_date:
                 if isinstance(sig_date, str):
                     try: sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
                     except: pass
-                
+
                 if isinstance(sig_date, datetime):
-                    days_ago = (datetime.now() - sig_date).days
+                    # 处理时区问题
+                    from datetime import timezone
+                    now = datetime.now(timezone.utc) if sig_date.tzinfo else datetime.now()
+                    try:
+                        days_ago = (now - sig_date).days
+                    except:
+                        # 如果时区不兼容，转换为UTC
+                        if sig_date.tzinfo:
+                            sig_date = sig_date.replace(tzinfo=None)
+                        now = datetime.now()
+                        days_ago = (now - sig_date).days
+
                     decay = np.exp(-0.693 * max(0, days_ago) / self.thresholds.TIME_DECAY_HALF_LIFE)
                     quality_factor *= decay
                     if decay < 0.7: reasons.append(f"{key.upper()} 信号已过最佳期 (衰减)")
@@ -86,21 +121,21 @@ class RecommendationEngine:
 
         # --- 孟洪涛进阶信号：枯燥区与死角突破 ---
         boring = pattern_results.get('boring_zone', {})
-        boring_score = boring.get('score', 0)
-        if boring.get('detected'):
+        boring_score = self._get_attr(boring, 'score', 0)
+        if self._get_attr(boring, 'detected'):
             base_score += 10
-            reasons.append(f"检测到“枯燥区” (得分:{boring_score})，主力可能正在吸筹")
-            
+            reasons.append(f"检测到「枯燥区」(得分:{boring_score})，主力可能正在吸筹")
+
             # Boring Zone 联动加权 (P2 #3.1)
             if boring_score > 85:
                 for key in ['spring', 'joc']:
                     info = events.get(key)
-                    if info and info.get('detected'):
+                    if info and self._get_attr(info, 'detected'):
                         base_score += 15 # 高质量枯燥区后的突破极具爆发力
                         reasons.append(f"🔥 高价值突破：{key.upper()} 紧随高质量枯燥区出现，爆发潜力极大")
 
-            if boring.get('high_alert'):
-                reasons.append("🔥 高能预警：系统已进入“死角突破”严密监控模式")
+            if self._get_attr(boring, 'high_alert'):
+                reasons.append("🔥 高能预警：系统已进入「死角突破」严密监控模式")
 
         dead_corner = pattern_results.get('dead_corner_breakout', {})
         if dead_corner.get('detected'):
@@ -125,9 +160,9 @@ class RecommendationEngine:
             reasons.append("大盘环境不利于做多 (-10分)")
 
         final_score = int(max(0, min(base_score, 100)))
-        
+
         # 针对枯燥区 85 分以上的特殊提升
-        if boring.get('score', 0) >= 85 and final_score < 85:
+        if self._get_attr(boring, 'score', 0) >= 85 and final_score < 85:
             final_score = 85
             reasons.append("触发高能预警阈值，综合评分上调至 85 (死角突破临界)")
 
@@ -148,7 +183,8 @@ class RecommendationEngine:
         events = pattern_results.get('events_detected', {}) or pattern_results
         count = 0
         for key in ['joc', 'spring', 'sos', 'lps', 'upthrust', 'sow', 'lpsy', 'fti']:
-            if events.get(key, {}).get('detected'):
+            event = events.get(key)
+            if event and RecommendationEngine._get_attr(event, 'detected'):
                 count += 1
         return count
 

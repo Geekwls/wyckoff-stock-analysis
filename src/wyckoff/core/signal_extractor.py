@@ -149,7 +149,7 @@ class SignalExtractor:
             base_score -= thresholds.CONFLICT_PENALTY
             
         # 3. 基础置信度加成
-        phase_conf = phase_result.get('confidence', 0.0)
+        phase_conf = phase_result.get('confidence') or 0.0
         base_score += phase_conf * 10
         
         return round(max(0.0, min(base_score, 100.0)), 2)

@@ -103,7 +103,7 @@ class PhaseIdentifier(BaseDetector):
                 return 'Accumulation Phase A (恐慌抛售停止)', WyckoffPhase.PHASE_A, 0.75
             return 'Distribution Phase A (买入高潮停止)', WyckoffPhase.PHASE_A, 0.75
             
-        if st and st.detected:
+        if climax and climax.detected and st and st.detected:
             if climax.type == 'selling_climax': 
                 return 'Accumulation Phase B (积累期测试)', WyckoffPhase.PHASE_B, 0.60
             return 'Distribution Phase B (派发期测试)', WyckoffPhase.PHASE_B, 0.60
@@ -112,8 +112,10 @@ class PhaseIdentifier(BaseDetector):
 
     def _fallback_logic(self) -> Tuple[str, WyckoffPhase, float]:
         """基于均线排布的降级判定逻辑"""
-        ma20, ma50, ma200 = self.data['MA20'].iloc[-1], self.data['MA50'].iloc[-1], self.data['MA200'].iloc[-1]
         current = self.data['Close'].iloc[-1]
+        ma20 = self.data['MA20'].iloc[-1] if 'MA20' in self.data.columns else current
+        ma50 = self.data['MA50'].iloc[-1] if 'MA50' in self.data.columns else current
+        ma200 = self.data['MA200'].iloc[-1] if 'MA200' in self.data.columns else current
         
         if current > ma20 > ma50 > ma200: 
             return "Markup Phase E (强势上涨)", WyckoffPhase.PHASE_E, 0.6
@@ -124,7 +126,8 @@ class PhaseIdentifier(BaseDetector):
 
     def _check_ma_confirmation(self, phase: Union[str, WyckoffPhase]) -> float:
         """检查均线确认"""
-        ma200, current = self.data['MA200'].iloc[-1], self.data['Close'].iloc[-1]
+        current = self.data['Close'].iloc[-1]
+        ma200 = self.data['MA200'].iloc[-1] if 'MA200' in self.data.columns else current
         if PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase): 
             return 0.8 if current > ma200 else 0.4
         if PhaseAdapter.is_distribution(phase) or PhaseAdapter.is_markdown(phase): 

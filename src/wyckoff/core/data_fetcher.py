@@ -64,7 +64,7 @@ class WyckoffDataFetcher:
         self.config = config or WyckoffConfig()
         self.resolver = SymbolResolver()
 
-    def fetch_data(self, symbol: str, period: str, frequency: str = "d") -> Tuple[str, pd.DataFrame]:
+    def fetch_data(self, symbol: str, period: str, frequency: str = "1d") -> Tuple[str, pd.DataFrame]:
         """
         统一获取数据入口
         1. 解析代码 (SymbolResolver)

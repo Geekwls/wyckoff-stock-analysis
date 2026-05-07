@@ -25,21 +25,23 @@ class ClassicPatternDetector(BaseDetector):
             return {'detected': False}
 
         df = self.data.tail(40).copy()
-        # 使用预计算的量比指标
-        vol_ma = self.data['Volume_MA20']
+        # 确保指标列存在
+        vol_ma = self.data['Volume_MA20'] if 'Volume_MA20' in self.data.columns else self.data['Volume'].rolling(20).mean()
+        low_min = self.data['Low_Min_20'] if 'Low_Min_20' in self.data.columns else self.data['Low'].rolling(20).min()
+        high_max = self.data['High_Max_20'] if 'High_Max_20' in self.data.columns else self.data['High'].rolling(20).max()
         
         # 抛售高潮 (Selling Climax)
         sc_mask = (
             (df['Close'] < df['Open']) & 
             (df['Volume'] > vol_ma.reindex(df.index) * self.thresholds.VOLUME_CONFIRMATION['strong']) & 
-            (df['Low'] == self.data['Low_Min_20'].reindex(df.index))
+            (df['Low'] == low_min.reindex(df.index))
         )
         
         # 买入高潮 (Buying Climax)
         bc_mask = (
             (df['Close'] > df['Open']) & 
             (df['Volume'] > vol_ma.reindex(df.index) * self.thresholds.VOLUME_CONFIRMATION['strong']) & 
-            (df['High'] == self.data['High_Max_20'].reindex(df.index))
+            (df['High'] == high_max.reindex(df.index))
         )
         
         if sc_mask.any():
@@ -299,7 +301,8 @@ class ClassicPatternDetector(BaseDetector):
                 r_idx = later_rejections[0]
                 days_to_reject = (df.index.get_indexer([r_idx])[0] - df.index.get_indexer([b_idx])[0])
                 
-                if days_to_reject <= 3:
+                max_reject_days = self.config.spring_max_recovery_days
+                if days_to_reject <= max_reject_days:
                     b_vol = df.loc[b_idx, 'Volume']
                     r_vol = df.loc[r_idx, 'Volume']
                     close_pos = (df.loc[r_idx, 'High'] - df.loc[r_idx, 'Close']) / (df.loc[r_idx, 'High'] - df.loc[r_idx, 'Low'] + 1e-6)
@@ -525,15 +528,18 @@ class ClassicPatternDetector(BaseDetector):
 
     def detect_shakeout(self) -> Dict:
         """检测 Shakeout (终极震仓)"""
-        # 逻辑：快速且深幅的下跌后迅速收回
         spring_res = self.detect_spring()
         if spring_res.get('detected'):
             latest = spring_res['latest_spring']
-            if latest['breakdown_pct'] <= -self.thresholds.VSA_SHAKEOUT_DEPTH:
-                return {
-                    'detected': True, 
-                    'date': latest['date'],
-                    'depth': latest['breakdown_pct'],
-                    'description': 'Shakeout - 剧烈震仓，深度洗盘后快速回收'
-                }
+            support = latest['support_level']
+            breakdown_price = latest['breakdown_price']
+            if support > 0:
+                breakdown_pct = (support - breakdown_price) / support
+                if breakdown_pct >= self.thresholds.VSA_SHAKEOUT_DEPTH:
+                    return {
+                        'detected': True,
+                        'date': latest['date'],
+                        'depth': round(breakdown_pct * 100, 2),
+                        'description': 'Shakeout - 剧烈震仓，深度洗盘后快速回收'
+                    }
         return {'detected': False}

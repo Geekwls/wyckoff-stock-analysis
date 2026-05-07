@@ -198,6 +198,7 @@ class PhaseCoordinator:
     def _replace_phase_type(self, phase: str, new_type: str) -> str:
         """替换阶段类型（保持 Phase X 部分）"""
         if 'Phase' in phase:
-            phase_letter = phase.split()[-1]  # 获取 "Phase A", "Phase B" 等
-            return f"{new_type} {phase_letter}"
+            parts = phase.split()
+            phase_letter = parts[-1]
+            return f"{new_type} Phase {phase_letter}"
         return f"{new_type} Unknown"

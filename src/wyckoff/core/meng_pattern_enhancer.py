@@ -31,7 +31,7 @@ class MengPatternEnhancer(BaseDetector):
         super().__init__()
         self.data = data
         self.config = config
-        self._cache = {}
+        self._cache = None
 
     def detect_spring_enhanced(self) -> Dict:
         """
@@ -71,10 +71,10 @@ class MengPatternEnhancer(BaseDetector):
 
             # 检测跌破
             if df['Low'].iloc[i] < support_level * 0.97:  # 跌破3%以内
-                breakdown_price = df['Close'].iloc[i]
+                breakdown_price = df['Low'].iloc[i]
                 breakdown_vol = df['Volume'].iloc[i]
 
-                # 条件1：跌破幅度检查（1-3%）
+                # 条件1：跌破幅度检查（1-3%，用实际最低价计算）
                 breakdown_pct = (support_level - breakdown_price) / support_level * 100
                 if not (1 <= breakdown_pct <= 3):
                     continue  # 跌破太深或太浅
