@@ -143,8 +143,17 @@ class StrengthWeaknessDetector(BaseDetector):
             return {'detected': True, 'signals': lps_signals, 'latest': lps_signals[-1]}
         return {'detected': False}
 
-    def detect_lpsy(self, window: int = 30) -> Dict:
-        """检测 LPSY (Last Point of Supply)"""
+    def detect_lpsy(self, window: int = 30, trading_range: Dict = None) -> Dict:
+        """
+        检测 LPSY (Last Point of Supply)
+        
+        威科夫严格定义：价格跌破关键支撑后，出现的缩量无力反弹。
+        若支撑未被跌破，信号归类为"weak_reaction"而非 LPSY。
+        
+        Args:
+            window: 检测窗口
+            trading_range: 当前交易区间（需包含 'low' 支撑位）
+        """
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
             
@@ -152,7 +161,18 @@ class StrengthWeaknessDetector(BaseDetector):
         df_wide = self._ensure_columns(self.data, ['Volume_MA20'])
         vol_ma = df_wide['Volume_MA20'].reindex(df.index)
         
-        lpsy_signals = []
+        # 获取 TR 支撑位（如 AR 低点）
+        tr_support = None
+        if trading_range and 'low' in trading_range:
+            tr_support = trading_range['low']
+        
+        # 检查支撑是否已被跌破（在检测窗口范围内）
+        support_broken = False
+        if tr_support is not None:
+            support_broken = df['Low'].min() < tr_support
+        
+        signals = []
+        weak_reactions = []
         for i in range(5, len(df)):
             current = df.iloc[i]
             
@@ -161,16 +181,31 @@ class StrengthWeaknessDetector(BaseDetector):
             lower_high = current['High'] < df.iloc[i-20:i-5]['High'].max()
             
             if is_rebound and low_volume and lower_high:
-                lpsy_signals.append({
+                signal = {
                     'date': df.index[i],
                     'price': current['Close'],
                     'volume_ratio': round(current['Volume'] / vol_ma.iloc[i], 2),
                     'resistance_level': df['MA20'].iloc[i]
-                })
-                
-        if lpsy_signals:
-            return {'detected': True, 'signals': lpsy_signals, 'latest': lpsy_signals[-1]}
-        return {'detected': False}
+                }
+                if tr_support is not None and not support_broken:
+                    signal['signal_type'] = 'weak_reaction'
+                    signal['note'] = f'支撑 {tr_support:.2f} 未被跌破，此为TR内弱势反抽，非严格LPSY'
+                    weak_reactions.append(signal)
+                else:
+                    signal['signal_type'] = 'lpsy'
+                    signals.append(signal)
+        
+        result = {'detected': bool(signals or weak_reactions)}
+        if signals:
+            result['signals'] = signals
+            result['latest'] = signals[-1]
+        if weak_reactions:
+            result['weak_reactions'] = weak_reactions
+            result['latest_weak'] = weak_reactions[-1]
+        if tr_support is not None:
+            result['support_level'] = tr_support
+            result['support_broken'] = support_broken
+        return result
 
     def detect_sos_variants(self) -> Dict:
         return self._detect_variants(is_bullish=True)

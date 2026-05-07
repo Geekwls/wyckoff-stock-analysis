@@ -124,6 +124,8 @@ class PointAndFigureCalculator:
                                    accumulation_start: int = None,
                                    accumulation_end: int = None,
                                    phase: str = '',
+                                   known_tr_high: float = None,
+                                   known_tr_low: float = None,
                                    **kwargs) -> Dict:
         """
         计算水平计数（威科夫因果法则的核心）
@@ -137,6 +139,8 @@ class PointAndFigureCalculator:
             accumulation_start: 积累区开始列索引
             accumulation_end: 积累区结束列索引
             phase: 当前阶段（用于确定目标方向）
+            known_tr_high: 已知交易区间上沿（如BC高点），优先使用
+            known_tr_low: 已知交易区间下沿（如AR低点），优先使用
             
         Returns:
             水平计数结果和目标价
@@ -145,15 +149,26 @@ class PointAndFigureCalculator:
         if not columns:
             return {'count': 0, 'targets': {}}
         
-        # 如果没有指定积累区，自动检测
-        if accumulation_start is None or accumulation_end is None:
+        if known_tr_high is not None and known_tr_low is not None:
+            accumulation_columns = [
+                col for col in columns
+                if col['low'] <= known_tr_high and col['high'] >= known_tr_low
+            ]
+            if not accumulation_columns:
+                accumulation_columns = columns[-20:]
+            method = "known_tr"
+        elif accumulation_start is None or accumulation_end is None:
             accumulation_start, accumulation_end = self._find_accumulation_range(columns)
+            if accumulation_start >= accumulation_end:
+                return {'count': 0, 'targets': {}}
+            accumulation_columns = columns[accumulation_start:accumulation_end + 1]
+            method = "auto_detect"
+        else:
+            if accumulation_start >= accumulation_end:
+                return {'count': 0, 'targets': {}}
+            accumulation_columns = columns[accumulation_start:accumulation_end + 1]
+            method = "explicit_index"
         
-        if accumulation_start >= accumulation_end:
-            return {'count': 0, 'targets': {}}
-        
-        # 计算积累区的水平跨度（列数）
-        accumulation_columns = columns[accumulation_start:accumulation_end + 1]
         horizontal_count = len(accumulation_columns)
         
         if horizontal_count < 3:
@@ -230,7 +245,8 @@ class PointAndFigureCalculator:
             'targets': targets,
             'phase': phase,
             'direction_note': direction_note,
-            'is_distribution': is_distribution
+            'is_distribution': is_distribution,
+            '_pnf_method': method,
         }
     
     def _get_box_level(self, price: float) -> float:
@@ -303,7 +319,9 @@ class PointAndFigureCalculator:
 def calculate_cause_effect_from_pnf(data: pd.DataFrame, 
                                     box_size_pct: float = 1.0,
                                     reversal_boxes: int = 3,
-                                    phase: str = '') -> Dict:
+                                    phase: str = '',
+                                    known_tr_high: float = None,
+                                    known_tr_low: float = None) -> Dict:
     """
     基于点数图计算威科夫因果效应（便捷函数）
     
@@ -322,11 +340,29 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
     """
     calculator = PointAndFigureCalculator(box_size_pct, reversal_boxes)
     pnf_data = calculator.calculate_pnf(data)
-    # 关键修复：传入阶段信息，让因果法则计算考虑阶段方向
-    result = calculator.calculate_horizontal_count(pnf_data, phase=phase)
+    result = calculator.calculate_horizontal_count(
+        pnf_data, phase=phase,
+        known_tr_high=known_tr_high, known_tr_low=known_tr_low
+    )
+    
+    pnf_method = result.get('_pnf_method', 'auto_detect')
+    if known_tr_high is not None and known_tr_low is not None:
+        method_label = 'point_and_figure_from_tr'
+        description = (
+            f"基于当前TR（{known_tr_low:.2f}-{known_tr_high:.2f}）内的点数图水平计数："
+            f"{result.get('horizontal_count', 0)}列 × 箱体大小{box_size_pct:.0f}% = "
+            f"目标幅度{result.get('base_effect', 0):.2f}"
+        )
+    else:
+        method_label = 'point_and_figure'
+        description = (
+            f"基于点数图水平计数：积累区{result.get('horizontal_count', 0)}列 × "
+            f"箱体大小{box_size_pct:.0f}% = "
+            f"目标幅度{result.get('base_effect', 0):.2f}"
+        )
     
     return {
-        'method': 'point_and_figure',
+        'method': method_label,
         'box_size_pct': box_size_pct,
         'reversal_boxes': reversal_boxes,
         'total_columns': pnf_data.get('total_columns', 0),
@@ -336,7 +372,6 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
         'base_effect': result.get('base_effect', 0),
         'breakout_direction': result.get('breakout_direction', 'up'),
         'targets': result.get('targets', {}),
-        'description': f"基于点数图水平计数：积累区{result.get('horizontal_count', 0)}列 × "
-                      f"箱体大小{box_size_pct:.0f}% = "
-                      f"目标幅度{result.get('base_effect', 0):.2f}"
+        'description': description,
+        '_pnf_method': pnf_method,
     }

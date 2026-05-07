@@ -1108,8 +1108,16 @@ class WyckoffReportGenerator:
         self.data = self.analyzer.data
         self.pattern_detector = self.analyzer.pattern_detector
         self.law_analyzer = self.analyzer.law_analyzer
-            
-        # 1. 基础事件分析
+        
+        # 1. 先获取阶段识别（含事件收集），使 TR 检测器获得 BC/AR 边界
+        phase_dict = self.analyzer.identify_phase_with_rs()
+        phase_str = phase_dict.get('phase', 'Unknown')
+        
+        daily_phase_dict = phase_dict.get('daily_analysis', {})
+        seq_score = SequenceScoreModel(**daily_phase_dict.get('sequence_score', {'completeness': 0, 'score': 0, 'rating': 'N/A'}))
+        div_res = DivergenceModel(**daily_phase_dict.get('divergence', {'detected': False}))
+        
+        # 2. 基础事件分析（此时 TR 已被 BC/AR 边界更新）
         climax_res = self.pattern_detector.detect_climax()
         ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
         st_res = self.pattern_detector.detect_secondary_test(climax_res, ar_res)
@@ -1127,14 +1135,6 @@ class WyckoffReportGenerator:
             lps=LpsModel(**self.pattern_detector.detect_lps()),
             lpsy=LpsyModel(**self.pattern_detector.detect_lpsy())
         )
-        
-        # 获取完整带多时间框架和RS的阶段
-        phase_dict = self.analyzer.identify_phase_with_rs()
-        phase_str = phase_dict.get('phase', 'Unknown')
-        
-        daily_phase_dict = phase_dict.get('daily_analysis', {})
-        seq_score = SequenceScoreModel(**daily_phase_dict.get('sequence_score', {'completeness': 0, 'score': 0, 'rating': 'N/A'}))
-        div_res = DivergenceModel(**daily_phase_dict.get('divergence', {'detected': False}))
 
         # 构建基础数据
         basic_data = BasicDataModel(

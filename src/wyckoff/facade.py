@@ -313,44 +313,29 @@ class WyckoffAnalyzer:
             return None
 
     def calculate_cause_effect(self) -> Dict:
-        """
-        计算因果效应 (基于点数图水平计数)
-        
-        威科夫因果法则核心：
-        - 因（Cause）：水平准备（横向盘整的规模，用点数图列数衡量）
-        - 果（Effect）：垂直运动（价格突破后的目标幅度）
-        
-        正确方法：使用点数图（P&F）的水平计数来预测垂直目标
-        简单的"天数×ATR×斐波那契"不是威科夫方法
-        """
         if not self.pattern_detector:
             return {}
-        
-        # 获取交易区间信息
+
         tr = self.pattern_detector.detect_trading_range()
-        if not tr.get('is_consolidation'):
+        if not tr:
             return {}
-        
+
         try:
-            # 关键修复：先获取当前阶段，用于确定因果法则的目标方向
             phase_result = self.identify_phase()
             current_phase = phase_result.get('phase', '')
-            
-            # 使用点数图计算因果效应
-            # box_size_pct=1.0 表示每个箱体为价格的1%
-            # reversal_boxes=3 表示需要3个箱体的反转才改变方向
-            # phase: 传入阶段信息，让因果法则计算考虑阶段方向
+
             pnf_result = calculate_cause_effect_from_pnf(
                 self.data, 
                 box_size_pct=1.0,
                 reversal_boxes=3,
-                phase=current_phase  # 传入阶段信息
+                phase=current_phase,
+                known_tr_high=tr.get('high'),
+                known_tr_low=tr.get('low'),
             )
-            
-            # 如果点数图计算成功
+
             if pnf_result.get('horizontal_count', 0) >= 3:
                 return {
-                    'method': 'point_and_figure',
+                    'method': pnf_result.get('method', 'point_and_figure'),
                     'cause_bars': pnf_result.get('horizontal_count', 0),
                     'vertical_count': pnf_result.get('vertical_count', 0),
                     'accumulation_range': pnf_result.get('accumulation_range', {}),
@@ -358,58 +343,47 @@ class WyckoffAnalyzer:
                     'breakout_direction': pnf_result.get('breakout_direction', 'up'),
                     'description': pnf_result.get('description', ''),
                     'targets': pnf_result.get('targets', {}),
-                    'theory': '威科夫因果法则：水平计数决定垂直目标'
+                    'theory': '威科夫因果法则：水平计数决定垂直目标',
+                    '_pnf_method': pnf_result.get('_pnf_method', ''),
                 }
-            else:
-                # 如果点数图计算失败，使用改进的估算方法
-                # 基于波动率收缩和时间积累的综合估算
-                cause_bars = tr.get('consolidation_duration_days', 40)
-                
-                # 计算波动率收缩程度（真正的"因"）
-                recent_data = self.data.tail(cause_bars)
-                if len(recent_data) < 10:
-                    return {}
-                
-                # 使用ATR的百分比变化来衡量波动率收缩
-                atr_series = (recent_data['High'] - recent_data['Low']).rolling(window=5).mean()
-                atr_start = atr_series.iloc[0] if len(atr_series) > 0 else 0
-                atr_end = atr_series.iloc[-1] if len(atr_series) > 0 else 0
-                
-                # 波动率收缩越明显，积累的能量越大
-                volatility_contraction = 1 - (atr_end / atr_start) if atr_start > 0 else 0
-                
-                # 基于波动率收缩和时间积累计算潜力
-                base_price = tr['high']
-                price_range = tr['high'] - tr['low']
-                
-                # 使用波动率收缩系数调整目标
-                # 收缩越明显，突破潜力越大
-                contraction_factor = max(0.5, 1 + volatility_contraction * 2)
-                potential_move = price_range * contraction_factor * (cause_bars / 30)
-                
-                return {
-                    'method': 'volatility_contraction',
-                    'cause_bars': cause_bars,
-                    'volatility_contraction': round(volatility_contraction * 100, 1),
-                    'contraction_factor': round(contraction_factor, 2),
-                    'description': f"基于波动率收缩{volatility_contraction*100:.1f}%和{cause_bars}天积累，"
-                                  f"预计突破幅度为{potential_move/base_price*100:.1f}%",
-                    'targets': {
-                        'target_1': round(base_price + potential_move * 0.618, 2),
-                        'target_2': round(base_price + potential_move, 2),
-                        'target_3': round(base_price + potential_move * 1.618, 2),
-                    },
-                    'theory': '改进估算：基于波动率收缩和时间积累'
-                }
-                
+
+            cause_bars = tr.get('consolidation_duration_days', 40)
+            recent_data = self.data.tail(cause_bars)
+            if len(recent_data) < 10:
+                return {}
+
+            atr_series = (recent_data['High'] - recent_data['Low']).rolling(window=5).mean()
+            atr_start = atr_series.iloc[0] if len(atr_series) > 0 else 0
+            atr_end = atr_series.iloc[-1] if len(atr_series) > 0 else 0
+            volatility_contraction = 1 - (atr_end / atr_start) if atr_start > 0 else 0
+
+            base_price = tr['high']
+            price_range = tr['high'] - tr['low']
+            contraction_factor = max(0.5, 1 + volatility_contraction * 2)
+            potential_move = price_range * contraction_factor * (cause_bars / 30)
+
+            return {
+                'method': 'volatility_contraction',
+                'cause_bars': cause_bars,
+                'volatility_contraction': round(volatility_contraction * 100, 1),
+                'contraction_factor': round(contraction_factor, 2),
+                'description': f"基于波动率收缩{volatility_contraction*100:.1f}%和{cause_bars}天积累，"
+                              f"预计突破幅度为{potential_move/base_price*100:.1f}%",
+                'targets': {
+                    'target_1': round(base_price + potential_move * 0.618, 2),
+                    'target_2': round(base_price + potential_move, 2),
+                    'target_3': round(base_price + potential_move * 1.618, 2),
+                },
+                'theory': '改进估算：基于波动率收缩和时间积累'
+            }
+
         except Exception as e:
             logger.warning(f"点数图计算失败，使用备用方法: {e}")
-            # 备用方法
             cause_bars = tr.get('consolidation_duration_days', 40)
             base_price = tr['high']
             price_range = tr['high'] - tr['low']
             potential_move = price_range * 1.0
-            
+
             return {
                 'method': 'fallback',
                 'cause_bars': cause_bars,

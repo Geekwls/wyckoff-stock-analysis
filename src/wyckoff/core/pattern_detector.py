@@ -180,9 +180,11 @@ class WyckoffPatternDetector:
         """检测 LPS (Last Point of Support)"""
         return self.sw_detector.detect_lps()
 
-    def detect_lpsy(self, sow_result: Dict = None) -> Dict:
+    def detect_lpsy(self, sow_result: Dict = None, trading_range: Dict = None) -> Dict:
         """检测 LPSY (Last Point of Supply)"""
-        return self.sw_detector.detect_lpsy()
+        if trading_range is None:
+            trading_range = self.detect_trading_range()
+        return self.sw_detector.detect_lpsy(trading_range=trading_range)
 
     # --- 孟洪涛增强检测方法 ---
 

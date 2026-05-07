@@ -377,8 +377,11 @@ class WyckoffLawAnalyzer:
                 phase = "Markup" if current_close > ma60 else "Markdown"
 
         # 获取基础因果分析 - 使用内置分析方法
-        # 关键修复：传入阶段信息，让因果法则计算考虑阶段方向
-        basic_cause_effect = self._basic_cause_effect_analysis(phase=phase)
+        basic_cause_effect = self._basic_cause_effect_analysis(
+            phase=phase,
+            known_tr_high=trading_range.get('high'),
+            known_tr_low=trading_range.get('low'),
+        )
 
         # 1. 测量"努力" - 更准确的积累/派发努力计算
         if trading_range.get("is_consolidation"):
@@ -414,17 +417,17 @@ class WyckoffLawAnalyzer:
             cause = range_high - range_low
             
             # 使用点数图计算因果效应
-            # 关键修复：传入阶段信息，让因果法则计算考虑阶段方向
             try:
                 pnf_result = calculate_cause_effect_from_pnf(
                     self.data, 
                     box_size_pct=1.0,
                     reversal_boxes=3,
-                    phase=phase  # 传入阶段信息
+                    phase=phase,
+                    known_tr_high=trading_range.get('high'),
+                    known_tr_low=trading_range.get('low'),
                 )
                 
                 if pnf_result.get('horizontal_count', 0) >= 3:
-                    # 点数图计算成功
                     targets = pnf_result.get('targets', {})
                     projected_direction = "UPSIDE" if pnf_result.get('breakout_direction') == 'up' else "DOWNSIDE"
                     effect_probability = self._calculate_breakout_probability(phase, pnf_result.get('breakout_direction', 'up'))
@@ -700,7 +703,9 @@ class WyckoffLawAnalyzer:
         else:
             return "MEDIUM (50-65%)"
 
-    def _basic_cause_effect_analysis(self, phase: str = '') -> dict:
+    def _basic_cause_effect_analysis(self, phase: str = '', 
+                                      known_tr_high: float = None,
+                                      known_tr_low: float = None) -> dict:
         """
         基础因果分析 - 使用点数图水平计数
         
@@ -711,22 +716,32 @@ class WyckoffLawAnalyzer:
         重要理论约束：
         - 派发期的"因"触发向下的"果"
         - 吸筹期的"因"触发向上的"果"
+        
+        Args:
+            phase: 当前阶段字符串
+            known_tr_high: 已知交易区间上沿（可选，优先使用）
+            known_tr_low: 已知交易区间下沿（可选，优先使用）
         """
         try:
-            # 计算交易区间
-            recent_data = self.data.tail(60)
-            trading_range_high = recent_data['High'].max()
-            trading_range_low = recent_data['Low'].min()
+            # 计算交易区间：优先使用已知边界，否则用 60 日机械扫描
+            if known_tr_high is not None and known_tr_low is not None:
+                trading_range_high = known_tr_high
+                trading_range_low = known_tr_low
+            else:
+                recent_data = self.data.tail(60)
+                trading_range_high = recent_data['High'].max()
+                trading_range_low = recent_data['Low'].min()
             cause_size = trading_range_high - trading_range_low
 
             # 使用点数图计算因果效应
-            # 关键修复：传入阶段信息，让因果法则计算考虑阶段方向
             try:
                 pnf_result = calculate_cause_effect_from_pnf(
                     self.data, 
                     box_size_pct=1.0,
                     reversal_boxes=3,
-                    phase=phase  # 传入阶段信息
+                    phase=phase,
+                    known_tr_high=trading_range_high,
+                    known_tr_low=trading_range_low,
                 )
                 
                 if pnf_result.get('horizontal_count', 0) >= 3:
