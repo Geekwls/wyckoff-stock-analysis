@@ -241,29 +241,35 @@ class ClassicPatternDetector(BaseDetector):
             if nxt['Close'] <= cur['Close']:
                 continue
 
-            # 条件4：Spring当日放量（> 1.2倍20日均量）
-            cur_vol_r = cur['Volume'] / vol_ma20.iloc[i] if vol_ma20.iloc[i] > 0 else 1
-            if cur_vol_r < 1.2:
+            # 条件4：跌破幅度上限（书中1-3%，放宽到5%防漏检）
+            breakdown_pct = (support - cur['Low']) / support * 100
+            if breakdown_pct > 5:
                 continue
 
-            # 条件5：下影线分析（下影线 >= 实体1.5倍）
-            body = abs(cur['Close'] - cur['Open'])
-            lower_shadow = max(0, min(cur['Open'], cur['Close']) - cur['Low'])
-            shadow_r = lower_shadow / (body + 0.001)
-            if shadow_r < 1.5:
+            # 条件4（书）：收回日成交量 > 跌破日成交量（需求吃掉供应）
+            b_vol = cur['Volume']
+            r_vol = nxt['Volume']
+            recovery_vol_r = r_vol / b_vol if b_vol > 0 else 1
+            if recovery_vol_r <= 1.0:
+                continue
+
+            # 条件5（书）：收回日收盘在日内高位 70% 以上
+            nxt_range = nxt['High'] - nxt['Low']
+            nxt_close_pos = (nxt['Close'] - nxt['Low']) / nxt_range if nxt_range > 0 else 0.5
+            if nxt_close_pos < 0.7:
                 continue
 
             # 条件6：跟随确认评分
             follow_score = self._calculate_spring_follow_score(nxt, d2)
 
-            # 综合评分（100分制）
+            # 综合评分（100分制）— 按书中逻辑重新分配
             recovery_pct = (nxt['Close'] - support) / support * 100 if support > 0 else 0
             total_score = (
-                min(cur_vol_r * 10, 30) +      # 成交量: 0-30
-                min(shadow_r * 5, 20) +         # 影线: 0-20
-                min(follow_score * 3, 30) +     # 跟随: 0-30
-                min(recovery_pct, 10) +          # 收回幅度: 0-10
-                10                                # 基础分
+                min(recovery_vol_r * 15, 30) +   # 成交量(收回/跌破比): 0-30
+                min(nxt_close_pos * 25, 20) +     # 收盘位置分: 0-20
+                min(follow_score * 3, 30) +        # 跟随: 0-30
+                min(recovery_pct, 10) +             # 收回幅度: 0-10
+                10                                   # 基础分
             )
             total_score = min(total_score, 100)
 
@@ -274,8 +280,8 @@ class ClassicPatternDetector(BaseDetector):
                 'support_level': round(support, 2),
                 'recovery_price': round(float(nxt['Close']), 2),
                 'recovery_days': 1,
-                'volume_ratio': round(cur_vol_r, 2),
-                'shadow_ratio': round(shadow_r, 2),
+                'volume_ratio': round(recovery_vol_r, 2),
+                'close_position': round(nxt_close_pos * 100, 1),
                 'follow_up_score': follow_score,
                 'total_score': total_score,
                 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
@@ -578,8 +584,9 @@ class ClassicPatternDetector(BaseDetector):
         body_ratio = ((df['Close'] - df['Open']).abs() / total_range).fillna(0)
         close_position = ((df['Close'] - df['Low']) / total_range).fillna(0.5)
 
-        no_supply_mask = (df['Close'] < df['Open']) & (body_ratio < self.thresholds.VSA_NO_SUPPLY_BODY_RATIO) & (df['Volume'] < vol_ma * self.thresholds.VSA_NO_SUPPLY_VOL_RATIO) & (close_position >= self.thresholds.VSA_NO_SUPPLY_CLOSE_POS)
-        no_demand_mask = (df['Close'] > df['Open']) & (body_ratio < self.thresholds.VSA_NO_DEMAND_BODY_RATIO) & (df['Volume'] < vol_ma * self.thresholds.VSA_NO_DEMAND_VOL_RATIO) & (close_position <= self.thresholds.VSA_NO_DEMAND_CLOSE_POS)
+        # 修复：移除K线颜色限制（No Supply可以是任何颜色的小实体，书：十字星/纺锤线）
+        no_supply_mask = (body_ratio < self.thresholds.VSA_NO_SUPPLY_BODY_RATIO) & (df['Volume'] < vol_ma * self.thresholds.VSA_NO_SUPPLY_VOL_RATIO) & (close_position >= self.thresholds.VSA_NO_SUPPLY_CLOSE_POS)
+        no_demand_mask = (body_ratio < self.thresholds.VSA_NO_DEMAND_BODY_RATIO) & (df['Volume'] < vol_ma * self.thresholds.VSA_NO_DEMAND_VOL_RATIO) & (close_position <= self.thresholds.VSA_NO_DEMAND_CLOSE_POS)
         stopping_mask = (df['Volume'] > vol_ma * self.thresholds.VSA_STOPPING_VOL_RATIO) & (body_ratio < self.thresholds.VSA_STOPPING_BODY_RATIO) & (close_position >= self.thresholds.VSA_STOPPING_CLOSE_POS)
 
         res = {'no_supply': {'detected': False}, 'no_demand': {'detected': False}, 'stopping_vol': {'detected': False}}

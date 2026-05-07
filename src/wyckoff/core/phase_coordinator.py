@@ -75,7 +75,7 @@ class PhaseCoordinator:
         sow_res = self.detector.detect_sow()
 
         tr_res = self.detector.detect_trading_range()
-        lps_res = self.detector.detect_lps(sos_res)
+        lps_res = self.detector.detect_lps(sos_res, spring_res)
         lpsy_res = self.detector.detect_lpsy(trading_range=tr_res)
         joc_res = self.detector.detect_joc()
         fti_res = self.detector.detect_fti()

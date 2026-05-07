@@ -71,7 +71,19 @@ class StrengthWeaknessDetector(BaseDetector):
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
         price_change_threshold = self.thresholds.SOS_PRICE_CHANGE_DEFAULT
         
-        sos_mask = (df['Close'] > df['Open']) & (df['Volume'] > vol_ma * vol_ratio_threshold) & (price_pct_change > price_change_threshold)
+        # 修复 #6: SOS 必须收盘在日内高位（无长上影线），防止 UT 误判为 SOS
+        close_position = (df['Close'] - df['Low']) / (df['High'] - df['Low']).replace(0, float('nan'))
+        upper_shadow = df['High'] - df['Close']
+        body = (df['Close'] - df['Open']).abs()
+        upper_shadow_ratio = upper_shadow / (body + 0.001)
+
+        sos_mask = (
+            (df['Close'] > df['Open']) &
+            (df['Volume'] > vol_ma * vol_ratio_threshold) &
+            (price_pct_change > price_change_threshold) &
+            (close_position >= 0.70) &                       # 收盘在高位70%以上
+            (upper_shadow_ratio < 0.50)                       # 上影线不超过实体50%
+        )
         if sos_mask.any():
             idx = df[sos_mask].index[-1]
             
@@ -115,8 +127,19 @@ class StrengthWeaknessDetector(BaseDetector):
         
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
         price_change_threshold = self.thresholds.SOW_PRICE_CHANGE_DEFAULT
-        
-        sow_mask = (df['Close'] < df['Open']) & (df['Volume'] > vol_ma * vol_ratio_threshold) & (price_pct_change < price_change_threshold)
+
+        close_position = (df['Close'] - df['Low']) / (df['High'] - df['Low']).replace(0, float('nan'))
+        lower_shadow = df['Low'] - df['Open'].where(df['Open'] < df['Close'], df['Close'])
+        body = (df['Close'] - df['Open']).abs()
+        lower_shadow_ratio = lower_shadow.abs() / (body + 0.001)
+
+        sow_mask = (
+            (df['Close'] < df['Open']) &
+            (df['Volume'] > vol_ma * vol_ratio_threshold) &
+            (price_pct_change < price_change_threshold) &
+            (close_position <= 0.30) &                       # 收盘在低位30%以下
+            (lower_shadow_ratio < 0.50)                       # 下影线不超过实体50%
+        )
         if sow_mask.any():
             idx = df[sow_mask].index[-1]
             return {
@@ -130,7 +153,7 @@ class StrengthWeaknessDetector(BaseDetector):
             }
         return {'detected': False}
 
-    def detect_lps(self, window: int = 30) -> Dict:
+    def detect_lps(self, window: int = 30, spring_res: Dict = None) -> Dict:
         """
         检测 LPS (Last Point of Support)
 
@@ -138,9 +161,23 @@ class StrengthWeaknessDetector(BaseDetector):
         - 仅在 Accumulation / Reaccumulation 阶段才标记为正式 LPS
         - Markup 阶段降级为 "pullback"（缩量回踩）
         - 阶段不明或 Distribution 降级为 "pullback_weak"（缩量回调，支撑测试）
+
+        Args:
+            window: 检测窗口
+            spring_res: Spring检测结果，用于验证LPS低点>Spring低点
         """
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
+
+        # 提取 Spring 低点（若有）
+        spring_low = None
+        if spring_res and spring_res.get('detected'):
+            sl = spring_res.get('latest_spring') or (
+                spring_res.get('signals', [{}])[-1] if spring_res.get('signals') else {}
+            )
+            spring_low = sl.get('breakdown_price') if isinstance(sl, dict) else (
+                getattr(sl, 'breakdown_price', None) if hasattr(sl, 'breakdown_price') else None
+            )
 
         # 判断阶段上下文
         is_accumulation = self._is_accumulation_phase()
@@ -160,6 +197,10 @@ class StrengthWeaknessDetector(BaseDetector):
             low_volume = current['Volume'] < vol_ma.iloc[i] * self.thresholds.VOLUME_CONFIRMATION['weak']
             higher_low = current['Low'] > df.iloc[i-20:i-5]['Low'].min()
 
+            # 修复 #5: LPS 低点必须 > Spring 低点（书：回调不破Spring低点）
+            if spring_low is not None and current['Low'] <= spring_low:
+                continue
+
             if is_pullback and low_volume and higher_low:
                 signal = {
                     'date': df.index[i],
@@ -171,18 +212,22 @@ class StrengthWeaknessDetector(BaseDetector):
                 # 阶段约束：只有 Accumulation 阶段才叫 LPS
                 if is_accumulation:
                     signal['signal_type'] = 'lps'
-                    signal['note'] = '吸筹阶段最后支撑点（LPS）'
+                    note = '吸筹阶段最后支撑点（LPS）'
                 elif is_markup:
                     signal['signal_type'] = 'pullback'
-                    signal['note'] = ('上涨趋势缩量回踩（非正式LPS，因缺少SC/AR/ST吸筹前置结构；'
-                                      '此处定义为趋势中的正常回调支撑测试）')
+                    note = ('上涨趋势缩量回踩（非正式LPS，因缺少SC/AR/ST吸筹前置结构；'
+                            '此处定义为趋势中的正常回调支撑测试）')
                 elif is_distribution:
                     signal['signal_type'] = 'pullback_weak'
-                    signal['note'] = '派发阶段支撑测试，供应仍可能主导，不视为买入信号'
+                    note = '派发阶段支撑测试，供应仍可能主导，不视为买入信号'
                 else:
                     signal['signal_type'] = 'pullback'
-                    signal['note'] = ('阶段不明，仅视为缩量回调支撑测试，'
-                                      '不等同于威科夫定义的LPS（缺少SC/AR/ST前置结构）')
+                    note = ('阶段不明，仅视为缩量回调支撑测试，'
+                            '不等同于威科夫定义的LPS（缺少SC/AR/ST前置结构）')
+
+                if spring_low is not None:
+                    note += f' | LPS低点({current["Low"]:.2f}) > Spring低点({spring_low:.2f}) ✓'
+                signal['note'] = note
 
                 lps_signals.append(signal)
 
@@ -191,6 +236,7 @@ class StrengthWeaknessDetector(BaseDetector):
                 'detected': True,
                 'signals': lps_signals,
                 'latest': lps_signals[-1],
+                'spring_low': spring_low,
                 'phase_context': {
                     'phase': self._current_phase or 'unknown',
                     'is_accumulation': is_accumulation,

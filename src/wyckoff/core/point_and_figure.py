@@ -203,10 +203,10 @@ class PointAndFigureCalculator:
             # 派发期：目标从已知TR下沿或积累区下沿开始投射
             dist_base = known_tr_low if known_tr_low is not None else accumulation_low
             targets = {
-                'target_1': round(dist_base - base_effect * 0.618, 2),
-                'target_2': round(dist_base - base_effect, 2),
-                'target_3': round(dist_base - base_effect * 1.618, 2),
-                'full_target': round(dist_base - base_effect * 2.0, 2)
+                'target_1': round(dist_base - base_effect * 1.0, 2),
+                'target_2': round(dist_base - base_effect * 1.618, 2),
+                'target_3': round(dist_base - base_effect * 2.618, 2),
+                'full_target': round(dist_base - base_effect * 3.0, 2)
             }
             base_price = dist_base
             breakout_direction = 'down'
@@ -216,20 +216,20 @@ class PointAndFigureCalculator:
             if breakout_direction == 'up':
                 acc_base = known_tr_high if known_tr_high is not None else accumulation_high
                 targets = {
-                    'target_1': round(acc_base + base_effect * 0.618, 2),
-                    'target_2': round(acc_base + base_effect, 2),
-                    'target_3': round(acc_base + base_effect * 1.618, 2),
-                    'full_target': round(acc_base + base_effect * 2.0, 2)
+                    'target_1': round(acc_base + base_effect * 1.0, 2),
+                    'target_2': round(acc_base + base_effect * 1.618, 2),
+                    'target_3': round(acc_base + base_effect * 2.618, 2),
+                    'full_target': round(acc_base + base_effect * 3.0, 2)
                 }
                 base_price = acc_base
                 direction_note = '吸筹期因果法则：水平准备触发上涨目标'
             else:
                 dist_base = known_tr_low if known_tr_low is not None else accumulation_low
                 targets = {
-                    'target_1': round(dist_base - base_effect * 0.618, 2),
-                    'target_2': round(dist_base - base_effect, 2),
-                    'target_3': round(dist_base - base_effect * 1.618, 2),
-                    'full_target': round(dist_base - base_effect * 2.0, 2)
+                    'target_1': round(dist_base - base_effect * 1.0, 2),
+                    'target_2': round(dist_base - base_effect * 1.618, 2),
+                    'target_3': round(dist_base - base_effect * 2.618, 2),
+                    'full_target': round(dist_base - base_effect * 3.0, 2)
                 }
                 base_price = dist_base
                 direction_note = '吸筹期因果法则：水平准备触发下跌目标'

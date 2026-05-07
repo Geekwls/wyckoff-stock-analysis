@@ -179,9 +179,9 @@ class WyckoffPatternDetector:
         """
         return self.phase_coordinator.collect_all_events()
 
-    def detect_lps(self, sos_result: Dict = None) -> Dict:
+    def detect_lps(self, sos_result: Dict = None, spring_res: Dict = None) -> Dict:
         """检测 LPS (Last Point of Support)"""
-        return self.sw_detector.detect_lps()
+        return self.sw_detector.detect_lps(spring_res=spring_res)
 
     def detect_lpsy(self, sow_result: Dict = None, trading_range: Dict = None) -> Dict:
         """检测 LPSY (Last Point of Supply)"""
