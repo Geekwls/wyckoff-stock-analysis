@@ -169,13 +169,18 @@ class LpsySignalModel(BaseModel):
     price: float = Field(description="价格")
     volume_ratio: float = Field(description="量比")
     resistance_level: float = Field(description="阻力位")
+    signal_type: Optional[str] = Field(default=None, description="信号类型: lpsy/weak_reaction")
+    volume: Optional[float] = Field(default=None, description="实际成交量")
 
 class LpsyModel(BaseModel):
     """LPSY事件"""
     detected: bool = Field(description="是否检测到")
     error: Optional[str] = Field(default=None, description="错误信息")
-    signals: Optional[List[LpsySignalModel]] = Field(default=None, description="信号列表")
+    signals: Optional[List[LpsySignalModel]] = Field(default=None, description="LPSY信号列表")
+    weak_reactions: Optional[List[LpsySignalModel]] = Field(default=None, description="弱势反抽列表(未破支撑)")
     latest: Optional[LpsySignalModel] = Field(default=None, description="最新LPSY")
+    support_level: Optional[float] = Field(default=None, description="TR支撑位(冰线)")
+    support_broken: Optional[bool] = Field(default=None, description="支撑是否已被有效跌破")
 
 class JocModel(BaseModel):
     """JOC (Jump Over Creek) 模型"""

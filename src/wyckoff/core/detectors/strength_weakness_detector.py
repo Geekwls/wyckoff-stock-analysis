@@ -166,10 +166,11 @@ class StrengthWeaknessDetector(BaseDetector):
         if trading_range and 'low' in trading_range:
             tr_support = trading_range['low']
         
-        # 检查支撑是否已被跌破（在检测窗口范围内）
+        # 检查支撑是否已被有效跌破（仅检查窗口近半段，避免引用BC前历史低点）
         support_broken = False
         if tr_support is not None:
-            support_broken = df['Low'].min() < tr_support
+            recent_half = df.tail(max(len(df) // 2, 5))
+            support_broken = recent_half['Low'].min() < tr_support
         
         signals = []
         weak_reactions = []
@@ -184,6 +185,7 @@ class StrengthWeaknessDetector(BaseDetector):
                 signal = {
                     'date': df.index[i],
                     'price': current['Close'],
+                    'volume': float(current['Volume']),
                     'volume_ratio': round(current['Volume'] / vol_ma.iloc[i], 2),
                     'resistance_level': df['MA20'].iloc[i]
                 }

@@ -105,13 +105,18 @@ class ClassicPatternDetector(BaseDetector):
             ar_date = df_after['Low'].idxmin()
             # 计算从BC实体中位值的真实回落百分比
             decline_pct = (ar_price - sc_benchmark) / sc_benchmark if sc_benchmark > 0 else 0
+            # 同时计算从BC高点的名义回落（仅用于对比参考）
+            bc_high = climax_res.get('price', 0)
+            nominal_decline = (ar_price - bc_high) / bc_high if bc_high > 0 else 0
             return {
                 'detected': True,
                 'type': 'automatic_reaction',
                 'date': ar_date,
                 'price': ar_price,
                 'decline_pct': round(decline_pct, 4),
-                'sc_benchmark': round(sc_benchmark, 2)
+                'sc_benchmark': round(sc_benchmark, 2),
+                'climax_high': round(bc_high, 2),
+                'nominal_decline_pct': round(nominal_decline, 4),
             }
 
     def detect_secondary_test(self, climax_res: Dict, ar_res: Dict) -> Dict:

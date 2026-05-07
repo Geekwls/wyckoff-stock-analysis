@@ -200,35 +200,38 @@ class PointAndFigureCalculator:
         is_distribution = 'distribution' in phase.lower() or '派发' in phase
         
         if is_distribution:
-            # 派发期：强制使用下跌目标
+            # 派发期：目标从已知TR下沿或积累区下沿开始投射
+            dist_base = known_tr_low if known_tr_low is not None else accumulation_low
             targets = {
-                'target_1': round(accumulation_low - base_effect * 0.618, 2),
-                'target_2': round(accumulation_low - base_effect, 2),
-                'target_3': round(accumulation_low - base_effect * 1.618, 2),
-                'full_target': round(accumulation_low - base_effect * 2.0, 2)
+                'target_1': round(dist_base - base_effect * 0.618, 2),
+                'target_2': round(dist_base - base_effect, 2),
+                'target_3': round(dist_base - base_effect * 1.618, 2),
+                'full_target': round(dist_base - base_effect * 2.0, 2)
             }
-            base_price = accumulation_low
-            breakout_direction = 'down'  # 强制为下跌方向
+            base_price = dist_base
+            breakout_direction = 'down'
             direction_note = '派发期因果法则：水平准备触发下跌目标'
         else:
             # 吸筹期或上涨趋势：使用原始方向
             if breakout_direction == 'up':
+                acc_base = known_tr_high if known_tr_high is not None else accumulation_high
                 targets = {
-                    'target_1': round(accumulation_high + base_effect * 0.618, 2),
-                    'target_2': round(accumulation_high + base_effect, 2),
-                    'target_3': round(accumulation_high + base_effect * 1.618, 2),
-                    'full_target': round(accumulation_high + base_effect * 2.0, 2)
+                    'target_1': round(acc_base + base_effect * 0.618, 2),
+                    'target_2': round(acc_base + base_effect, 2),
+                    'target_3': round(acc_base + base_effect * 1.618, 2),
+                    'full_target': round(acc_base + base_effect * 2.0, 2)
                 }
-                base_price = accumulation_high
+                base_price = acc_base
                 direction_note = '吸筹期因果法则：水平准备触发上涨目标'
             else:
+                dist_base = known_tr_low if known_tr_low is not None else accumulation_low
                 targets = {
-                    'target_1': round(accumulation_low - base_effect * 0.618, 2),
-                    'target_2': round(accumulation_low - base_effect, 2),
-                    'target_3': round(accumulation_low - base_effect * 1.618, 2),
-                    'full_target': round(accumulation_low - base_effect * 2.0, 2)
+                    'target_1': round(dist_base - base_effect * 0.618, 2),
+                    'target_2': round(dist_base - base_effect, 2),
+                    'target_3': round(dist_base - base_effect * 1.618, 2),
+                    'full_target': round(dist_base - base_effect * 2.0, 2)
                 }
-                base_price = accumulation_low
+                base_price = dist_base
                 direction_note = '吸筹期因果法则：水平准备触发下跌目标'
         
         return {
@@ -348,10 +351,16 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
     pnf_method = result.get('_pnf_method', 'auto_detect')
     if known_tr_high is not None and known_tr_low is not None:
         method_label = 'point_and_figure_from_tr'
+        targets = result.get('targets', {})
+        direction = result.get('breakout_direction', 'up')
+        if direction == 'down':
+            desc_targets = f"若跌破 {known_tr_low:.2f}，第一目标 {targets.get('target_1', 0):.2f}，第二目标 {targets.get('target_2', 0):.2f}"
+        else:
+            desc_targets = f"若突破 {known_tr_high:.2f}，第一目标 {targets.get('target_1', 0):.2f}，第二目标 {targets.get('target_2', 0):.2f}"
         description = (
             f"基于当前TR（{known_tr_low:.2f}-{known_tr_high:.2f}）内的点数图水平计数："
             f"{result.get('horizontal_count', 0)}列 × 箱体大小{box_size_pct:.0f}% = "
-            f"目标幅度{result.get('base_effect', 0):.2f}"
+            f"目标幅度{result.get('base_effect', 0):.2f}。{desc_targets}"
         )
     else:
         method_label = 'point_and_figure'
