@@ -85,6 +85,9 @@ class SpringSignalModel(BaseModel):
     recovery_price: float = Field(description="收回价格")
     recovery_days: int = Field(description="收回天数")
     volume_ratio: float = Field(description="量比")
+    shadow_ratio: Optional[float] = Field(default=None, description="下影线与实体比例")
+    total_score: Optional[float] = Field(default=None, description="综合评分(0-100)")
+    strength: Optional[str] = Field(default=None, description="信号强度: strong/normal/weak")
 
 
 class SpringModel(BaseModel):
@@ -129,6 +132,8 @@ class SosModel(BaseModel):
     error: Optional[str] = Field(default=None, description="错误信息")
     signals: Optional[List[SosSignalModel]] = Field(default=None, description="信号列表")
     latest: Optional[SosSignalModel] = Field(default=None, description="最新SOS")
+    breakout_type: Optional[str] = Field(default=None, description="突破类型: breakout_sos/range_high_sos/within_range_sos")
+    interpretation: Optional[str] = Field(default=None, description="当前上下文下的信号解释")
 
 
 class SowSignalModel(BaseModel):
@@ -154,6 +159,8 @@ class LpsSignalModel(BaseModel):
     price: float = Field(description="价格")
     volume_ratio: float = Field(description="量比")
     support_level: float = Field(description="支撑位")
+    signal_type: Optional[str] = Field(default=None, description="信号类型: lps/pullback/pullback_weak")
+    note: Optional[str] = Field(default=None, description="阶段上下文说明")
 
 class LpsModel(BaseModel):
     """LPS事件"""
@@ -161,6 +168,7 @@ class LpsModel(BaseModel):
     error: Optional[str] = Field(default=None, description="错误信息")
     signals: Optional[List[LpsSignalModel]] = Field(default=None, description="信号列表")
     latest: Optional[LpsSignalModel] = Field(default=None, description="最新LPS")
+    phase_context: Optional[Dict[str, Any]] = Field(default=None, description="检测时的阶段上下文")
 
 
 class LpsySignalModel(BaseModel):

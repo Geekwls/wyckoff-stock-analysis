@@ -132,9 +132,13 @@ class TradingPlanGenerator:
         entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
         
         if is_bullish:
+            # 止损修复：使用 ATR 倍数 + TR 下沿兜底，避免全局下沿导致~20%止损
+            # 保守：2.5倍ATR（约6-8%），激进：1.5倍ATR（约4-5%）
+            conservative_stop = round(max(current_price - 2.5 * atr, low), 2)
+            aggressive_stop = round(max(current_price - 1.5 * atr, low), 2)
             stop_loss = {
-                "conservative": round(low, 2),
-                "aggressive": round(low - atr, 2),
+                "conservative": conservative_stop,
+                "aggressive": aggressive_stop,
                 "atr_dynamic_stop": round(current_price - 1.5 * atr, 2)
             }
             targets = {
@@ -142,9 +146,11 @@ class TradingPlanGenerator:
                 "target_2": round(high + atr * 3, 2)
             }
         else:
+            conservative_stop = round(min(high, current_price + 2.5 * atr), 2)
+            aggressive_stop = round(min(high, current_price + 1.5 * atr), 2)
             stop_loss = {
-                "conservative": round(high, 2),
-                "aggressive": round(high + atr, 2),
+                "conservative": conservative_stop,
+                "aggressive": aggressive_stop,
                 "atr_dynamic_stop": round(current_price + 1.5 * atr, 2)
             }
             targets = {

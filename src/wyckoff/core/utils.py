@@ -37,7 +37,8 @@ class PhaseAdapter:
     @staticmethod
     def get_market_side(phase: Union[str, WyckoffPhase]) -> str:
         """返回买方(bullish)或卖方(bearish)市场侧"""
-        if PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase):
+        if (PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase)
+                or PhaseAdapter.is_entry_phase(phase)):
             return MarketSide.BULLISH.value
         if PhaseAdapter.is_distribution(phase) or PhaseAdapter.is_markdown(phase):
             return MarketSide.BEARISH.value

@@ -75,7 +75,22 @@ class StrengthWeaknessDetector(BaseDetector):
         if sos_mask.any():
             idx = df[sos_mask].index[-1]
             
-            # 在吸筹阶段或上涨趋势中，才是真正的SOS
+            # 区分突破性质：SOS 是否突破了近期 TR 上沿
+            pre_sos_high = df.loc[:idx]['High'].iloc[-20:].max() if len(df.loc[:idx]) >= 20 else df['High'].max()
+            tr_data = self.data.tail(60)
+            tr_high = tr_data['High'].max()
+            sos_close = df.loc[idx, 'Close']
+            
+            if sos_close >= tr_high * 0.98:
+                breakout_type = 'breakout_sos'
+                interpretation = '强势突破前期盘整区间阻力，JOC前兆信号'
+            elif sos_close >= pre_sos_high * 0.98:
+                breakout_type = 'range_high_sos'
+                interpretation = '突破近20日高点，但仍在更大区间之内'
+            else:
+                breakout_type = 'within_range_sos'
+                interpretation = '区间内放量阳线，非突破性信号'
+            
             return {
                 'detected': True, 
                 'type': 'sos', 
@@ -83,9 +98,10 @@ class StrengthWeaknessDetector(BaseDetector):
                 'price': df.loc[idx, 'Close'], 
                 'volume_ratio': round(df.loc[idx, 'Volume']/vol_ma.loc[idx], 2), 
                 'price_change': round(price_pct_change.loc[idx], 4), 
-                'breakthrough_level': df['High'].rolling(20).max().iloc[-1],
+                'breakthrough_level': round(tr_high, 3),
+                'breakout_type': breakout_type,
                 'phase_context': 'accumulation_or_uptrend',
-                'interpretation': '吸筹阶段的强势突破，是买入信号'
+                'interpretation': interpretation
             }
         return {'detected': False}
 
@@ -115,32 +131,75 @@ class StrengthWeaknessDetector(BaseDetector):
         return {'detected': False}
 
     def detect_lps(self, window: int = 30) -> Dict:
-        """检测 LPS (Last Point of Support)"""
+        """
+        检测 LPS (Last Point of Support)
+
+        阶段约束（新增修复）：
+        - 仅在 Accumulation / Reaccumulation 阶段才标记为正式 LPS
+        - Markup 阶段降级为 "pullback"（缩量回踩）
+        - 阶段不明或 Distribution 降级为 "pullback_weak"（缩量回调，支撑测试）
+        """
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
-        
+
+        # 判断阶段上下文
+        is_accumulation = self._is_accumulation_phase()
+        is_markup = (self._current_phase is not None
+                     and ('Markup' in self._current_phase or '上涨' in self._current_phase))
+        is_distribution = self._is_distribution_phase()
+
         df = self._ensure_columns(self.data.tail(window), ['Volume_MA20', 'MA20'])
         df_wide = self._ensure_columns(self.data, ['Volume_MA20'])
         vol_ma = df_wide['Volume_MA20'].reindex(df.index)
-        
+
         lps_signals = []
         for i in range(5, len(df)):
             current = df.iloc[i]
-            
+
             is_pullback = (current['Low'] < df.iloc[i-5:i]['High'].max()) and (current['Close'] > df['MA20'].iloc[i])
             low_volume = current['Volume'] < vol_ma.iloc[i] * self.thresholds.VOLUME_CONFIRMATION['weak']
             higher_low = current['Low'] > df.iloc[i-20:i-5]['Low'].min()
-            
+
             if is_pullback and low_volume and higher_low:
-                lps_signals.append({
+                signal = {
                     'date': df.index[i],
                     'price': current['Close'],
                     'volume_ratio': round(current['Volume'] / vol_ma.iloc[i], 2),
                     'support_level': df['MA20'].iloc[i]
-                })
-        
+                }
+
+                # 阶段约束：只有 Accumulation 阶段才叫 LPS
+                if is_accumulation:
+                    signal['signal_type'] = 'lps'
+                    signal['note'] = '吸筹阶段最后支撑点（LPS）'
+                elif is_markup:
+                    signal['signal_type'] = 'pullback'
+                    signal['note'] = ('上涨趋势缩量回踩（非正式LPS，因缺少SC/AR/ST吸筹前置结构；'
+                                      '此处定义为趋势中的正常回调支撑测试）')
+                elif is_distribution:
+                    signal['signal_type'] = 'pullback_weak'
+                    signal['note'] = '派发阶段支撑测试，供应仍可能主导，不视为买入信号'
+                else:
+                    signal['signal_type'] = 'pullback'
+                    signal['note'] = ('阶段不明，仅视为缩量回调支撑测试，'
+                                      '不等同于威科夫定义的LPS（缺少SC/AR/ST前置结构）')
+
+                lps_signals.append(signal)
+
         if lps_signals:
-            return {'detected': True, 'signals': lps_signals, 'latest': lps_signals[-1]}
+            return {
+                'detected': True,
+                'signals': lps_signals,
+                'latest': lps_signals[-1],
+                'phase_context': {
+                    'phase': self._current_phase or 'unknown',
+                    'is_accumulation': is_accumulation,
+                    'has_lps_qualification': is_accumulation,
+                    'note': ('当前阶段不是标准Accumulation，'
+                             '信号已按阶段上下文重新定性为"缩量回踩"而非正式LPS'
+                             if not is_accumulation else None)
+                }
+            }
         return {'detected': False}
 
     def detect_lpsy(self, window: int = 30, trading_range: Dict = None) -> Dict:

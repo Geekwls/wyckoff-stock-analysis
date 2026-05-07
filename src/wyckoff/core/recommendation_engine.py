@@ -59,13 +59,15 @@ class RecommendationEngine:
         reasons = []
         weights = self.thresholds.QUALITY_WEIGHTS
         
-        # 主要信号权重分配
+        # 主要信号权重分配（含 LPS/LPSY，修复：之前权重为0但参与冲突计数）
         important_signals = [
             ('joc', 40),
             ('spring', 35),
             ('sos', 25),
+            ('lps', 15),
             ('upthrust', 35),
             ('sow', 25),
+            ('lpsy', 15),
             ('fti', 40)
         ]
         
@@ -147,17 +149,25 @@ class RecommendationEngine:
             base_score -= self.thresholds.CONFLICT_PENALTY
             reasons.append(f"检测到多空信号冲突 (惩罚 -{self.thresholds.CONFLICT_PENALTY}分)")
 
-        # 市场环境加成
+        # 市场环境加成（双向对称：多头/空头都有加分和扣分）
         phase_str = pattern_results.get('phase', 'Unknown')
         current_side = PhaseAdapter.get_market_side(phase_str)
         is_market_bullish = market_env in [MarketEnvironment.STRONG_BULL, MarketEnvironment.BULL]
-        
+        is_market_bearish = market_env in [MarketEnvironment.STRONG_BEAR, MarketEnvironment.BEAR]
+
         if is_market_bullish and current_side == MarketSide.BULLISH:
             base_score += 15
             reasons.append("顺应大盘多头环境 (+15分)")
         elif not is_market_bullish and current_side == MarketSide.BULLISH:
             base_score -= 10
             reasons.append("大盘环境不利于做多 (-10分)")
+
+        if is_market_bearish and current_side == MarketSide.BEARISH:
+            base_score += 15
+            reasons.append("顺应大盘空头环境 (+15分)")
+        elif not is_market_bearish and current_side == MarketSide.BEARISH:
+            base_score -= 10
+            reasons.append("大盘环境不利于做空 (-10分)")
 
         final_score = int(max(0, min(base_score, 100)))
 

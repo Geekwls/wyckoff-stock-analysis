@@ -22,6 +22,7 @@ from .backtest_engine import BacktestEngine
 from .multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from .sentiment_analyzer import SentimentAnalyzer
 from .trading_plan_generator import TradingPlanGenerator
+from .recommendation_engine import RecommendationEngine
 import logging
 logger = logging.getLogger(__name__)
 
@@ -835,6 +836,13 @@ class WyckoffReportGenerator:
         else:
             conflict_reason = f"日线{side.value}与周线{weekly_trend}冲突" if has_conflict else ""
 
+        # 月线空头特别警告（独立于agreement检查）
+        monthly_warning = ""
+        if monthly_trend == 'bearish' and side == MarketSide.BULLISH:
+            monthly_warning = "【月线空头压制】高时间框架趋势仍为看跌，日线做多信号质量需降级，突破持续性存疑"
+        elif monthly_trend == 'bullish' and side == MarketSide.BEARISH:
+            monthly_warning = "【月线多头托底】高时间框架趋势仍为看涨，日线做空空间有限，警惕假跌破"
+
         return {
             "has_conflict": has_conflict,
             "daily_side": side.value if hasattr(side, 'value') else str(side),
@@ -842,6 +850,7 @@ class WyckoffReportGenerator:
             "monthly_trend": monthly_trend,
             "agreement": agreement,
             "conflict_reason": conflict_reason,
+            "monthly_warning": monthly_warning,
             "action": "defer_execution" if has_conflict else "normal"
         }
 
@@ -1208,12 +1217,16 @@ class WyckoffReportGenerator:
             agreement=agreement
         )
         
-        # 生成风险建议，传入跨周期冲突信息
+        # 生成风险建议，传入跨周期冲突信息（含月线趋势特别警告）
+        conflict_details = conflict.get('conflict_reason', '')
+        monthly_warning = conflict.get('monthly_warning', '')
+        if monthly_warning:
+            conflict_details = f"{conflict_details}；{monthly_warning}" if conflict_details else monthly_warning
         risk_advice = self.rec_engine.generate_risk_advice(
             signal_quality, 
             trading_plan,
             has_conflict=conflict.get('has_conflict', False),
-            conflict_details=conflict.get('description', '')
+            conflict_details=conflict_details
         )
         
         # 使用BacktestEngine获取历史表现

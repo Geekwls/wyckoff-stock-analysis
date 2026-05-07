@@ -197,91 +197,180 @@ class ClassicPatternDetector(BaseDetector):
     def _detect_spring_impl(self, lookback: int) -> Dict:
         if self.data is None or len(self.data) < 30:
             return {'detected': False, 'reason': 'insufficient_data'}
-            
+
+        # 阶段感知验证：派发阶段直接拒绝（当阶段已识别时）
+        if self._current_phase and ('Distribution' in self._current_phase or '派发' in self._current_phase):
+            return {'detected': False, 'reason': 'distribution_phase_no_spring'}
+
         df = self.data.tail(lookback).copy()
-        support_level = self._check_spring_preconditions(df)
-        if support_level is None:
+
+        support = self._calculate_support_level_spring(df)
+        if support is None:
             return {'detected': False, 'reason': 'no_trading_range'}
-            
-        search_df, breakdown_indices, recovery_info = self._find_spring_breakdowns(df, support_level)
-        if breakdown_indices is None or len(breakdown_indices) == 0:
-            return {'detected': False, 'reason': 'no_breakdown_found'}
-            
-        springs = self._verify_spring_recoveries(search_df, breakdown_indices, support_level, recovery_info)
-        
+
+        # 验证盘整区间幅度
+        range_pct = (df['High'].max() - df['Low'].min()) / df['Low'].min()
+        if range_pct >= self.config.spring_range_threshold:
+            return {'detected': False, 'reason': 'range_too_wide'}
+
+        # 在最近30根K线中搜索Spring
+        search_window = min(30, len(df))
+        recent = df.tail(search_window)
+        if len(recent) < 4:
+            return {'detected': False, 'reason': 'insufficient_search_data'}
+
+        # 使用全数据计算的 Volume_MA20 作为成交量基线，避免窗口边缘数据不可用
+        vol_ma20 = (recent['Volume_MA20'] if 'Volume_MA20' in recent.columns
+                    else df['Volume'].rolling(20, min_periods=1).mean().tail(search_window))
+        springs = []
+
+        for i in range(0, len(recent) - 2):
+            cur = recent.iloc[i]
+            nxt = recent.iloc[i + 1]
+            d2 = recent.iloc[i + 2]
+
+            # 条件1：价格跌破支撑位（允许3%误差缓冲）
+            if cur['Low'] >= support * 0.97:
+                continue
+
+            # 条件2：次日收盘回到支撑位之上
+            if nxt['Close'] <= support:
+                continue
+
+            # 条件3：次日收盘高于跌破日收盘（阳线确认）
+            if nxt['Close'] <= cur['Close']:
+                continue
+
+            # 条件4：Spring当日放量（> 1.2倍20日均量）
+            cur_vol_r = cur['Volume'] / vol_ma20.iloc[i] if vol_ma20.iloc[i] > 0 else 1
+            if cur_vol_r < 1.2:
+                continue
+
+            # 条件5：下影线分析（下影线 >= 实体1.5倍）
+            body = abs(cur['Close'] - cur['Open'])
+            lower_shadow = max(0, min(cur['Open'], cur['Close']) - cur['Low'])
+            shadow_r = lower_shadow / (body + 0.001)
+            if shadow_r < 1.5:
+                continue
+
+            # 条件6：跟随确认评分
+            follow_score = self._calculate_spring_follow_score(nxt, d2)
+
+            # 综合评分（100分制）
+            recovery_pct = (nxt['Close'] - support) / support * 100 if support > 0 else 0
+            total_score = (
+                min(cur_vol_r * 10, 30) +      # 成交量: 0-30
+                min(shadow_r * 5, 20) +         # 影线: 0-20
+                min(follow_score * 3, 30) +     # 跟随: 0-30
+                min(recovery_pct, 10) +          # 收回幅度: 0-10
+                10                                # 基础分
+            )
+            total_score = min(total_score, 100)
+
+            spring = {
+                'date': nxt.name,
+                'breakdown_date': cur.name,
+                'breakdown_price': round(float(cur['Low']), 2),
+                'support_level': round(support, 2),
+                'recovery_price': round(float(nxt['Close']), 2),
+                'recovery_days': 1,
+                'volume_ratio': round(cur_vol_r, 2),
+                'shadow_ratio': round(shadow_r, 2),
+                'follow_up_score': follow_score,
+                'total_score': total_score,
+                'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
+            }
+            springs.append(spring)
+
         if springs:
-            return {'detected': True, 'signals': springs, 'latest_spring': springs[-1]}
+            return {
+                'detected': True,
+                'signals': springs,
+                'latest_spring': springs[-1],
+                'method': 'enhanced_spring_detection',
+            }
         return {'detected': False, 'reason': 'no_spring_found'}
 
-    def _check_spring_preconditions(self, df: pd.DataFrame) -> Optional[float]:
+    def _calculate_support_level_spring(self, df: pd.DataFrame) -> Optional[float]:
         """
-        检查前置条件：前 N-M 根定义区间，计算支撑位。
+        计算盘整区间下沿支撑位（5%分位值 + 低点聚类均值）
         """
-        M = self.config.breakout_search_window
-        if len(df) <= M:
+        if len(df) < 20:
             return None
-            
-        range_df = df.iloc[:-M] # 前 N-M 根定义区间
-        high_max = range_df['High'].max()
-        low_min = range_df['Low'].min()
-        
-        range_pct = (high_max - low_min) / low_min
-        if range_pct < self.config.spring_range_threshold:
-            return low_min
-        return None
 
-    def _find_spring_breakdowns(self, df: pd.DataFrame, support_level: float):
-        """
-        在最后 M 根中找突破/回归。
-        """
-        M = self.config.breakout_search_window
-        breakout_df = df.tail(M)
-        
-        breakdown_mask = breakout_df['Low'] < support_level
-        breakdown_indices = breakout_df.index[breakdown_mask]
-        
-        # 寻找回归（可以在整个 df 中寻找，但触发点必须在 breakout_df 之后或之内）
-        recovery_mask = df['Close'] > support_level
-        recovery_info = {
-            'mask': recovery_mask,
-            'indices': df.index[recovery_mask]
-        }
-        return df, breakdown_indices, recovery_info
+        lows = df['Low'].values
+        sorted_lows = sorted(lows)
 
-    def _verify_spring_recoveries(self, df: pd.DataFrame, breakdown_indices, support_level, recovery_info):
-        springs = []
-        recovery_mask = recovery_info['mask']
-        recovery_indices = recovery_info['indices']
-        
-        for b_idx in breakdown_indices[-3:]:
-            later_recoveries = recovery_indices[recovery_indices > b_idx]
-            if len(later_recoveries) > 0:
-                r_idx = later_recoveries[0]
-                days_to_recover = (df.index.get_indexer([r_idx])[0] - df.index.get_indexer([b_idx])[0])
-                
-                if days_to_recover <= self.config.spring_max_recovery_days:
-                    b_vol = df.loc[b_idx, 'Volume']
-                    r_vol = df.loc[r_idx, 'Volume']
-                    
-                    # 跟随确认 (P1 #3.2)：Spring 之后 3 日内需出现更高点
-                    follow_through = df[df.index > r_idx].head(3)
-                    ft_quality = 0
-                    if len(follow_through) > 0:
-                        higher_highs = (follow_through['High'] > df.loc[r_idx, 'High']).sum()
-                        ft_quality = (higher_highs / len(follow_through)) * 100
-                    
-                    if r_vol > b_vol * 1.1:
-                        springs.append({
-                            'date': r_idx,
-                            'breakdown_date': b_idx,
-                            'breakdown_price': df.loc[b_idx, 'Low'],
-                            'support_level': support_level,
-                            'recovery_price': df.loc[r_idx, 'Close'],
-                            'recovery_days': int(days_to_recover),
-                            'volume_ratio': round(r_vol / b_vol, 2),
-                            'follow_through_quality': round(ft_quality, 2)
-                        })
-        return springs
+        p5_idx = max(0, int(len(sorted_lows) * 0.05))
+        support = sorted_lows[p5_idx]
+
+        p20_idx = max(0, int(len(sorted_lows) * 0.20))
+        low_cluster = [l for l in sorted_lows if l <= sorted_lows[p20_idx]]
+        if len(low_cluster) > 1:
+            cluster_avg = sum(low_cluster) / len(low_cluster)
+            support = max(support, cluster_avg)
+
+        return round(float(support), 2)
+
+    def _calculate_spring_follow_score(
+        self, nxt: pd.Series, d2: pd.Series
+    ) -> int:
+        """
+        计算Spring跟随确认评分（满分10分）
+
+        6a: 次日阳线 +3
+        6b: 次日收盘在日内高位 +2
+        6c: 第三天继续上涨 +2（可选）
+        6d: 出现三高(HH/HL/HC) +3（可选）
+        """
+        score = 0
+
+        if nxt['Close'] > nxt['Open']:
+            score += 3
+
+        if nxt['Close'] > (nxt['High'] + nxt['Low']) / 2:
+            score += 2
+
+        if d2 is not None and d2['Close'] > nxt['Close']:
+            score += 2
+
+        if d2 is not None and (
+            d2['High'] > nxt['High']
+            and d2['Low'] > nxt['Low']
+            and d2['Close'] > nxt['Close']
+        ):
+            score += 3
+
+        return score
+
+    @staticmethod
+    def validate_spring_with_phase(spring_result: Dict, phase_analysis: Dict) -> Dict:
+        """
+        用阶段背景验证Spring的有效性
+
+        Args:
+            spring_result: detect_spring() 的返回结果
+            phase_analysis: 阶段分析结果，需包含 'phase' 键
+
+        Returns:
+            {'valid': bool, 'confidence': str, 'reason': str}
+        """
+        phase = phase_analysis.get('phase', '')
+
+        if any(vp in phase for vp in ['Accumulation', 'Reaccumulation', '积累']):
+            has_sc = phase_analysis.get('has_sc', False)
+            has_st = phase_analysis.get('has_st', False)
+            if has_sc and has_st:
+                return {'valid': True, 'confidence': 'high', 'reason': '完整吸筹结构 + Spring'}
+            return {'valid': True, 'confidence': 'medium', 'reason': '吸筹阶段，但缺少完整前置结构'}
+
+        if 'Distribution' in phase or '派发' in phase:
+            return {'valid': False, 'confidence': 'low', 'reason': '派发阶段的Spring往往是失败的陷阱'}
+
+        if 'Markup' in phase or '上涨' in phase:
+            return {'valid': True, 'confidence': 'medium', 'reason': '上涨趋势中的Spring可能是回调买点'}
+
+        return {'valid': True, 'confidence': 'low', 'reason': '阶段不明，保守对待'}
 
     def detect_upthrust(self, lookback: int = None) -> Dict:
         lookback = lookback or self.config.spring_lookback
