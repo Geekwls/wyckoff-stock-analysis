@@ -168,12 +168,12 @@ class PointAndFigureCalculator:
         # 获取箱体大小
         box_size = self._get_box_size(accumulation_high)
         
-        # 计算垂直计数（价格范围内的箱体数）
+        # 计算垂直计数（价格范围内的箱体数，仅用于参考）
         vertical_count = int((accumulation_high - accumulation_low) / box_size) + 1
         
-        # 威科夫因果法则：水平计数 × 箱体大小 = 目标幅度
-        # 使用经典公式：目标 = 水平列数 × 垂直箱体数 × 箱体大小
-        base_effect = horizontal_count * vertical_count * box_size
+        # 威科夫因果法则核心公式：水平计数 × 箱体大小 = 目标幅度
+        # 每1列盘整 = 1格箱体的价格推动力
+        base_effect = horizontal_count * box_size
         
         # 确定突破方向（基于最后一列的方向）
         last_column = columns[-1] if columns else None
@@ -260,32 +260,37 @@ class PointAndFigureCalculator:
         积累区特征：
         - 多列交替（方向频繁变化）
         - 价格范围相对稳定
+        - 优先选择靠近当前价格的最近盘整区（避免选中历史旧区间）
         """
         if len(columns) < 5:
             return 0, len(columns) - 1
         
-        # 寻找波动率最低的区域
         best_start = 0
         best_end = len(columns) - 1
         best_score = float('inf')
         
         window_size = max(5, len(columns) // 4)
+        total_windows = len(columns) - window_size
         
-        for i in range(len(columns) - window_size):
+        for i in range(total_windows):
             window = columns[i:i + window_size]
             
-            # 计算这个窗口的价格范围
+            # 计算窗口的价格范围
             highs = [col['high'] for col in window]
             lows = [col['low'] for col in window]
             price_range = max(highs) - min(lows)
             
-            # 计算方向变化次数（越多说明越震荡）
+            # 计算方向变化次数
             direction_changes = sum(1 for j in range(1, len(window)) 
-                                   if window[j]['direction'] != window[j-1]['direction'])
+                                    if window[j]['direction'] != window[j-1]['direction'])
             
-            # 评分：价格范围小且方向变化多 = 好的积累区
-            # 使用倒数，因为我们要找score最低的
-            score = price_range / (direction_changes + 1)
+            # 基础评分：价格范围小且方向变化多 = 好的积累区
+            base_score = price_range / (direction_changes + 1)
+            
+            # 加入"就近优先"权重：越靠近当前（窗口索引越大）得分越低（越优先）
+            # 使用二次衰减，让靠近末尾的区间显著优先
+            recency_weight = ((total_windows - i) / total_windows) ** 2
+            score = base_score * (1 + recency_weight * 3)
             
             if score < best_score:
                 best_score = score
@@ -332,6 +337,6 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
         'breakout_direction': result.get('breakout_direction', 'up'),
         'targets': result.get('targets', {}),
         'description': f"基于点数图水平计数：积累区{result.get('horizontal_count', 0)}列 × "
-                      f"垂直{result.get('vertical_count', 0)}格 = "
+                      f"箱体大小{box_size_pct:.0f}% = "
                       f"目标幅度{result.get('base_effect', 0):.2f}"
     }
