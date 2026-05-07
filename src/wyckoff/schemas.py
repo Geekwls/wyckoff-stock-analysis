@@ -207,6 +207,16 @@ class FtiModel(BaseModel):
     confidence: float = Field(default=0.0, description="置信度")
 
 
+class SequenceValidationModel(BaseModel):
+    """事件序列验证结果"""
+    spring: Dict[str, Any] = Field(default_factory=dict, description="Spring前置结构验证")
+    lps: Dict[str, Any] = Field(default_factory=dict, description="LPS与Spring/SOS关系验证")
+    sos: Dict[str, Any] = Field(default_factory=dict, description="SOS前置验证")
+    joc: Dict[str, Any] = Field(default_factory=dict, description="JOC回测验证")
+    sequence_score: Dict[str, Any] = Field(default_factory=dict, description="序列完整性评分")
+    conflicts: List[str] = Field(default_factory=list, description="检测到的逻辑矛盾")
+
+
 class EventsModel(BaseModel):
     """所有事件"""
     trading_range: TradingRangeModel = Field(description="交易区间")
@@ -422,6 +432,10 @@ class ReportModel(BaseModel):
     relative_strength: RelativeStrengthModel = Field(description="相对强度")
     basic_data: BasicDataModel = Field(description="基础数据")
     events: EventsModel = Field(description="事件检测")
+    sequence_validation: SequenceValidationModel = Field(
+        default_factory=SequenceValidationModel,
+        description="事件序列验证"
+    )
     cause_effect: CauseEffectAnalysisModel = Field(description="因果分析")
     market_context: MarketContextModel = Field(description="市场环境")
     global_sentiment: GlobalSentimentModel = Field(description="全球情绪")

@@ -144,6 +144,9 @@ class WyckoffPatternDetector:
         events = self.phase_coordinator.collect_all_events()
         phase_result = self.phase_identifier.identify(events)
 
+        # 附加事件序列验证结果
+        phase_result['sequence_validation'] = events.get('sequence_validation', {})
+
         # 集成孟洪涛核心证据分析
         evidence_analysis = self.analyze_phase_a_evidence()
 

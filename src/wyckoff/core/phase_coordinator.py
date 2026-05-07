@@ -15,6 +15,7 @@ from ..schemas import (
     JocModel, FtiModel
 )
 from ..config.settings import WyckoffConfig
+from .sequence_validator import SequenceValidator
 import logging
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,23 @@ class PhaseCoordinator:
         joc_res = self.detector.detect_joc()
         fti_res = self.detector.detect_fti()
 
-        # 5. 统一使用强类型模型封装
+        # 5. 运行事件序列验证（在原始dict上，模型封装前）
+        raw_events = {
+            "climax": climax_res,
+            "automatic_reaction": ar_res,
+            "secondary_test": st_res,
+            "spring": spring_res,
+            "upthrust": upthrust_res,
+            "sos": sos_res,
+            "sow": sow_res,
+            "lps": lps_res,
+            "lpsy": lpsy_res,
+            "joc": joc_res,
+            "fti": fti_res,
+        }
+        sequence_validation = SequenceValidator(raw_events, self.detector.data).validate_all()
+
+        # 6. 统一使用强类型模型封装
         events = {
             'trading_range': TradingRangeModel(**tr_res),
             'climax': ClimaxModel(**climax_res),
@@ -94,7 +111,8 @@ class PhaseCoordinator:
             'joc': JocModel(**joc_res) if joc_res.get('detected') else None,
             'fti': FtiModel(**fti_res) if fti_res.get('detected') else None,
             'boring_zone': boring_zone_res,
-            'phase_revision_log': []
+            'phase_revision_log': [],
+            'sequence_validation': sequence_validation,
         }
 
         if spring_res.get('detected'):
@@ -107,7 +125,7 @@ class PhaseCoordinator:
         elif sow_res.get('detected'):
             events['sos_sow'] = {'_type': 'sow', 'data': SowModel(**sow_res)}
 
-        # 6. 执行证伪验证
+        # 7. 执行证伪验证
         final_phase, revision_logs = self.validate_phase_consistency(preliminary_phase, events)
         events['phase_revision_log'] = revision_logs
 

@@ -16,7 +16,7 @@ from ..schemas import (
     MarketContextModel, GlobalSentimentModel, WyckoffLawsModel,
     SupplyDemandLawModel, EffortVsResultModel, CauseEffectModel,
     RelativeStrengthModel, SequenceScoreModel, DivergenceModel,
-    CauseEffectAnalysisModel
+    CauseEffectAnalysisModel, SequenceValidationModel,
 )
 from .backtest_engine import BacktestEngine
 from .multi_timeframe_analyzer import MultiTimeframeAnalyzer
@@ -1245,6 +1245,7 @@ class WyckoffReportGenerator:
             relative_strength=relative_strength,
             basic_data=basic_data,
             events=events,
+            sequence_validation=SequenceValidationModel(**phase_dict.get('sequence_validation', {})),
             cause_effect=cause_effect,
             market_context=market_context,
             global_sentiment=global_sentiment,

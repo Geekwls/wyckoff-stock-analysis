@@ -121,6 +121,35 @@ class RecommendationEngine:
 
             base_score += max_weight * min(quality_factor, 1.5)
 
+        # --- 事件序列验证加成 ---
+        seq_val = pattern_results.get('sequence_validation', {})
+        seq_score = seq_val.get('sequence_score', {})
+        seq_rating = seq_score.get('rating', '')
+        if seq_rating == 'A':
+            base_score += 15
+            reasons.append("事件序列完整(评级A)：SC→AR→ST→Spring→SOS→LPS→JOC 链条完整 (+15分)")
+        elif seq_rating == 'B':
+            base_score += 10
+            reasons.append("事件序列较完整(评级B)：大部分关键事件已检测到 (+10分)")
+        elif seq_rating == 'C':
+            base_score += 5
+            reasons.append("事件序列部分检测(评级C)：存在部分事件但链条不完整 (+5分)")
+
+        # Spring 前置结构质量加分
+        spring_val = seq_val.get('spring', {})
+        if spring_val.get('quality') == 'high':
+            base_score += 10
+            reasons.append("Spring有完整SC→AR→ST前置结构，信号质量高 (+10分)")
+        elif spring_val.get('quality') == 'medium':
+            base_score += 5
+            reasons.append("Spring有部分前置结构，质量中等 (+5分)")
+
+        # 序列矛盾扣分
+        seq_conflicts = seq_val.get('conflicts', [])
+        for conflict in seq_conflicts:
+            base_score -= 10
+            reasons.append(f"序列矛盾: {conflict} (-10分)")
+
         # --- 孟洪涛进阶信号：枯燥区与死角突破 ---
         boring = pattern_results.get('boring_zone', {})
         boring_score = self._get_attr(boring, 'score', 0)
