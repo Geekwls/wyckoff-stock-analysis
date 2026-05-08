@@ -89,8 +89,22 @@ class TradingRangeDetector(BaseDetector):
     def _build_result(self, high: float, low: float, method: str) -> Dict:
         range_pct = (high - low) / low if low > 0 else 0
 
-        buffer_pct = self.config.spring_range_threshold * 0.1
-        effective_threshold = self.config.spring_range_threshold + buffer_pct
+        # 使用 ATR 动态计算合理振幅阈值
+        # 低波动股（ATR ~1%）→ 4% 阈值 → 严格
+        # 高波动股（ATR ~5%）→ 20% 阈值 → 宽松
+        atr_multiple = 4.0
+        atr_pct = None
+        if 'ATR' in self.data.columns and len(self.data) > 0:
+            atr_val = self.data['ATR'].iloc[-1]
+            close_val = self.data['Close'].iloc[-1]
+            if pd.notna(atr_val) and close_val > 0:
+                atr_pct = atr_val / close_val
+                dynamic_threshold = min(max(atr_pct * atr_multiple, 0.08), 0.50)
+        if atr_pct is None:
+            dynamic_threshold = self.config.spring_range_threshold
+
+        buffer_pct = dynamic_threshold * 0.1
+        effective_threshold = dynamic_threshold + buffer_pct
         is_consolidation = range_pct < effective_threshold
 
         recent = self.data.tail(60)
@@ -119,4 +133,6 @@ class TradingRangeDetector(BaseDetector):
             '_quality': quality,
             '_support_tests': support_tests,
             '_resistance_tests': resistance_tests,
+            '_atr_threshold': round(dynamic_threshold, 4),
+            '_atr_pct': round(atr_pct, 4) if atr_pct else None,
         }
