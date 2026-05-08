@@ -63,16 +63,19 @@ class SentimentAnalyzer:
         """
         try:
             current_vix, benchmark_used = self._fetch_vix()
+            is_realized_vol = False
+            
             if current_vix is None and index_data is not None and len(index_data) >= 20:
                 current_vix, benchmark_used = self._calculate_realized_volatility(index_data, index_symbol)
+                is_realized_vol = True
             
             sentiment = self._classify_sentiment(current_vix) if current_vix else "unknown"
             implication = self.IMPLICATIONS.get(sentiment, "无法判断")
             
-            # 水温分类（基于均线排列 + VIX）
+            # 水温分类（基于均线排列 + VIX/已实现波动率）
             regime = "NEUTRAL"
             if index_data is not None and len(index_data) >= 60:
-                regime = self._classify_regime(index_data, current_vix)
+                regime = self._classify_regime(index_data, current_vix, is_realized_vol)
             
             return {
                 "market_sentiment": sentiment,
@@ -87,16 +90,22 @@ class SentimentAnalyzer:
             logger.warning("获取市场情绪数据失败: %s", e)
             return {"market_sentiment": "unknown", "vix_level": None, "implication": "获取情绪数据失败", "regime": "NEUTRAL"}
 
-    def _classify_regime(self, index_data: pd.DataFrame, vix: Optional[float]) -> str:
+    def _classify_regime(self, index_data: pd.DataFrame, vix: Optional[float], 
+                         is_realized_vol: bool = False) -> str:
         """
         五大水温分类。
         
         判断逻辑（按优先级）：
-        1. CRASH: 指数近 5 日跌幅 > 5% 且 VIX > 30
+        1. CRASH: 指数近 5 日跌幅 > 5% 且 VIX > 30（或已实现波动率 > 50）
         2. PANIC_REPAIR: 近 20 日最低至今反弹 < 5%，但之前曾跌超 8%
         3. RISK_ON: MA20 > MA50 > MA200 多头排列 + VIX < 18
         4. RISK_OFF: MA20 < MA50 或 MA50 < MA200 空头排列 + VIX > 20
         5. NEUTRAL: 其余
+        
+        Args:
+            index_data: 指数数据
+            vix: VIX 值或已实现波动率
+            is_realized_vol: 是否为已实现波动率（A 股使用）
         """
         close = index_data['Close']
         ma20 = close.rolling(20).mean().iloc[-1]
@@ -107,11 +116,16 @@ class SentimentAnalyzer:
         if pd.isna(ma20) or pd.isna(ma50):
             return "NEUTRAL"
         
+        # 已实现波动率阈值（比 VIX 高，因为历史波动率通常更高）
+        crash_threshold = 50 if is_realized_vol else 30
+        fear_threshold = 35 if is_realized_vol else 22
+        greed_threshold = 20 if is_realized_vol else 15
+        
         # CRASH check
         recent_5d = close.tail(5)
         if len(recent_5d) >= 5:
             ret_5d = (recent_5d.iloc[-1] / recent_5d.iloc[0] - 1) * 100
-            if ret_5d < -5 and vix and vix > 30:
+            if ret_5d < -5 and vix and vix > crash_threshold:
                 return "CRASH"
         
         # PANIC_REPAIR check
@@ -125,14 +139,14 @@ class SentimentAnalyzer:
         # RISK_ON
         if pd.notna(ma200):
             if ma20 > ma50 > ma200 and last_close > ma20:
-                if vix is None or vix < 18:
+                if vix is None or vix < greed_threshold:
                     return "RISK_ON"
                 return "NEUTRAL"
         
         # RISK_OFF
         if pd.notna(ma200):
             if ma20 < ma50 < ma200 and last_close < ma20:
-                if vix and vix > 20:
+                if vix and vix > fear_threshold:
                     return "RISK_OFF"
                 return "NEUTRAL"
         

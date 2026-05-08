@@ -2,6 +2,7 @@ from typing import Dict, Type
 from .datasource_strategy import DataSourceStrategy
 from .strategies.baostock_strategy import BaoStockStrategy
 from .strategies.yfinance_strategy import YFinanceStrategy
+from .strategies.akshare_strategy import AkShareStrategy
 from ..config.settings import WyckoffConfig
 
 class DataSourceFactory:
@@ -9,7 +10,8 @@ class DataSourceFactory:
     
     _strategies: Dict[str, Type[DataSourceStrategy]] = {
         'baostock': BaoStockStrategy,
-        'yfinance': YFinanceStrategy
+        'yfinance': YFinanceStrategy,
+        'akshare': AkShareStrategy
     }
 
     @staticmethod

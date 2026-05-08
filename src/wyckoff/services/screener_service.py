@@ -546,83 +546,88 @@ class ScreenerService:
     def _scan_single_spring_enhanced(
         self, symbol: str, period: str, stock_info: pd.DataFrame
     ) -> Optional[Dict]:
-        """扫描单只股票的 Spring 信号（孟洪涛 5 重过滤）"""
-        import time
-        max_retries = 2
+        """扫描单只股票的 Spring 信号（孟洪涛 5 重过滤）
         
-        for attempt in range(max_retries + 1):
-            try:
-                # 获取股票信息
-                code = symbol.split('.')[1] if '.' in symbol else symbol
-                info_row = stock_info[stock_info['code'] == code]
-                if info_row.empty:
-                    return None
-                info = info_row.iloc[0]
-                
-                # 创建分析器并获取数据
-                analyzer = WyckoffAnalyzer(symbol, period, self.config)
-                data = analyzer.fetch_data()
-                if data is None or data.empty:
-                    return None
-                
-                # 孟洪涛 5 重过滤 Spring 检测
-                spring_result = analyzer.pattern_detector.meng_enhancer.detect_spring_enhanced()
-                
-                if not spring_result.get('detected'):
-                    return None
-                
-                # 获取最新 Spring 信号
-                latest = spring_result.get('latest_spring', {})
-                if not latest:
-                    return None
-                
-                # 检查确认状态
-                confirmation_status = self._check_spring_confirmation(
-                    analyzer, latest, data
+        使用 akshare 获取历史数据（比 baostock 快 10 倍）
+        """
+        try:
+            # 获取股票信息
+            code = symbol.split('.')[1] if '.' in symbol else symbol
+            info_row = stock_info[stock_info['code'] == code]
+            if info_row.empty:
+                return None
+            info = info_row.iloc[0]
+            
+            # 使用 akshare 直接获取历史数据（绕过 baostock，速度快）
+            from ..core.strategies.akshare_strategy import AkShareStrategy
+            from ..core.data_fetcher import prepare_data
+            
+            ak_strategy = AkShareStrategy(self.config)
+            raw_data = ak_strategy.fetch(symbol, period)
+            if raw_data is None or raw_data.empty:
+                return None
+            
+            # 准备数据（计算技术指标）
+            data = prepare_data(raw_data, self.config)
+            
+            # 创建 WyckoffPatternDetector（不调用 fetch_data，直接用准备好的数据）
+            from ..core.pattern_detector import WyckoffPatternDetector
+            from ..core.cache import LRUCache
+            pattern_detector = WyckoffPatternDetector(data, self.config, LRUCache())
+            
+            # 孟洪涛 5 重过滤 Spring 检测
+            spring_result = pattern_detector.meng_enhancer.detect_spring_enhanced()
+            
+            if not spring_result.get('detected'):
+                return None
+            
+            # 获取最新 Spring 信号
+            latest = spring_result.get('latest_spring', {})
+            if not latest:
+                return None
+            
+            # 检查确认状态
+            confirmation_status = self._check_spring_confirmation_from_data(
+                latest, data
+            )
+            
+            # 计算 RS 强度
+            rs_data = self._calculate_rs_from_data(symbol, data)
+            
+            return {
+                'symbol': symbol,
+                'name': info.get('name', ''),
+                'industry': info.get('industry', ''),
+                'market_cap': info.get('market_cap', 0),
+                'market_cap_yi': round(info.get('market_cap', 0) / 1e8, 2),
+                'daily_amount': info.get('amount', 0),
+                'daily_amount_wan': round(info.get('amount', 0) / 1e4, 2),
+                'rs_trend': rs_data.get('rs_trend', 'unknown'),
+                'rs_change_20d': rs_data.get('rs_change_20d', 0),
+                'spring_detected': True,
+                'spring_date': str(latest.get('date', '')),
+                'support_level': latest.get('support_level'),
+                'recovery_price': latest.get('recovery_price'),
+                'volume_ratio': latest.get('vol_ratio'),
+                'confidence': latest.get('confidence', 0),
+                'recovery_days': latest.get('recovery_days'),
+                'confirmation': confirmation_status['status'],
+                'confirmation_reason': confirmation_status['reason'],
+                'current_price': data['Close'].iloc[-1],
+                'distance_to_support': self._calc_distance_to_support(
+                    data['Close'].iloc[-1], latest.get('support_level', 0)
                 )
-                
-                # 计算 RS 强度
-                rs_data = self._calculate_rs_rank(analyzer, data)
-                
-                return {
-                    'symbol': symbol,
-                    'name': info.get('name', ''),
-                    'industry': info.get('industry', ''),
-                    'market_cap': info.get('market_cap', 0),
-                    'market_cap_yi': round(info.get('market_cap', 0) / 1e8, 2),
-                    'daily_amount': info.get('amount', 0),
-                    'daily_amount_wan': round(info.get('amount', 0) / 1e4, 2),
-                    'rs_trend': rs_data.get('rs_trend', 'unknown'),
-                    'rs_change_20d': rs_data.get('rs_change_20d', 0),
-                    'spring_detected': True,
-                    'spring_date': str(latest.get('date', '')),
-                    'support_level': latest.get('support_level'),
-                    'recovery_price': latest.get('recovery_price'),
-                    'volume_ratio': latest.get('vol_ratio'),
-                    'confidence': latest.get('confidence', 0),
-                    'recovery_days': latest.get('recovery_days'),
-                    'confirmation': confirmation_status['status'],
-                    'confirmation_reason': confirmation_status['reason'],
-                    'current_price': data['Close'].iloc[-1],
-                    'distance_to_support': self._calc_distance_to_support(
-                        data['Close'].iloc[-1], latest.get('support_level', 0)
-                    )
-                }
-            except Exception as e:
-                if attempt < max_retries:
-                    time.sleep(0.5 * (attempt + 1))  # 退避重试
-                    continue
-                else:
-                    logger.warning(f"扫描 {symbol} Spring 失败 (重试 {max_retries} 次): {e}")
-                    return None
+            }
+        except Exception as e:
+            logger.warning(f"扫描 {symbol} Spring 失败: {e}")
+            return None
     
-    def _check_spring_confirmation(
-        self, analyzer, spring_signal: Dict, data: pd.DataFrame
+    def _check_spring_confirmation_from_data(
+        self, spring_signal: Dict, data: pd.DataFrame
     ) -> Dict[str, str]:
-        """检查 Spring 信号的确认状态"""
+        """检查 Spring 信号的确认状态（直接使用数据）"""
         try:
             from ..core.signal_lifecycle import build_snapshot, check_confirmation
-            import pandas as pd
             
             snap = build_snapshot(
                 signal_type="spring",
@@ -658,20 +663,28 @@ class ScreenerService:
             logger.warning(f"检查 Spring 确认状态失败: {e}")
             return {'status': 'unknown', 'reason': str(e)}
     
-    def _calculate_rs_rank(self, analyzer, data: pd.DataFrame) -> Dict:
-        """计算 RS 强度（相对于基准指数）"""
+    def _calculate_rs_from_data(self, symbol: str, data: pd.DataFrame) -> Dict:
+        """计算 RS 强度（直接使用数据）"""
         try:
             from ..core.relative_strength_analyzer import RelativeStrengthAnalyzer
+            from ..facade import WyckoffAnalyzer
             
             # 获取基准指数
-            idx_analyzer = analyzer._get_cached_index_analyzer()
+            temp_analyzer = WyckoffAnalyzer.__new__(WyckoffAnalyzer)
+            temp_analyzer.symbol = symbol
+            temp_analyzer.config = self.config
+            idx_symbol = temp_analyzer._get_baseline_index_symbol()
             
-            if idx_analyzer and idx_analyzer.data is not None:
-                rs_analyzer = RelativeStrengthAnalyzer(data, analyzer.symbol)
-                rs_data = rs_analyzer.calculate_rs(idx_analyzer.data)
-                return rs_data
+            # 用 akshare 获取基准数据
+            from ..core.strategies.akshare_strategy import AkShareStrategy
+            from ..core.data_fetcher import prepare_data
+            ak_strategy = AkShareStrategy(self.config)
+            idx_raw = ak_strategy.fetch(idx_symbol, "1y")
+            idx_data = prepare_data(idx_raw, self.config)
             
-            return {'rs_trend': 'unknown', 'rs_change_20d': 0}
+            rs_analyzer = RelativeStrengthAnalyzer(data, symbol)
+            rs_data = rs_analyzer.calculate_rs(idx_data)
+            return rs_data
         except Exception as e:
             logger.warning(f"计算 RS 失败: {e}")
             return {'rs_trend': 'unknown', 'rs_change_20d': 0}
