@@ -146,13 +146,16 @@ class MemoryCache:
     def invalidate_namespace(self, namespace_prefix: str):
         """失效指定命名空间的所有缓存"""
         with self.lock:
+            # 通过反向映射精确删除目标命名空间的 key
             keys_to_delete = [
-                key for key in self.cache.keys()
-                if not key  # 哈希键不包含命名空间前缀，需要反向映射
+                cache_key for cache_key, ns in self._key_namespace_map.items()
+                if ns == namespace_prefix
             ]
-            # 由于我们使用哈希键，这里简化为清空
-            # 实际使用中应该维护key到namespace的映射
-            self.cache.clear()
+            for key in keys_to_delete:
+                self.cache.pop(key, None)
+                self._key_namespace_map.pop(key, None)
+            if keys_to_delete:
+                logger.debug(f"Invalidated {len(keys_to_delete)} keys in namespace '{namespace_prefix}'")
 
     def get_stats(self) -> Dict:
         """获取缓存统计"""
@@ -346,6 +349,11 @@ class CacheService:
         # 写入内存缓存
         self.memory_cache.set(key, value, ttl=ttl)
 
+        # 维护 namespace → keys 映射
+        if namespace not in self.namespaces:
+            self.namespaces[namespace] = set()
+        self.namespaces[namespace].add(key)
+
         # 写入文件缓存
         if use_file:
             return self.file_cache.set(key, value, ttl=ttl)
@@ -362,16 +370,23 @@ class CacheService:
         # 从文件缓存删除
         file_deleted = self.file_cache.delete(key)
 
+        # 从命名空间映射中移除
+        if namespace in self.namespaces:
+            self.namespaces[namespace].discard(key)
+
         return memory_deleted or file_deleted
 
     def invalidate_namespace(self, namespace: str):
         """失效指定命名空间的所有缓存"""
-        # 由于使用哈希键，这里简化处理
-        # 实际使用中可以维护namespace->keys映射
-        self.memory_cache.clear()
-        self.file_cache.clear()
-
-        logger.info(f"已失效命名空间: {namespace}")
+        keys = self.namespaces.get(namespace, set())
+        if not keys:
+            logger.debug(f"命名空间 '{namespace}' 无缓存键")
+            return
+        for key in keys:
+            self.memory_cache.delete(key)
+            self.file_cache.delete(key)
+        self.namespaces[namespace] = set()
+        logger.info(f"已失效命名空间 '{namespace}': {len(keys)} 个键")
 
     def invalidate_by_pattern(self, namespace: str, pattern: str):
         """按模式失效缓存"""
@@ -432,8 +447,9 @@ class LegacyLRUAdapter:
         self._cache_service = cache_service
         self._namespace = namespace
         self._instance_prefix = CacheKey.generate("legacy", namespace, id(self))
-        self._cache_service.memory_cache.max_size = max_size
+        self._max_size = max_size
         self._ttl_seconds = ttl_seconds
+        self._access_order = []  # 跟踪此 adapter 的 key 插入顺序用于 LRU
 
     def _parts(self, key: str):
         return (self._instance_prefix, key)
@@ -452,9 +468,18 @@ class LegacyLRUAdapter:
     def get_or_compute(self, key: str, compute_fn: Callable, *args, **kwargs):
         value = self.get(key)
         if value is not None:
+            # LRU: 移到末尾
+            if key in self._access_order:
+                self._access_order.remove(key)
+            self._access_order.append(key)
             return value
         value = compute_fn(*args, **kwargs)
         self.put(key, value)
+        # 维护 per-adapter LRU
+        self._access_order.append(key)
+        while len(self._access_order) > self._max_size:
+            old_key = self._access_order.pop(0)
+            self._cache_service.delete(self._namespace, *self._parts(old_key))
         return value
 
     def invalidate(self, key: str = None):

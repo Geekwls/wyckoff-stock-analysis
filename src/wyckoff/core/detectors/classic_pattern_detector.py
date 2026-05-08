@@ -219,18 +219,23 @@ class ClassicPatternDetector(BaseDetector):
         if len(recent) < 4:
             return {'detected': False, 'reason': 'insufficient_search_data'}
 
-        # 使用全数据计算的 Volume_MA20 作为成交量基线，避免窗口边缘数据不可用
-        vol_ma20 = (recent['Volume_MA20'] if 'Volume_MA20' in recent.columns
-                    else df['Volume'].rolling(20, min_periods=1).mean().tail(search_window))
         springs = []
 
-        for i in range(0, len(recent) - 2):
+        # 预筛选：只检查跌破支撑的 bar（向量化，避免逐行循环）
+        breakdown_mask = recent['Low'] < support * 0.97
+        candidate_indices = recent.index[breakdown_mask]
+
+        for idx in candidate_indices:
+            i = recent.index.get_loc(idx)
+            if i + 2 >= len(recent):
+                continue
             cur = recent.iloc[i]
             nxt = recent.iloc[i + 1]
             d2 = recent.iloc[i + 2]
 
-            # 条件1：价格跌破支撑位（允许3%误差缓冲）
-            if cur['Low'] >= support * 0.97:
+            # 条件1：跌破幅度上限（书中1-3%，放宽到5%防漏检）
+            breakdown_pct = (support - cur['Low']) / support * 100
+            if breakdown_pct > 5:
                 continue
 
             # 条件2：次日收盘回到支撑位之上
@@ -239,11 +244,6 @@ class ClassicPatternDetector(BaseDetector):
 
             # 条件3：次日收盘高于跌破日收盘（阳线确认）
             if nxt['Close'] <= cur['Close']:
-                continue
-
-            # 条件4：跌破幅度上限（书中1-3%，放宽到5%防漏检）
-            breakdown_pct = (support - cur['Low']) / support * 100
-            if breakdown_pct > 5:
                 continue
 
             # 条件4（书）：收回日成交量 > 跌破日成交量（需求吃掉供应）

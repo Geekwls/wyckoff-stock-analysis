@@ -1,7 +1,12 @@
 import pandas as pd
 import datetime
+import re
+import logging
+import numpy as np
 from typing import Dict, List, Optional, Union, Any
 from .enums import WyckoffPhase, MarketSide
+
+logger = logging.getLogger(__name__)
 
 class PhaseAdapter:
     """负责解析和分类阶段（支持 Enum 和 String，实现双轨期兼容）"""
@@ -9,39 +14,50 @@ class PhaseAdapter:
     @staticmethod
     def is_accumulation(phase: Union[str, WyckoffPhase]) -> bool:
         p_str = str(phase)
-        return 'Accumulation' in p_str or '建仓' in p_str or phase == WyckoffPhase.PHASE_A or phase == WyckoffPhase.PHASE_B
-        
+        return bool(re.search(r'\bAccumulation\b', p_str)) or '建仓' in p_str
+
     @staticmethod
     def is_distribution(phase: Union[str, WyckoffPhase]) -> bool:
         p_str = str(phase)
-        return 'Distribution' in p_str or '出货' in p_str
-        
+        return bool(re.search(r'\bDistribution\b', p_str)) or '出货' in p_str
+
     @staticmethod
     def is_markup(phase: Union[str, WyckoffPhase]) -> bool:
         p_str = str(phase)
-        return 'Markup' in p_str or '上涨' in p_str or phase == WyckoffPhase.PHASE_E
-        
+        return bool(re.search(r'\bMarkup\b', p_str)) or '上涨' in p_str
+
     @staticmethod
     def is_markdown(phase: Union[str, WyckoffPhase]) -> bool:
         p_str = str(phase)
-        return 'Markdown' in p_str or '下跌' in p_str
+        return bool(re.search(r'\bMarkdown\b', p_str)) or '下跌' in p_str
 
     @staticmethod
-    def is_entry_phase(phase: Union[str, WyckoffPhase]) -> bool:
-        """判断是否为可入场阶段 (C/D)"""
-        if isinstance(phase, WyckoffPhase):
-            return phase in [WyckoffPhase.PHASE_C, WyckoffPhase.PHASE_D]
+    def is_phase_c(phase: Union[str, WyckoffPhase]) -> bool:
+        """判断是否为 Phase C"""
         p_str = str(phase)
-        return 'Phase C' in p_str or 'Phase D' in p_str
+        return 'Phase C' in p_str or isinstance(phase, WyckoffPhase) and phase == WyckoffPhase.PHASE_C
+
+    @staticmethod
+    def is_phase_d(phase: Union[str, WyckoffPhase]) -> bool:
+        """判断是否为 Phase D"""
+        p_str = str(phase)
+        return 'Phase D' in p_str or isinstance(phase, WyckoffPhase) and phase == WyckoffPhase.PHASE_D
+
+    @staticmethod
+    def is_late_stage(phase: Union[str, WyckoffPhase]) -> bool:
+        """判断是否为可入场/后期阶段 (C/D)"""
+        return PhaseAdapter.is_phase_c(phase) or PhaseAdapter.is_phase_d(phase)
 
     @staticmethod
     def get_market_side(phase: Union[str, WyckoffPhase]) -> str:
         """返回买方(bullish)或卖方(bearish)市场侧"""
-        if (PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase)
-                or PhaseAdapter.is_entry_phase(phase)):
+        # 优先级：Accumulation/Markup 为 Bullish
+        if PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase):
             return MarketSide.BULLISH.value
+        # Distribution/Markdown 为 Bearish
         if PhaseAdapter.is_distribution(phase) or PhaseAdapter.is_markdown(phase):
             return MarketSide.BEARISH.value
+        
         return MarketSide.NEUTRAL.value
 
 # 为了兼容性，保留 PhaseClassifier 别名
@@ -95,6 +111,13 @@ class TypeConverter:
         if isinstance(value, datetime.date):
             return pd.Timestamp(value)
 
+        # numpy.datetime64 对象
+        if isinstance(value, (np.datetime64, np.generic)) or hasattr(value, 'date'):
+            try:
+                return pd.Timestamp(value)
+            except Exception:
+                pass
+
         # 其他类型，尝试转换为字符串后再转换
         try:
             return pd.Timestamp(str(value))
@@ -122,7 +145,7 @@ class TypeConverter:
         """
         if value is None:
             return False
-        return isinstance(value, (pd.Timestamp, str, datetime.datetime, datetime.date))
+        return isinstance(value, (pd.Timestamp, str, datetime.datetime, datetime.date, np.datetime64))
 
     @staticmethod
     def safe_to_timestamp(value: Any, default: Any = None) -> Optional[pd.Timestamp]:
@@ -144,5 +167,6 @@ class TypeConverter:
         """
         try:
             return TypeConverter.to_timestamp(value)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
+            logger.debug(f"safe_to_timestamp: 转换失败 [value={value}, type={type(value).__name__}]: {e}")
             return default
