@@ -6,6 +6,7 @@ import concurrent.futures
 from typing import List, Dict, Optional, Any
 import logging
 import os
+import pandas as pd
 
 from ..facade import WyckoffAnalyzer
 from ..config.settings import WyckoffConfig
@@ -442,6 +443,298 @@ class ScreenerService:
             "failed": failed,
             "scan_mode": scan_mode
         }
+
+    def screen_spring(
+        self,
+        symbols: List[str] = None,
+        period: str = "1y",
+        min_market_cap: float = 10e8,
+        min_daily_amount: float = 1e8,
+        max_workers: int = 1,
+        show_progress: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        全市场 Spring 筛选（孟洪涛 5 重过滤）
+        
+        注意：baostock 不支持高并发请求，建议使用 max_workers=1 或 2。
+        多线程可能导致数据获取失败。
+        
+        Args:
+            symbols: 股票代码列表，None 则自动获取全 A 股
+            period: 数据周期
+            min_market_cap: 最小市值（元），默认 10 亿
+            min_daily_amount: 最小日成交额（元），默认 1 亿
+            max_workers: 并行线程数（默认 1，baostock 并发能力有限）
+            show_progress: 显示进度
+        
+        Returns:
+            筛选结果字典
+        """
+        from tqdm import tqdm
+        from ..core.stock_data_provider import StockDataProvider
+        
+        # 1. 获取股票池
+        if symbols is None:
+            symbols = StockDataProvider.filter_stocks(
+                min_market_cap=min_market_cap,
+                min_daily_amount=min_daily_amount
+            )
+        
+        # 2. 获取全量数据（用于市值、行业查询）
+        stock_info = StockDataProvider.get_all_a_shares_with_info()
+        
+        if show_progress:
+            print(f"[Spring 筛选] 开始扫描 {len(symbols)} 只股票...")
+        
+        # 3. 并行扫描
+        results = []
+        failed = []
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._scan_single_spring_enhanced, sym, period, stock_info
+                ): sym
+                for sym in symbols
+            }
+            
+            for future in tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(symbols),
+                desc="Spring 筛选",
+                disable=not show_progress
+            ):
+                try:
+                    result = future.result()
+                    if result and result.get('spring_detected'):
+                        results.append(result)
+                except Exception as e:
+                    failed.append(str(e))
+        
+        # 4. 按确认状态和置信度排序
+        results.sort(key=lambda x: (
+            0 if x.get('confirmation') == 'confirmed' else 1,
+            -x.get('confidence', 0)
+        ))
+        
+        # 5. 显示统计信息
+        if show_progress:
+            confirmed = sum(1 for r in results if r.get('confirmation') == 'confirmed')
+            pending = sum(1 for r in results if r.get('confirmation') == 'pending')
+            print(f"\n[Spring 筛选完成]")
+            print(f"  扫描总数: {len(symbols)}")
+            print(f"  发现 Spring: {len(results)}")
+            print(f"  已确认: {confirmed}")
+            print(f"  待确认: {pending}")
+            print(f"  失败: {len(failed)}")
+        
+        return {
+            'results': results,
+            'summary': {
+                'total_scanned': len(symbols),
+                'spring_count': len(results),
+                'confirmed_count': sum(
+                    1 for r in results if r.get('confirmation') == 'confirmed'
+                ),
+                'pending_count': sum(
+                    1 for r in results if r.get('confirmation') == 'pending'
+                ),
+                'failed_count': len(failed)
+            }
+        }
+    
+    def _scan_single_spring_enhanced(
+        self, symbol: str, period: str, stock_info: pd.DataFrame
+    ) -> Optional[Dict]:
+        """扫描单只股票的 Spring 信号（孟洪涛 5 重过滤）"""
+        import time
+        max_retries = 2
+        
+        for attempt in range(max_retries + 1):
+            try:
+                # 获取股票信息
+                code = symbol.split('.')[1] if '.' in symbol else symbol
+                info_row = stock_info[stock_info['code'] == code]
+                if info_row.empty:
+                    return None
+                info = info_row.iloc[0]
+                
+                # 创建分析器并获取数据
+                analyzer = WyckoffAnalyzer(symbol, period, self.config)
+                data = analyzer.fetch_data()
+                if data is None or data.empty:
+                    return None
+                
+                # 孟洪涛 5 重过滤 Spring 检测
+                spring_result = analyzer.pattern_detector.meng_enhancer.detect_spring_enhanced()
+                
+                if not spring_result.get('detected'):
+                    return None
+                
+                # 获取最新 Spring 信号
+                latest = spring_result.get('latest_spring', {})
+                if not latest:
+                    return None
+                
+                # 检查确认状态
+                confirmation_status = self._check_spring_confirmation(
+                    analyzer, latest, data
+                )
+                
+                # 计算 RS 强度
+                rs_data = self._calculate_rs_rank(analyzer, data)
+                
+                return {
+                    'symbol': symbol,
+                    'name': info.get('name', ''),
+                    'industry': info.get('industry', ''),
+                    'market_cap': info.get('market_cap', 0),
+                    'market_cap_yi': round(info.get('market_cap', 0) / 1e8, 2),
+                    'daily_amount': info.get('amount', 0),
+                    'daily_amount_wan': round(info.get('amount', 0) / 1e4, 2),
+                    'rs_trend': rs_data.get('rs_trend', 'unknown'),
+                    'rs_change_20d': rs_data.get('rs_change_20d', 0),
+                    'spring_detected': True,
+                    'spring_date': str(latest.get('date', '')),
+                    'support_level': latest.get('support_level'),
+                    'recovery_price': latest.get('recovery_price'),
+                    'volume_ratio': latest.get('vol_ratio'),
+                    'confidence': latest.get('confidence', 0),
+                    'recovery_days': latest.get('recovery_days'),
+                    'confirmation': confirmation_status['status'],
+                    'confirmation_reason': confirmation_status['reason'],
+                    'current_price': data['Close'].iloc[-1],
+                    'distance_to_support': self._calc_distance_to_support(
+                        data['Close'].iloc[-1], latest.get('support_level', 0)
+                    )
+                }
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(0.5 * (attempt + 1))  # 退避重试
+                    continue
+                else:
+                    logger.warning(f"扫描 {symbol} Spring 失败 (重试 {max_retries} 次): {e}")
+                    return None
+    
+    def _check_spring_confirmation(
+        self, analyzer, spring_signal: Dict, data: pd.DataFrame
+    ) -> Dict[str, str]:
+        """检查 Spring 信号的确认状态"""
+        try:
+            from ..core.signal_lifecycle import build_snapshot, check_confirmation
+            import pandas as pd
+            
+            snap = build_snapshot(
+                signal_type="spring",
+                price=spring_signal.get('recovery_price', 0),
+                low=spring_signal.get('breakdown_price', 0),
+                high=data['High'].iloc[-1],
+                volume=data['Volume'].iloc[-1],
+                support=spring_signal.get('support_level', 0),
+                resistance=data['High'].rolling(20).max().iloc[-1]
+            )
+            
+            today_low = data['Low'].iloc[-1]
+            today_high = data['High'].iloc[-1]
+            today_close = data['Close'].iloc[-1]
+            today_volume = data['Volume'].iloc[-1]
+            
+            spring_date = spring_signal.get('date')
+            if spring_date:
+                try:
+                    signal_dt = pd.to_datetime(spring_date)
+                    days_elapsed = (pd.Timestamp.now() - signal_dt).days
+                except:
+                    days_elapsed = 0
+            else:
+                days_elapsed = 0
+            
+            status, reason = check_confirmation(
+                "spring", snap, today_low, today_high, today_close, today_volume, days_elapsed
+            )
+            
+            return {'status': status, 'reason': reason}
+        except Exception as e:
+            logger.warning(f"检查 Spring 确认状态失败: {e}")
+            return {'status': 'unknown', 'reason': str(e)}
+    
+    def _calculate_rs_rank(self, analyzer, data: pd.DataFrame) -> Dict:
+        """计算 RS 强度（相对于基准指数）"""
+        try:
+            from ..core.relative_strength_analyzer import RelativeStrengthAnalyzer
+            
+            # 获取基准指数
+            idx_analyzer = analyzer._get_cached_index_analyzer()
+            
+            if idx_analyzer and idx_analyzer.data is not None:
+                rs_analyzer = RelativeStrengthAnalyzer(data, analyzer.symbol)
+                rs_data = rs_analyzer.calculate_rs(idx_analyzer.data)
+                return rs_data
+            
+            return {'rs_trend': 'unknown', 'rs_change_20d': 0}
+        except Exception as e:
+            logger.warning(f"计算 RS 失败: {e}")
+            return {'rs_trend': 'unknown', 'rs_change_20d': 0}
+    
+    @staticmethod
+    def _calc_distance_to_support(current_price: float, support_level: float) -> float:
+        """计算当前价格距支撑位的距离百分比"""
+        if support_level <= 0:
+            return 0.0
+        return round((current_price - support_level) / support_level * 100, 2)
+
+
+def format_spring_results_table(results: List[Dict], max_rows: int = 50) -> str:
+    """格式化 Spring 筛选结果为实用表格"""
+    if not results:
+        return "未找到 Spring 信号"
+    
+    # 表头
+    header = (
+        f"{'代码':<10} {'名称':<8} {'行业':<8} {'市值(亿)':>8} "
+        f"{'RS强度':>6} {'支撑位':>8} {'当前价':>8} {'距支撑%':>8} "
+        f"{'量比':>6} {'置信度':>6} {'确认':>4}"
+    )
+    separator = "=" * 100
+    
+    lines = [separator, header, separator]
+    
+    for r in results[:max_rows]:
+        symbol = r.get('symbol', '')
+        name = r.get('name', '')[:4]  # 截取前 4 个字符
+        industry = r.get('industry', '')[:4]
+        market_cap = f"{r.get('market_cap_yi', 0):.0f}"
+        
+        rs_trend = r.get('rs_trend', 'unknown')
+        rs_mark = '↑' if rs_trend == 'rising' else '↓' if rs_trend == 'falling' else '→'
+        
+        support = f"{r.get('support_level', 0):.2f}"
+        current = f"{r.get('current_price', 0):.2f}"
+        distance = f"{r.get('distance_to_support', 0):.1f}%"
+        vol_ratio = f"{r.get('volume_ratio', 0):.2f}"
+        confidence = f"{r.get('confidence', 0):.0f}%"
+        
+        confirmation = r.get('confirmation', 'unknown')
+        conf_mark = '✅' if confirmation == 'confirmed' else '⏳' if confirmation == 'pending' else '❌'
+        
+        line = (
+            f"{symbol:<10} {name:<8} {industry:<8} {market_cap:>8} "
+            f"{rs_mark:>4} {support:>8} {current:>8} {distance:>8} "
+            f"{vol_ratio:>6} {confidence:>6} {conf_mark:>4}"
+        )
+        lines.append(line)
+    
+    lines.append(separator)
+    
+    # 统计信息
+    confirmed = sum(1 for r in results if r.get('confirmation') == 'confirmed')
+    pending = sum(1 for r in results if r.get('confirmation') == 'pending')
+    lines.append(
+        f"总计: {len(results)} 只 Spring | "
+        f"已确认: {confirmed} | 待确认: {pending}"
+    )
+    
+    return "\n".join(lines)
 
 
 # 预定义股票池已迁移至 src/wyckoff/stock_pools.py

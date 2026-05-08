@@ -128,6 +128,43 @@ def analyze_batch(args):
         return 1
 
 
+def screen_spring(args):
+    """Spring 筛选"""
+    try:
+        from src.wyckoff.services.screener_service import ScreenerService, format_spring_results_table
+        
+        screener = ScreenerService()
+        
+        # 确定股票池
+        symbols = None
+        if args.symbols:
+            symbols = args.symbols.split(',')
+        elif args.pool if hasattr(args, 'pool') else False:
+            from src.wyckoff.stock_pools import get_pool
+            symbols = get_pool(args.pool)
+        
+        # 执行筛选
+        result = screener.screen_spring(
+            symbols=symbols,
+            period=args.period,
+            min_market_cap=args.min_cap * 1e8,
+            min_daily_amount=args.min_amount * 1e8,
+            max_workers=args.workers,
+            show_progress=not args.quiet
+        )
+        
+        # 输出表格
+        print("\n" + format_spring_results_table(result['results']))
+        
+        return 0
+
+    except Exception as e:
+        logger.error(f"Spring 筛选失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main():
     """主入口"""
     # 检查依赖
@@ -146,6 +183,15 @@ def main():
 
   # 批量扫描
   python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
+
+  # Spring 筛选（全 A 股）
+  python -m apps.cli.main --spring --all-a-share
+
+  # Spring 筛选（指定股票）
+  python -m apps.cli.main --spring --symbols "600519,002594,300750"
+
+  # Spring 筛选（自定义过滤条件）
+  python -m apps.cli.main --spring --all-a-share --min-cap 20 --min-amount 5
 
   # 使用不同周期
   python -m apps.cli.main AAPL --period 2y
@@ -188,6 +234,10 @@ def main():
         help='股票列表（逗号分隔）'
     )
     parser.add_argument(
+        '--pool',
+        help='预定义股票池名称'
+    )
+    parser.add_argument(
         '--mode',
         default='quick',
         choices=['quick'],
@@ -198,11 +248,48 @@ def main():
         action='store_true',
         help='安静模式（不显示进度）'
     )
+    
+    # Spring 筛选选项
+    parser.add_argument(
+        '--spring',
+        action='store_true',
+        help='Spring 筛选模式（孟洪涛 5 重过滤）'
+    )
+    parser.add_argument(
+        '--all-a-share',
+        action='store_true',
+        help='扫描全 A 股'
+    )
+    parser.add_argument(
+        '--min-cap',
+        type=float,
+        default=10,
+        help='最小市值（亿）(默认: 10)'
+    )
+    parser.add_argument(
+        '--min-amount',
+        type=float,
+        default=1,
+        help='最小日成交额（亿）(默认: 1)'
+    )
+    parser.add_argument(
+        '--industry',
+        type=str,
+        help='指定行业（逗号分隔）'
+    )
+    parser.add_argument(
+        '--workers',
+        type=int,
+        default=1,
+        help='并行线程数 (默认: 1，baostock 并发能力有限)'
+    )
 
     args = parser.parse_args()
 
     # 根据模式执行
-    if args.batch:
+    if args.spring:
+        return screen_spring(args)
+    elif args.batch:
         return analyze_batch(args)
     elif args.symbol:
         return analyze_single(args)

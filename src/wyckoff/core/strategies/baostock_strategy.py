@@ -79,7 +79,8 @@ class BaoStockStrategy(DataSourceStrategy):
         df = pd.DataFrame(data_list, columns=rs.fields)
         df = df.rename(columns={
             'open': 'Open', 'high': 'High',
-            'low': 'Low', 'close': 'Close', 'volume': 'Volume'
+            'low': 'Low', 'close': 'Close', 'volume': 'Volume',
+            'amount': 'Amount'
         })
         
         # 处理时间索引
@@ -91,7 +92,7 @@ class BaoStockStrategy(DataSourceStrategy):
             
         df = df.set_index('Date')
         
-        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume', 'Amount']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
         return df.dropna(subset=['Open', 'High', 'Low', 'Close'])
