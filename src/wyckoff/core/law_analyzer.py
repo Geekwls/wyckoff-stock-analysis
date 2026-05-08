@@ -724,11 +724,11 @@ class WyckoffLawAnalyzer:
         """
         try:
             # 计算交易区间：优先使用已知边界，否则用 60 日机械扫描
+            recent_data = self.data.tail(60)
             if known_tr_high is not None and known_tr_low is not None:
                 trading_range_high = known_tr_high
                 trading_range_low = known_tr_low
             else:
-                recent_data = self.data.tail(60)
                 trading_range_high = recent_data['High'].max()
                 trading_range_low = recent_data['Low'].min()
             cause_size = trading_range_high - trading_range_low
