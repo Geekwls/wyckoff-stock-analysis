@@ -8,10 +8,33 @@
 
 import pandas as pd
 import logging
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class QualityIssue:
+    severity: str  # "error" | "warning"
+    category: str  # "ohlc_inconsistent" | "missing_columns" | "extreme_return" ...
+    message: str
+    count: int = 0
+
+
+@dataclass
+class QualityReport:
+    ok: bool
+    score: float
+    issues: List[QualityIssue] = field(default_factory=list)
+
+    def to_dict(self) -> Dict:
+        return {
+            "ok": self.ok,
+            "score": self.score,
+            "issues": [{"severity": i.severity, "category": i.category, "message": i.message, "count": i.count} for i in self.issues],
+        }
 
 
 class DataQualityError(Exception):
@@ -219,42 +242,76 @@ class DataValidator:
         return errors
 
     @classmethod
-    def validate_dataframe(cls, df: pd.DataFrame, strict: bool = False) -> Tuple[bool, List[str]]:
+    def validate_dataframe(cls, df: pd.DataFrame, strict: bool = False) -> QualityReport:
         """
-        完整验证数据框
+        完整验证数据框，返回结构化质量报告。
 
         Args:
             df: 要验证的 DataFrame
             strict: 是否严格模式（严格模式下任何警告都视为错误）
 
         Returns:
-            (是否通过, 错误/警告消息列表)
+            QualityReport(ok, score, issues)
         """
-        all_errors = []
+        issues: List[QualityIssue] = []
+
+        # 空数据
+        if df is None:
+            return QualityReport(ok=False, score=0.0, issues=[QualityIssue("error", "missing_frame", "K线数据为空")])
+        if df.empty:
+            return QualityReport(ok=False, score=0.0, issues=[QualityIssue("error", "empty_frame", "K线数据无记录")])
 
         # 结构验证
-        all_errors.extend(cls.validate_ohlcv_structure(df))
+        required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+        missing = [c for c in required_columns if c not in df.columns]
+        if missing:
+            return QualityReport(ok=False, score=0.0, issues=[QualityIssue("error", "missing_columns", f"缺少必需列: {missing}", len(missing))])
 
-        # 如果结构验证失败，直接返回
-        if all_errors:
-            return False, all_errors
+        # 价格一致性
+        invalid_hl = (df['High'] < df['Low']).sum()
+        if invalid_hl:
+            issues.append(QualityIssue("error", "ohlc_inconsistent", f"High < Low 共 {invalid_hl} 行", int(invalid_hl)))
 
-        # 价格一致性验证
-        all_errors.extend(cls.validate_price_consistency(df))
+        invalid_close = ((df['Close'] < df['Low']) | (df['Close'] > df['High'])).sum()
+        if invalid_close:
+            issues.append(QualityIssue("error", "ohlc_inconsistent", f"Close 不在 [Low,High] 共 {invalid_close} 行", int(invalid_close)))
 
-        # 成交量验证
-        all_errors.extend(cls.validate_volume_data(df))
+        invalid_open = ((df['Open'] < df['Low']) | (df['Open'] > df['High'])).sum()
+        if invalid_open:
+            issues.append(QualityIssue("error", "ohlc_inconsistent", f"Open 不在 [Low,High] 共 {invalid_open} 行", int(invalid_open)))
 
-        # 缺失值验证
-        all_errors.extend(cls.validate_missing_values(df))
+        # 负价格
+        for col in ['Open', 'High', 'Low', 'Close']:
+            neg = (df[col] < 0).sum()
+            if neg:
+                issues.append(QualityIssue("error", "non_positive_price", f"{col} 存在负数 {int(neg)} 行", int(neg)))
 
-        # 涨跌幅验证
-        all_errors.extend(cls.validate_daily_changes(df))
+        # 成交量
+        neg_vol = (df['Volume'] < 0).sum()
+        if neg_vol:
+            issues.append(QualityIssue("error", "negative_volume", f"成交量负数 {int(neg_vol)} 行", int(neg_vol)))
 
-        # 判断是否通过验证
-        passed = len(all_errors) == 0
+        zero_vol_ratio = (df['Volume'] == 0).sum() / len(df)
+        if zero_vol_ratio > cls.MAX_ZERO_VOLUME_RATIO:
+            issues.append(QualityIssue("warning", "zero_volume", f"零成交量 {zero_vol_ratio:.1%} > {cls.MAX_ZERO_VOLUME_RATIO:.0%}"))
 
-        return passed, all_errors
+        # 极端涨跌幅
+        if len(df) >= 2:
+            extreme = (df['Close'].pct_change().abs() > cls.MAX_DAILY_CHANGE_PCT / 100).sum()
+            if extreme:
+                issues.append(QualityIssue("warning", "extreme_return", f"极端涨跌幅 {int(extreme)} 行 > ±{cls.MAX_DAILY_CHANGE_PCT}%", int(extreme)))
+
+        # 缺失值
+        for col in df.columns:
+            na = df[col].isna().sum()
+            if na and na / len(df) > cls.MAX_MISSING_RATIO:
+                issues.append(QualityIssue("warning", "missing_values", f"列 {col} 缺失 {na}/{len(df)} = {na/len(df):.1%}"))
+
+        error_count = sum(1 for i in issues if i.severity == "error")
+        warning_count = sum(1 for i in issues if i.severity == "warning")
+        score = max(0.0, 100.0 - error_count * 30.0 - warning_count * 10.0)
+
+        return QualityReport(ok=error_count == 0, score=score, issues=issues)
 
     @classmethod
     def clean_dataframe(cls, df: pd.DataFrame) -> pd.DataFrame:

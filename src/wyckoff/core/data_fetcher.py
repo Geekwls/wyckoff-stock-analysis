@@ -23,10 +23,10 @@ def prepare_data(data: pd.DataFrame, config: WyckoffConfig = None) -> pd.DataFra
     cfg = config or WyckoffConfig()
 
     # 1. 数据质量验证
-    passed, errors = DataValidator.validate_dataframe(data)
-    if not passed:
-        logger.warning(f"数据质量验证发现问题: {errors}")
-        # 尝试清理数据
+    report = DataValidator.validate_dataframe(data)
+    if not report.ok:
+        for issue in report.issues:
+            logger.warning(f"[{issue.severity}] {issue.category}: {issue.message}")
         logger.info("尝试自动清理数据...")
         df = DataValidator.clean_dataframe(data)
     else:
@@ -99,10 +99,10 @@ class WyckoffDataFetcher:
 
             # 4. 数据质量验证
             if data is not None and len(data) > 0:
-                passed, errors = DataValidator.validate_dataframe(data)
-                if not passed:
-                    logger.warning(f"数据质量验证发现问题: {errors}")
-                    # 尝试清理数据
+                report = DataValidator.validate_dataframe(data)
+                if not report.ok:
+                    for issue in report.issues:
+                        logger.warning(f"[{issue.severity}] {issue.category}: {issue.message}")
                     logger.info("尝试自动清理数据...")
                     data = DataValidator.clean_dataframe(data)
 
