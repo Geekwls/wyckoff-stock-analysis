@@ -7,6 +7,7 @@ from datetime import datetime
 import numpy as np
 from ..config.settings import WyckoffThresholds
 from .enums import WyckoffPhase
+from .utils import PhaseAdapter
 
 
 class SignalExtractor:
@@ -174,56 +175,28 @@ class SignalExtractor:
 
     @staticmethod
     def is_accumulation_phase(phase_str: str) -> bool:
-        """
-        判断是否为积累期
-
-        Args:
-            phase_str: 阶段字符串
-
-        Returns:
-            是否为积累期
-        """
-        return 'Accumulation' in phase_str
+        """判断是否为积累期"""
+        return PhaseAdapter.is_accumulation(phase_str)
 
     @staticmethod
     def is_distribution_phase(phase_str: str) -> bool:
-        """
-        判断是否为派发期
-
-        Args:
-            phase_str: 阶段字符串
-
-        Returns:
-            是否为派发期
-        """
-        return 'Distribution' in phase_str
+        """判断是否为派发期"""
+        return PhaseAdapter.is_distribution(phase_str)
 
     @staticmethod
     def is_markup_phase(phase_str: str) -> bool:
-        """
-        判断是否为上涨期
-
-        Args:
-            phase_str: 阶段字符串
-
-        Returns:
-            是否为上涨期
-        """
-        return 'Markup' in phase_str
+        """判断是否为上涨期"""
+        return PhaseAdapter.is_markup(phase_str)
 
     @staticmethod
     def is_markdown_phase(phase_str: str) -> bool:
-        """
-        判断是否为下跌期
-        """
-        return 'Markdown' in phase_str
+        """判断是否为下跌期"""
+        return PhaseAdapter.is_markdown(phase_str)
 
     @staticmethod
-    def is_entry_phase(phase_enum: WyckoffPhase) -> bool:
-        """
-        判断是否为可入场阶段 (C/D)
-        """
-        return phase_enum in [WyckoffPhase.PHASE_C, WyckoffPhase.PHASE_D]
+    def is_late_stage(phase_enum: WyckoffPhase) -> bool:
+        """判断是否为后期阶段 (C/D)"""
+        return PhaseAdapter.is_late_stage(phase_enum)
 
     @staticmethod
     def get_execution_score(current_price: float, support: float, resistance: float, direction: str) -> float:

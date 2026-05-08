@@ -159,7 +159,7 @@ class ScreenerService:
                 'confidence': round((phase_res.get('confidence') or 0.0) if isinstance(phase_res, dict) else 0.0, 2),
                 'strength': strength,
                 'weighted_score': quality.score,
-                'is_entry': PhaseAdapter.is_entry_phase(phase_res.get('phase_enum'))
+                'is_late_stage': PhaseAdapter.is_late_stage(phase_res.get('phase_enum'))
             }
             
         except Exception as exc:
@@ -199,8 +199,8 @@ class ScreenerService:
             final_score = stock_score * market_data['multiplier'] * industry_mult
             
             # 过滤
-            is_entry = PhaseAdapter.is_entry_phase(phase_enum or phase_str)
-            if final_score < 40 and not is_entry:
+            is_late_stage = PhaseAdapter.is_late_stage(phase_enum or phase_str)
+            if final_score < 40 and not is_late_stage:
                 continue
                 
             # 计算可执行性得分
@@ -216,7 +216,7 @@ class ScreenerService:
                 'raw_score': stock_score,
                 'final_score': round(final_score, 2),
                 'market_regime': market_data['regime'],
-                'is_entry_stage': is_entry,
+                'is_late_stage': is_late_stage,
                 'execution_score': exec_score,
                 'trading_range': tr,
                 'current_price': analyzer.data['Close'].iloc[-1],
@@ -249,8 +249,8 @@ class ScreenerService:
             final_score = stock_score * multiplier
             
             # 过滤
-            is_entry = PhaseAdapter.is_entry_phase(phase_enum or phase_str)
-            if final_score < 40 and not is_entry:
+            is_late_stage = PhaseAdapter.is_late_stage(phase_enum or phase_str)
+            if final_score < 40 and not is_late_stage:
                 continue
             
             tr = analyzer.pattern_detector.detect_trading_range()
@@ -264,7 +264,7 @@ class ScreenerService:
                 'phase_detail': phase_enum.name if phase_enum else 'Unknown',
                 'raw_score': stock_score,
                 'final_score': round(final_score, 2),
-                'is_entry_stage': is_entry,
+                'is_late_stage': is_late_stage,
                 'execution_score': exec_score,
                 'trading_range': tr,
                 'current_price': analyzer.data['Close'].iloc[-1]
@@ -332,7 +332,7 @@ class ScreenerService:
             if 'weighted_score' in result:
                 strength_str = f"综合评分:{result['weighted_score']}"
             
-            entry_tag = " [ENTRY]" if result.get('is_entry') else ""
+            entry_tag = " [LATE_STAGE]" if result.get('is_late_stage') else ""
             print(f"  [OK] {result['symbol']}: [{result['phase']}] {' | '.join(icons)} ({strength_str}){entry_tag}")
     
     def _print_summary(self, results: List[Dict], failed_symbols: List[str], symbols: List[str]):
@@ -409,7 +409,7 @@ class ScreenerService:
         # 计算统计信息
         total_scanned = len(results)
         signal_count = sum(1 for r in results if r.get('strength', 0) >= 1)
-        entry_count = sum(1 for r in results if r.get('is_entry', False))
+        late_stage_count = sum(1 for r in results if r.get('is_late_stage', False))
         high_score_count = sum(1 for r in results if r.get('weighted_score', 0) >= 60)
 
         # 找出顶级机会（按评分排序）
@@ -430,7 +430,7 @@ class ScreenerService:
         summary = {
             "total_scanned": total_scanned,
             "signal_count": signal_count,
-            "entry_count": entry_count,
+            "late_stage_count": late_stage_count,
             "high_score_count": high_score_count,
             "failed_count": len(failed),
             "phase_distribution": {k: len(v) for k, v in phase_groups.items()}
