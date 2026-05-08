@@ -1,7 +1,30 @@
 import pandas as pd
+import numpy as np
 from typing import Dict, Optional, Tuple, List
 from .base_detector import BaseDetector
 from ...config.settings import WyckoffConfig
+
+
+def _swing_levels(series: pd.Series, *, kind: str, window: int = 3) -> List[float]:
+    """
+    寻找摆动低点/高点。
+    
+    kind='low': 局部最小值（低于左右各 window 根）
+    kind='high': 局部最大值（高于左右各 window 根）
+    """
+    values = series.dropna().reset_index(drop=True)
+    out: List[float] = []
+    if len(values) < window * 2 + 1:
+        return out
+    for i in range(window, len(values) - window):
+        current = float(values.iloc[i])
+        span = values.iloc[i - window : i + window + 1]
+        if kind == "low" and current <= float(span.min()):
+            out.append(current)
+        elif kind == "high" and current >= float(span.max()):
+            out.append(current)
+    return out
+
 
 class TradingRangeDetector(BaseDetector):
     """负责检测交易区间（积累/分布）"""
@@ -14,65 +37,86 @@ class TradingRangeDetector(BaseDetector):
         self._phase_label = ""
 
     def update_from_phase_events(self, high: float, low: float, label: str = ""):
-        """
-        从威科夫阶段事件更新区间边界（替代机械扫描）
-        
-        派发期：high=BC高点, low=AR低点
-        积累期：high=AR高点, low=SC低点
-        
-        Args:
-            high: 已知区间上沿
-            low: 已知区间下沿
-            label: 事件描述（如 "BC-AR"）
-        """
         self._phase_high = high
         self._phase_low = low
         self._phase_label = label
 
     def detect(self, window: int = 60) -> Dict:
         """
-        检测交易区间
+        检测交易区间。
         
-        优先使用已知的威科夫事件边界（BC/AR/SC），
-        当事件边界不可用时回退到机械扫描。
+        优先级：
+        1. 威科夫事件边界（BC/AR/SC）— phase_events
+        2. 摆动高低点（swing points）— swing
+        3. 机械 min/max — mechanical
         """
         if self.data is None or len(self.data) < window:
             return {}
 
+        # ---------- 阶段事件边界（最高优先级） ----------
         if self._phase_high is not None and self._phase_low is not None:
-            high_max = self._phase_high
-            low_min = self._phase_low
-            range_pct = (high_max - low_min) / low_min if low_min > 0 else 0
+            high = self._phase_high
+            low = self._phase_low
             method = "phase_events"
+            return self._build_result(high, low, method)
+
+        # ---------- 摆动点检测 ----------
+        swing_highs = _swing_levels(self.data['High'], kind='high', window=3)
+        swing_lows = _swing_levels(self.data['Low'], kind='low', window=3)
+
+        # 仅使用最近窗口内的摆动点
+        lookback = min(window, len(self.data))
+        recent = self.data.tail(lookback)
+        recent_highs = [h for h in swing_highs if h >= recent['Low'].min()]
+        recent_lows = [l for l in swing_lows if l <= recent['High'].max()]
+
+        if len(recent_highs) >= 2 and len(recent_lows) >= 2:
+            high = float(np.median(recent_highs[-5:]))
+            low = float(np.median(recent_lows[-5:]))
+            method = "swing"
+            # 如果摆动点中位数不合理，回退
+            if low <= 0 or high <= low:
+                high = recent['High'].max()
+                low = recent['Low'].min()
+                method = "mechanical"
         else:
-            df = self.data.tail(window).copy()
-            high_max = df['High'].max()
-            low_min = df['Low'].min()
-            range_pct = (high_max - low_min) / low_min
+            high = recent['High'].max()
+            low = recent['Low'].min()
             method = "mechanical"
+
+        return self._build_result(high, low, method)
+
+    def _build_result(self, high: float, low: float, method: str) -> Dict:
+        range_pct = (high - low) / low if low > 0 else 0
 
         buffer_pct = self.config.spring_range_threshold * 0.1
         effective_threshold = self.config.spring_range_threshold + buffer_pct
         is_consolidation = range_pct < effective_threshold
 
         recent = self.data.tail(60)
-        recent_mean = recent['Volume'].iloc[-20:].mean() if len(recent) >= 20 else recent['Volume'].mean()
-        early_mean = recent['Volume'].iloc[:20].mean() if len(recent) >= 40 else recent_mean
-        vol_trend = 'decreasing' if recent_mean < early_mean else 'increasing'
+        vol_trend = 'decreasing' if len(recent) >= 40 and recent['Volume'].iloc[-20:].mean() < recent['Volume'].iloc[:20].mean() else 'increasing'
 
         current_price = self.data['Close'].iloc[-1]
-        position = (current_price - low_min) / (high_max - low_min) if high_max > low_min else 0.5
+        position = (current_price - low) / (high - low) if high > low else 0.5
+
+        # 质量评分：支撑/阻力被测试次数 + 区间宽度合理性
+        support_tests = int((self.data['Low'] <= low * 1.03).sum())
+        resistance_tests = int((self.data['High'] >= high * 0.97).sum())
+        quality = round(min(1.0, (support_tests + resistance_tests) / 12.0), 2)
 
         return {
             'is_consolidation': is_consolidation,
-            'high': high_max,
-            'low': low_min,
+            'high': high,
+            'low': low,
             'range_pct': range_pct,
-            'duration_days': window,
-            'consolidation_duration_days': window,
+            'duration_days': 60,
+            'consolidation_duration_days': 60,
             'volume_trend': vol_trend,
             'position': position,
             'current_price': current_price,
             '_method': method,
             '_phase_events': self._phase_label,
+            '_quality': quality,
+            '_support_tests': support_tests,
+            '_resistance_tests': resistance_tests,
         }
