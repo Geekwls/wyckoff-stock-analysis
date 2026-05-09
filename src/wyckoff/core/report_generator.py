@@ -211,6 +211,20 @@ class WyckoffReportGenerator:
 52周最低: {self.data['Low'].tail(252).min():.2f}
 成交量: {self.data['Volume'].iloc[-1]:,.0f}
 量比: {self.data['Volume'].iloc[-1] / max(self.data['Volume_MA20'].iloc[-1], 1):.2f}
+"""
+
+        # 🔧 问题三修复：展示RS异常警告
+        phase_result = self.pattern_detector.identify_phase()
+        rs_data = phase_result.get('relative_strength', {})
+        rs_anomaly_warning = rs_data.get('rs_anomaly_warning')
+        if rs_anomaly_warning:
+            report += f"""
+
+⚠️ 【数据质量警告】
+{rs_anomaly_warning}
+"""
+
+        report += f"""
 
 【时间维度分析】
 结构持续时间: {duration_days} 天
