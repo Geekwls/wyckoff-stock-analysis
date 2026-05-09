@@ -264,19 +264,59 @@ class RecommendationEngine:
             holding_period="1-3个月 (波段)"
         )
 
-    def generate_risk_advice(self, quality: SignalQualityModel, plan: TradingPlanModel, 
-                            has_conflict: bool = False, conflict_details: str = "") -> RiskAdviceModel:
+    def generate_risk_advice(self, quality: SignalQualityModel, plan: TradingPlanModel,
+                            has_conflict: bool = False, conflict_details: str = "",
+                            market_env: MarketEnvironment = None) -> RiskAdviceModel:
         """
         生成分层风险建议 (Enhanced with volatility check and conflict detection)
-        
+
         重要理论约束：
         - 当跨周期冲突时，所有方向的交易建议都应被抑制
         - 顺周线试错拿货（等Spring），优于逆周线试错砸盘（等LPSY）
+
+        🔧 问题二修复：增加市场环境与交易方向的一致性检查
+        - 做空 + 强多头环境 → 绝对观望
+        - 做多 + 强多头环境 → 顺水推舟，降低观望阈值
         """
         score = quality.score
         direction = plan.direction
-        
+
+        # 🔧 新增：检查方向与环境的冲突
+        direction_env_conflict = False
+        direction_env_match = False
+        if market_env:
+            is_market_bullish = market_env in [MarketEnvironment.STRONG_BULL, MarketEnvironment.BULL]
+            is_market_bearish = market_env in [MarketEnvironment.STRONG_BEAR, MarketEnvironment.BEAR]
+
+            if direction == "做空" and is_market_bullish:
+                direction_env_conflict = True  # 做空 + 强多头 = 冲突
+            elif direction == "做多" and is_market_bearish:
+                direction_env_conflict = True  # 做多 + 强空头 = 冲突
+            elif direction == "做多" and is_market_bullish:
+                direction_env_match = True  # 做多 + 强多头 = 匹配
+            elif direction == "做空" and is_market_bearish:
+                direction_env_match = True  # 做空 + 强空头 = 匹配
+
         def get_item(mode: str) -> RiskAdviceItem:
+            # 🔧 问题二修复：方向与环境冲突时，强制观望
+            if direction_env_conflict:
+                env_name = market_env.value if hasattr(market_env, 'value') else str(market_env)
+                if mode == "conservative":
+                    return RiskAdviceItem(
+                        action="绝对观望",
+                        reason=f"方向与环境冲突：做空方向与{env_name}环境冲突，建议等待环境转弱或信号转向"
+                    )
+                elif mode == "moderate":
+                    return RiskAdviceItem(
+                        action="观望",
+                        reason=f"方向与环境冲突：做空方向与{env_name}环境冲突，建议等待"
+                    )
+                else:  # aggressive
+                    return RiskAdviceItem(
+                        action="等待信号",
+                        reason=f"方向与环境冲突：做空方向与{env_name}环境冲突，等待环境或信号明确"
+                    )
+
             # 关键修复：跨周期冲突时，所有方向的交易建议都应被抑制
             if has_conflict:
                 if mode == "conservative":
@@ -286,10 +326,33 @@ class RecommendationEngine:
                 else:  # aggressive
                     # 激进策略也应抑制，但可以给出等待方向
                     return RiskAdviceItem(action="等待信号", reason=f"跨周期冲突：{conflict_details}，等待日线级别明确信号")
-            
+
             if direction == "观望":
                 return RiskAdviceItem(action="观望", reason="无清晰信号")
-            
+
+            # 🔧 问题二修复：方向与环境匹配时，降低观望阈值
+            if direction_env_match:
+                if mode == "conservative":
+                    # 原本需要>=70分，现在降低到>=60分
+                    action = "稳步参与" if score >= 60 else "观望"
+                    reason = f"信号得分 {score}/100，且交易方向与市场环境一致（顺水推舟）"
+                    return RiskAdviceItem(action=action, reason=reason)
+                elif mode == "moderate":
+                    # 原本需要>=50分，现在降低到>=40分
+                    action = "按计划参与" if score >= 40 else "观望"
+                    reason = f"信号得分 {score}/100，且交易方向与市场环境一致（顺水推舟）"
+                    return RiskAdviceItem(action=action, reason=reason)
+                else:  # aggressive
+                    # 激进策略：只要有20分以上就可以试错
+                    if score >= 20:
+                        action = "激进试错"
+                        reason = f"信号得分 {score}/100，方向与环境一致，顺水推舟"
+                    else:
+                        action = "极轻仓试错"
+                        reason = f"评分较低，严控止损，等待日线级别明确信号"
+                    return RiskAdviceItem(action=action, reason=reason)
+
+            # 原有逻辑（方向与环境不明确匹配时）
             if mode == "conservative":
                 action = "稳步参与" if score >= 70 else "绝对观望"
                 return RiskAdviceItem(action=action, reason=f"信号得分 {score}/100")

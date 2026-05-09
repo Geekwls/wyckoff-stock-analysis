@@ -1539,10 +1539,11 @@ class WyckoffReportGenerator:
         if monthly_warning:
             conflict_details = f"{conflict_details}；{monthly_warning}" if conflict_details else monthly_warning
         risk_advice = self.rec_engine.generate_risk_advice(
-            signal_quality, 
+            signal_quality,
             trading_plan,
             has_conflict=conflict.get('has_conflict', False),
-            conflict_details=conflict_details
+            conflict_details=conflict_details,
+            market_env=market_context.environment  # 🔧 问题二修复：传入市场环境
         )
         
         # 使用BacktestEngine获取历史表现
