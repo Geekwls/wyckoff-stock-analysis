@@ -59,7 +59,9 @@ class RecommendationEngine:
         reasons = []
         weights = self.thresholds.QUALITY_WEIGHTS
         
-        # 主要信号权重分配（含 LPS/LPSY，修复：之前权重为0但参与冲突计数）
+        # 🔧 问题四修复：主要信号权重分配（增加ST和AR）
+        # ST（Secondary Test）和AR（Automatic Reaction）是威科夫Phase A的关键信号
+        # 不应被忽略，特别是在派发/吸筹初期
         important_signals = [
             ('joc', 40),
             ('spring', 35),
@@ -68,28 +70,61 @@ class RecommendationEngine:
             ('upthrust', 35),
             ('sow', 25),
             ('lpsy', 15),
-            ('fti', 40)
+            ('fti', 40),
+            ('secondary_test', 20),  # 🔧 新增：ST是Phase A关键确认信号
+            ('automatic_reaction', 15)  # 🔧 新增：AR定义TR边界
         ]
-        
+
         bullish_count = 0
         bearish_count = 0
-        
+
         for key, max_weight in important_signals:
             info = events.get(key)
             if not info or not self._get_attr(info, 'detected'): continue
 
             # 判断方向
-            if key in ['joc', 'spring', 'sos', 'lps']: bullish_count += 1
-            elif key in ['fti', 'upthrust', 'sow', 'lpsy']: bearish_count += 1
+            if key in ['joc', 'spring', 'sos', 'lps', 'automatic_reaction']:
+                bullish_count += 1
+            elif key in ['fti', 'upthrust', 'sow', 'lpsy', 'secondary_test']:
+                # 🔧 修复：ST的方向判断需要根据上下文
+                # 派发期的ST确认需求耗尽（看空），吸筹期的ST确认供应耗尽（看多）
+                # 这里简化处理：ST归为中性，根据阶段判断
+                phase_str = pattern_results.get('phase', 'Unknown')
+                if 'Distribution' in phase_str or '派发' in phase_str:
+                    bearish_count += 1  # 派发期的ST确认看空
+                elif 'Accumulation' in phase_str or '吸筹' in phase_str:
+                    bullish_count += 1  # 吸筹期的ST确认看多
 
             # 质量因子 (0.5 - 1.2)
             quality_factor = 0.8
 
             # 1. 成交量因子
-            vol_ratio = self._get_attr(info, 'volume_ratio', 1.0)
-            if vol_ratio > 1.5:
-                quality_factor += weights['volume_ratio']
-                reasons.append(f"{key.upper()} 成交量强力确认")
+            # 🔧 问题四修复：ST和AR使用特殊的volume_ratio处理
+            if key == 'secondary_test':
+                # ST的volume_ratio是相对climax的，不是相对MA的
+                st_vol_ratio = self._get_attr(info, 'st_vol_ratio', None)
+                supply_exhausted = self._get_attr(info, 'supply_exhausted', False)
+                if supply_exhausted:
+                    quality_factor += 0.3  # ST确认供应耗尽，加分
+                    reasons.append(f"ST确认需求耗尽（量比{st_vol_ratio:.1%}）")
+                elif st_vol_ratio and st_vol_ratio < 0.6:
+                    quality_factor += 0.1  # ST接近确认，小幅加分
+                    reasons.append(f"ST接近确认（量比{st_vol_ratio:.1%}）")
+            elif key == 'automatic_reaction':
+                # AR没有volume_ratio，用rebound_pct/decline_pct判断
+                rebound_pct = self._get_attr(info, 'rebound_pct', None)
+                decline_pct = self._get_attr(info, 'decline_pct', None)
+                if rebound_pct and rebound_pct > 0.03:  # 反弹超过3%
+                    quality_factor += 0.15
+                    reasons.append(f"AR自然反弹强劲（{rebound_pct*100:.1f}%）")
+                elif decline_pct and decline_pct < -0.03:  # 回落超过3%
+                    quality_factor += 0.15
+                    reasons.append(f"AR自然回落充分（{decline_pct*100:.1f}%）")
+            else:
+                vol_ratio = self._get_attr(info, 'volume_ratio', 1.0)
+                if vol_ratio > 1.5:
+                    quality_factor += weights['volume_ratio']
+                    reasons.append(f"{key.upper()} 成交量强力确认")
 
             # 2. 置信度因子
             conf = self._get_attr(info, 'confidence', 0.5)
@@ -173,32 +208,94 @@ class RecommendationEngine:
             base_score += 25
             reasons.append("🎯 发现“死角突破”信号！从枯燥区放量跃起，极具爆发力")
 
-        # 冲突惩罚
+        # 🔧 问题四修复：冲突惩罚优化
+        # 原逻辑：只要有多空信号就扣30分，过于严厉
+        # 新逻辑：区分"严重冲突"和"阶段过渡信号"
         if bullish_count > 0 and bearish_count > 0:
-            base_score -= self.thresholds.CONFLICT_PENALTY
-            reasons.append(f"检测到多空信号冲突 (惩罚 -{self.thresholds.CONFLICT_PENALTY}分)")
+            phase_str = pattern_results.get('phase', 'Unknown')
+
+            # 检查是否是阶段过渡期的合理信号（如吸筹→上涨）
+            is_phase_transition = (
+                ('Accumulation' in phase_str and bullish_count > bearish_count) or
+                ('Distribution' in phase_str and bearish_count > bullish_count)
+            )
+
+            if is_phase_transition:
+                # 阶段过渡期的信号冲突是合理的，轻微扣分
+                base_score -= 10
+                reasons.append(f"阶段过渡期信号混合 (轻微扣分 -10分，符合威科夫理论)")
+            else:
+                # 严重的多空信号冲突，大幅扣分
+                base_score -= self.thresholds.CONFLICT_PENALTY
+                reasons.append(f"检测到多空信号冲突 (惩罚 -{self.thresholds.CONFLICT_PENALTY}分)")
 
         # 市场环境加成（双向对称：多头/空头都有加分和扣分）
+        # 🔧 问题四修复：环境扣分优化
+        # 原逻辑：非Strong Bull做多扣10分，非Strong Bear做空扣10分
+        # 问题：中性环境（Bull、Bear、Neutral）也被扣分
+        # 新逻辑：只在极端环境不匹配时扣分
         phase_str = pattern_results.get('phase', 'Unknown')
         current_side = PhaseAdapter.get_market_side(phase_str)
+        is_market_strong_bullish = market_env == MarketEnvironment.STRONG_BULL
+        is_market_strong_bearish = market_env == MarketEnvironment.STRONG_BEAR
         is_market_bullish = market_env in [MarketEnvironment.STRONG_BULL, MarketEnvironment.BULL]
         is_market_bearish = market_env in [MarketEnvironment.STRONG_BEAR, MarketEnvironment.BEAR]
 
-        if is_market_bullish and current_side == MarketSide.BULLISH:
+        # 多头方向
+        if is_market_strong_bullish and current_side == MarketSide.BULLISH:
             base_score += 15
-            reasons.append("顺应大盘多头环境 (+15分)")
-        elif not is_market_bullish and current_side == MarketSide.BULLISH:
-            base_score -= 10
-            reasons.append("大盘环境不利于做多 (-10分)")
+            reasons.append("顺应大盘强势多头环境 (+15分)")
+        elif is_market_bullish and current_side == MarketSide.BULLISH:
+            base_score += 5  # 🔧 修复：普通多头环境也加分，但不多
+            reasons.append("顺应大盘多头环境 (+5分)")
+        elif is_market_strong_bearish and current_side == MarketSide.BULLISH:
+            base_score -= 15  # 🔧 修复：只在极端环境不匹配时大幅扣分
+            reasons.append("大盘强势空头环境不利于做多 (-15分)")
 
-        if is_market_bearish and current_side == MarketSide.BEARISH:
+        # 空头方向
+        if is_market_strong_bearish and current_side == MarketSide.BEARISH:
             base_score += 15
-            reasons.append("顺应大盘空头环境 (+15分)")
-        elif not is_market_bearish and current_side == MarketSide.BEARISH:
-            base_score -= 10
-            reasons.append("大盘环境不利于做空 (-10分)")
+            reasons.append("顺应大盘强势空头环境 (+15分)")
+        elif is_market_bearish and current_side == MarketSide.BEARISH:
+            base_score += 5  # 🔧 修复：普通空头环境也加分
+            reasons.append("顺应大盘空头环境 (+5分)")
+        elif is_market_strong_bullish and current_side == MarketSide.BEARISH:
+            base_score -= 15  # 🔧 修复：只在极端环境不匹配时大幅扣分
+            reasons.append("大盘强势多头环境不利于做空 (-15分)")
 
+        # 🔧 问题四修复：信号质量过低时的解释说明
         final_score = int(max(0, min(base_score, 100)))
+
+        if final_score < 10 and seq_rating in ['A', 'B']:
+            # 序列完整但评分极低，说明缺少主要交易信号
+            missing_signals = []
+            phase_str = pattern_results.get('phase', 'Unknown')
+
+            if 'Accumulation' in phase_str or '吸筹' in phase_str:
+                if not events.get('spring') or not self._get_attr(events.get('spring'), 'detected'):
+                    missing_signals.append('Spring震仓')
+                if not events.get('sos') or not self._get_attr(events.get('sos'), 'detected'):
+                    missing_signals.append('SOS强势信号')
+            elif 'Distribution' in phase_str or '派发' in phase_str:
+                if not events.get('sow') or not self._get_attr(events.get('sow'), 'detected'):
+                    missing_signals.append('SOW弱势信号')
+                if not events.get('lpsy') or not self._get_attr(events.get('lpsy'), 'detected'):
+                    missing_signals.append('LPSY最后支撑')
+
+            if missing_signals:
+                reasons.append(f"⚠️ 虽有完整{seq_rating}级序列结构，但缺少核心交易信号：{', '.join(missing_signals)}。当前处于{phase_str}，信号尚未成熟，建议等待关键确认出现。")
+
+        # 针对枯燥区 85 分以上的特殊提升
+        if self._get_attr(boring, 'score', 0) >= 85 and final_score < 85:
+            final_score = 85
+            reasons.append("触发高能预警阈值，综合评分上调至 85 (死角突破临界)")
+
+        return SignalQualityModel(
+            score=final_score,
+            max_score=100,
+            confidence="极高" if final_score >= 85 else "高" if final_score >= 70 else "中" if final_score >= 40 else "低",
+            reasons=reasons
+        )
 
         # 针对枯燥区 85 分以上的特殊提升
         if self._get_attr(boring, 'score', 0) >= 85 and final_score < 85:

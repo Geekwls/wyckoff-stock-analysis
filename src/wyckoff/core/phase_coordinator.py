@@ -124,6 +124,7 @@ class PhaseCoordinator:
 
         # 6. 统一使用强类型模型封装
         # 保存原始检测结果供 scoring 引擎使用
+        # 🔧 问题四修复：将AR和ST也加入raw_events_map，确保评分引擎可以访问
         raw_events_map = {
             'spring': spring_res,
             'upthrust': upthrust_res,
@@ -133,6 +134,8 @@ class PhaseCoordinator:
             'lpsy': lpsy_res,
             'joc': joc_res,
             'fti': fti_res,
+            'secondary_test': st_res,  # 🔧 新增：ST是Phase A关键信号
+            'automatic_reaction': ar_res,  # 🔧 新增：AR定义TR边界
         }
         events = {
             'trading_range': TradingRangeModel(**tr_res),
