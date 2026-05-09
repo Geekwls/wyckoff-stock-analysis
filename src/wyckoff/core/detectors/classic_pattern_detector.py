@@ -289,12 +289,23 @@ class ClassicPatternDetector(BaseDetector):
             springs.append(spring)
 
         if springs:
-            return {
-                'detected': True,
-                'signals': springs,
-                'latest_spring': springs[-1],
-                'method': 'enhanced_spring_detection',
-            }
+            # 🔧 v1.2新增：应用时间衰减，过滤过期的Spring信号
+            fresh_springs = [
+                s for s in springs
+                if not self._is_signal_stale(s['date'], 'spring')
+            ]
+
+            if fresh_springs:
+                return {
+                    'detected': True,
+                    'signals': springs,  # 保留所有信号供参考
+                    'fresh_signals': fresh_springs,  # 新增：仅包含有效信号
+                    'latest_spring': fresh_springs[-1],  # 修改：使用最新的有效信号
+                    'method': 'enhanced_spring_detection_with_decay',
+                    'signal_age_days': self._get_signal_age_days(fresh_springs[-1]['date'])  # 新增：信号年龄
+                }
+            else:
+                return {'detected': False, 'reason': 'all_spring_signals_stale'}
         return {'detected': False, 'reason': 'no_spring_found'}
 
     def _calculate_support_level_spring(self, df: pd.DataFrame) -> Optional[float]:
@@ -488,8 +499,23 @@ class ClassicPatternDetector(BaseDetector):
         if not breakout_mask.any():
             return {'detected': False, 'reason': 'no_joc_breakout_found'}
 
-        joc_idx = df[breakout_mask].index[-1]
-        joc_row = df.loc[joc_idx]
+        # 🔧 v1.2新增：时间衰减应用，从最新的JOC信号开始检查
+        joc_candidates = df[breakout_mask].sort_index(ascending=False)
+        fresh_joc_found = False
+
+        for joc_idx_temp in joc_candidates.index:
+            # 检查信号是否过期
+            if self._is_signal_stale(joc_idx_temp, 'joc'):
+                continue  # 跳过过期信号
+
+            joc_idx = joc_idx_temp
+            joc_row = df.loc[joc_idx]
+            fresh_joc_found = True
+            break
+
+        if not fresh_joc_found:
+            return {'detected': False, 'reason': 'no_fresh_joc_signal_all_stale'}
+
         v_ma_val = vol_ma.loc[joc_idx]
         volume_ratio = joc_row['Volume'] / v_ma_val if v_ma_val > 0 else 0
         breakout_pct = (joc_row['Close'] - creek_level) / creek_level
@@ -497,6 +523,8 @@ class ClassicPatternDetector(BaseDetector):
         test_detected = False
         test_date = None
         test_vol_ratio = None
+        test_depth_pct = 0.0
+        test_count = 0
         df_after_joc = df[df.index > joc_idx].head(10)
         if len(df_after_joc) >= 1:
             for idx_test in df_after_joc.index:
@@ -504,17 +532,74 @@ class ClassicPatternDetector(BaseDetector):
                 near_creek = creek_level * (1 - self.thresholds.JOC_TEST_BAND) <= row_test['Low'] <= creek_level * (1 + self.thresholds.JOC_TEST_BAND * 2)
                 vol_shrinking = row_test['Volume'] < vol_ma.loc[idx_test] * self.thresholds.JOC_TEST_VOL_RATIO
                 if near_creek and vol_shrinking:
-                    test_detected = True
-                    test_date = idx_test
-                    test_vol_ratio = round(row_test['Volume'] / vol_ma.loc[idx_test], 2)
-                    break
+                    if not test_detected:
+                        test_detected = True
+                        test_date = idx_test
+                        test_vol_ratio = round(row_test['Volume'] / vol_ma.loc[idx_test], 2)
+                    test_count += 1
+                    # 计算回测深度（最低点相对突破位的跌幅）
+                    depth = (joc_row['Close'] - row_test['Low']) / joc_row['Close']
+                    test_depth_pct = max(test_depth_pct, depth)
 
-        confidence = 0.50 + (0.2 if volume_ratio >= 2.0 else 0.1 if volume_ratio >= 1.5 else 0) + (0.1 if breakout_pct >= 0.03 else 0) + (0.2 if test_detected else 0)
+        # 使用强度分类系统
+        strength_info = self._classify_joc_strength({
+            'test_detected': test_detected,
+            'test_depth_pct': test_depth_pct,
+            'test_count': test_count,
+            'volume_ratio': volume_ratio,
+            'breakout_pct': breakout_pct
+        })
+
+        confidence = 0.50 + (0.2 if volume_ratio >= 2.0 else 0.1 if volume_ratio >= 1.5 else 0) + (0.1 if breakout_pct >= 0.03 else 0) + (0.2 if test_detected else 0) + strength_info['confidence_boost']
         return {
             'detected': True, 'date': joc_idx, 'creek_level': round(creek_level, 3), 'close_price': round(joc_row['Close'], 3),
             'breakout_pct': round(breakout_pct * 100, 2), 'volume_ratio': round(volume_ratio, 2),
-            'test_detected': test_detected, 'test_date': test_date, 'test_vol_ratio': test_vol_ratio, 'confidence': round(min(confidence, 1.0), 2)
+            'test_detected': test_detected, 'test_date': test_date, 'test_vol_ratio': test_vol_ratio,
+            'test_depth_pct': round(test_depth_pct * 100, 2), 'test_count': test_count,
+            'strength': strength_info['strength'], 'strength_description': strength_info['description'],
+            'trading_implication': strength_info['trading_implication'], 'confidence': round(min(confidence, 1.0), 2)
         }
+
+    def _classify_joc_strength(self, joc_signal: dict) -> dict:
+        """JOC强度分类系统
+
+        理论依据：孟洪涛《新威科夫操盘法》
+        - 强势JOC：直接拉升，不回测或回测很浅（<3%）
+        - 弱势JOC：需要多次回测确认或深回测（≥3%）
+
+        Args:
+            joc_signal: JOC信号字典，包含test_detected, test_depth_pct, test_count等
+
+        Returns:
+            强度分类信息，包括strength级别、描述、交易建议、置信度加成
+        """
+        has_test = joc_signal.get('test_detected', False)
+        test_depth = joc_signal.get('test_depth_pct', 0)
+        test_count = joc_signal.get('test_count', 0)
+        volume_ratio = joc_signal.get('volume_ratio', 0)
+
+        # 判断JOC强度
+        if not has_test:
+            return {
+                'strength': 'STRONG_JOC',
+                'description': '强势JOC（直接拉升，无需回测）',
+                'trading_implication': '激进追涨，止损设在JOC起点',
+                'confidence_boost': 0.3
+            }
+        elif test_depth < 0.03 and test_count <= 2:
+            return {
+                'strength': 'STRONG_JOC_CONFIRMED',
+                'description': f'强势JOC（浅回测{test_depth*100:.1f}%，{test_count}次确认）',
+                'trading_implication': '稳健做多，回测介入',
+                'confidence_boost': 0.2
+            }
+        else:
+            return {
+                'strength': 'WEAK_JOC',
+                'description': f'弱势JOC（深回测{test_depth*100:.1f}%，{test_count}次试探）',
+                'trading_implication': '谨慎观望，等待明确方向',
+                'confidence_boost': -0.2
+            }
 
     def detect_fti(self, lookback: int = 90) -> Dict:
         if self.data is None or len(self.data) < 60:

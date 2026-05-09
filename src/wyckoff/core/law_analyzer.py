@@ -1005,4 +1005,234 @@ class WyckoffLawAnalyzer:
             }
         except Exception as e:
             raise LawAnalysisError("因果分析", str(e)) from e
-  
+
+    def analyze_supply_demand_law_enhanced(self, market_context: dict = None) -> dict:
+        """增强版供需定律分析
+
+        理论依据：孟洪涛《新威科夫操盘法》
+        - 量化吸筹/派发努力（VWAP计算）
+        - 计算供需累积量
+        - 评估吸筹质量
+
+        Args:
+            market_context: 市场环境上下文
+
+        Returns:
+            增强版供需分析结果，包括VWAP、累积成交量、供需比例等
+        """
+        if self.data is None or len(self.data) < 20:
+            raise InsufficientDataError("供需定律分析", required=20, actual=len(self.data) if self.data is not None else 0)
+
+        df = self.data.copy()
+
+        # 检测交易区间
+        try:
+            trading_range = self.detect_trading_range()
+        except Exception as e:
+            logger.warning(f"检测交易区间失败: {e}")
+            trading_range = {'low': df['Low'].tail(60).min(), 'high': df['High'].tail(60).max()}
+
+        # 获取当前阶段
+        try:
+            phase_result = self.phase_coordinator.get_current_phase()
+            current_phase = phase_result.get('phase', 'Unknown')
+        except Exception as e:
+            logger.warning(f"获取当前阶段失败: {e}")
+            current_phase = 'Unknown'
+
+        enhanced_analysis = {
+            'current_phase': current_phase,
+            'trading_range': trading_range
+        }
+
+        # 根据当前阶段进行不同的分析
+        if 'Accumulation' in current_phase:
+            # 吸筹期分析
+            accumulation_analysis = self._analyze_accumulation_enhanced(df, trading_range)
+            enhanced_analysis['accumulation_analysis'] = accumulation_analysis
+
+        elif 'Distribution' in current_phase:
+            # 派发期分析
+            distribution_analysis = self._analyze_distribution_enhanced(df, trading_range)
+            enhanced_analysis['distribution_analysis'] = distribution_analysis
+
+        else:
+            # 趋势阶段分析
+            trend_analysis = self._analyze_trend_enhanced(df)
+            enhanced_analysis['trend_analysis'] = trend_analysis
+
+        return enhanced_analysis
+
+    def _analyze_accumulation_enhanced(self, df: pd.DataFrame, trading_range: dict) -> dict:
+        """吸筹期增强分析"""
+        try:
+            # 筛选在TR内的数据
+            tr_low = trading_range.get('low', df['Low'].min())
+            tr_high = trading_range.get('high', df['High'].max())
+
+            in_tr = df[
+                (df['Close'] >= tr_low) &
+                (df['Close'] <= tr_high)
+            ].copy()
+
+            if len(in_tr) == 0:
+                return {'error': '无TR内数据'}
+
+            # 计算VWAP（成交量加权平均价）
+            vwap = (in_tr['Volume'] * in_tr['Close']).sum() / in_tr['Volume'].sum()
+
+            # 计算累积成交量
+            cumulative_volume = in_tr['Volume'].sum()
+
+            # 计算累积成交金额
+            cumulative_amount = (in_tr['Volume'] * in_tr['Close']).sum()
+
+            # VWAP在TR中的位置（0=底部，1=顶部）
+            vwap_position = (vwap - tr_low) / (tr_high - tr_low) if tr_high > tr_low else 0.5
+
+            # 吸筹质量评估
+            if 0.4 < vwap_position < 0.6:
+                quality = 'HIGH'
+                quality_description = '优质吸筹：VWAP位于TR中部，主力吸筹充分'
+            elif 0.3 < vwap_position < 0.7:
+                quality = 'MEDIUM'
+                quality_description = '中等吸筹：VWAP位于TR中上部'
+            else:
+                quality = 'LOW'
+                quality_description = '劣质吸筹：VWAP偏离TR中心'
+
+            # 分析吸筹努力分布
+            in_tr['price_range'] = pd.cut(in_tr['Close'], bins=5, labels=['底部', '中下部', '中部', '中上部', '顶部'])
+            volume_by_price = in_tr.groupby('price_range', observed=True)['Volume'].sum()
+
+            # 吸筹阶段判断
+            spring = self.pattern_detector.detect_spring()
+            sos = self.pattern_detector.detect_sos()
+
+            if spring.get('detected') and sos.get('detected'):
+                stage = 'Phase D-E (准备突破)'
+                stage_description = '吸筹接近尾声，准备进入上涨期'
+            elif spring.get('detected'):
+                stage = 'Phase C (震仓确认)'
+                stage_description = '震仓完成，主力控盘'
+            else:
+                stage = 'Phase A-B (吸筹初期)'
+                stage_description = '主力吸筹阶段'
+
+            return {
+                'vwap': round(vwap, 2),
+                'cumulative_volume': round(cumulative_volume, 0),
+                'cumulative_amount': round(cumulative_amount, 0),
+                'vwap_position': round(vwap_position, 3),
+                'quality': quality,
+                'quality_description': quality_description,
+                'volume_distribution_by_price': {
+                    k: round(v, 0) for k, v in volume_by_price.items()
+                },
+                'accumulation_stage': stage,
+                'stage_description': stage_description,
+                'spring_detected': spring.get('detected', False),
+                'sos_detected': sos.get('detected', False)
+            }
+
+        except Exception as e:
+            logger.error(f"吸筹期分析失败: {e}")
+            return {'error': str(e)}
+
+    def _analyze_distribution_enhanced(self, df: pd.DataFrame, trading_range: dict) -> dict:
+        """派发期增强分析"""
+        try:
+            # 筛选在TR内的数据
+            tr_low = trading_range.get('low', df['Low'].min())
+            tr_high = trading_range.get('high', df['High'].max())
+
+            in_tr = df[
+                (df['Close'] >= tr_low) &
+                (df['Close'] <= tr_high)
+            ].copy()
+
+            if len(in_tr) == 0:
+                return {'error': '无TR内数据'}
+
+            # 计算VWAP
+            vwap = (in_tr['Volume'] * in_tr['Close']).sum() / in_tr['Volume'].sum()
+
+            # 计算累积成交量
+            cumulative_volume = in_tr['Volume'].sum()
+
+            # VWAP在TR中的位置
+            vwap_position = (vwap - tr_low) / (tr_high - tr_low) if tr_high > tr_low else 0.5
+
+            # 派发质量评估（VWAP越高说明派发位置越好）
+            if vwap_position > 0.6:
+                quality = 'HIGH'
+                quality_description = '优质派发：VWAP位于TR上部，主力高位出货'
+            elif vwap_position > 0.4:
+                quality = 'MEDIUM'
+                quality_description = '中等派发：VWAP位于TR中部'
+            else:
+                quality = 'LOW'
+                quality_description = '劣质派发：VWAP位于TR下部'
+
+            # 派发阶段判断
+            upthrust = self.pattern_detector.detect_upthrust()
+            sow = self.pattern_detector.detect_sow()
+
+            if upthrust.get('detected') and sow.get('detected'):
+                stage = 'Phase D-E (准备下跌)'
+                stage_description = '派发接近尾声，准备进入下跌期'
+            elif upthrust.get('detected'):
+                stage = 'Phase C (假突破确认)'
+                stage_description = '假突破完成，主力出货'
+            else:
+                stage = 'Phase A-B (派发初期)'
+                stage_description = '主力派发阶段'
+
+            return {
+                'vwap': round(vwap, 2),
+                'cumulative_volume': round(cumulative_volume, 0),
+                'vwap_position': round(vwap_position, 3),
+                'quality': quality,
+                'quality_description': quality_description,
+                'distribution_stage': stage,
+                'stage_description': stage_description,
+                'upthrust_detected': upthrust.get('detected', False),
+                'sow_detected': sow.get('detected', False)
+            }
+
+        except Exception as e:
+            logger.error(f"派发期分析失败: {e}")
+            return {'error': str(e)}
+
+    def _analyze_trend_enhanced(self, df: pd.DataFrame) -> dict:
+        """趋势阶段增强分析"""
+        try:
+            current_price = df['Close'].iloc[-1]
+            ma200 = df['Close'].rolling(200).mean().iloc[-1] if len(df) >= 200 else None
+            ma50 = df['Close'].rolling(50).mean().iloc[-1] if len(df) >= 50 else None
+
+            # 判断趋势
+            if ma200:
+                trend = 'uptrend' if current_price > ma200 else 'downtrend'
+            else:
+                trend = 'unknown'
+
+            # 趋势强度
+            recent_vol = df['Volume'].tail(20).mean()
+            historical_vol = df['Volume'].tail(60).mean()
+            volume_ratio = recent_vol / historical_vol if historical_vol > 0 else 1
+
+            strength = 'strong' if volume_ratio > 1.5 else 'moderate' if volume_ratio > 1.0 else 'weak'
+
+            return {
+                'current_trend': trend,
+                'trend_strength': strength,
+                'volume_ratio': round(volume_ratio, 2),
+                'current_price': round(current_price, 2),
+                'ma200': round(ma200, 2) if ma200 else None,
+                'ma50': round(ma50, 2) if ma50 else None
+            }
+
+        except Exception as e:
+            logger.error(f"趋势分析失败: {e}")
+            return {'error': str(e)}

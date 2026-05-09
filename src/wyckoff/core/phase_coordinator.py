@@ -285,3 +285,238 @@ class PhaseCoordinator:
             phase_letter = parts[-1]
             return f"{new_type} Phase {phase_letter}"
         return f"{new_type} Unknown"
+
+    def transition_phase_with_criteria(self, current_phase: str, events: Dict) -> Tuple[str, float]:
+        """
+        🔧 v1.1新增：使用量化标准进行Phase转换
+
+        理论依据：孟洪涛《新威科夫操盘法》
+        - Phase A→B：需要完整结构（SC/AR/ST）+ 20天震荡
+        - Phase B→C：需要关键触发信号（Spring/Upthrust/SOS/SOW）
+        - Phase C→D：需要确认信号（LPS/LPSY/JOC/FTI）
+        - Phase D→E：需要3天确认
+
+        Args:
+            current_phase: 当前阶段
+            events: 收集到的事件字典
+
+        Returns:
+            (新阶段, 置信度)
+        """
+        criteria = PhaseTransitionCriteria()
+        phase_type = current_phase.split()[0] if 'Phase' in current_phase else current_phase
+
+        # Phase A → B/C 转换
+        if 'Phase A' in current_phase:
+            return self._transition_from_phase_a(current_phase, events, criteria)
+
+        # Phase B → C 转换
+        elif 'Phase B' in current_phase:
+            return self._transition_from_phase_b(current_phase, events, criteria)
+
+        # Phase C → D 转换
+        elif 'Phase C' in current_phase:
+            return self._transition_from_phase_c(current_phase, events, criteria)
+
+        # Phase D → E 转换
+        elif 'Phase D' in current_phase:
+            return self._transition_from_phase_d(current_phase, events, criteria)
+
+        # 未知阶段，尝试识别
+        else:
+            return self._identify_initial_phase(events, criteria)
+
+    def _transition_from_phase_a(self, current_phase: str, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+        """从Phase A转换的逻辑"""
+        # 检查是否有完整的Phase A结构
+        has_complete_structure = self._has_complete_phase_a(events)
+        if not has_complete_structure:
+            return current_phase, 0.5
+
+        # 计算震荡持续时间
+        consolidation_days = self._calculate_consolidation_duration(events)
+        if consolidation_days < criteria.A_TO_B_MIN_DAYS:
+            return current_phase, 0.6
+
+        # 检查Phase B→C的触发信号
+        trigger = self._check_phase_triggers(events, criteria.B_TO_C_SIGNALS)
+        if trigger:
+            new_phase = self._replace_phase_type(current_phase, 'Phase C')
+            return new_phase, 0.85
+
+        # 没有触发信号，进入Phase B
+        new_phase = self._replace_phase_type(current_phase, 'Phase B')
+        return new_phase, 0.8
+
+    def _transition_from_phase_b(self, current_phase: str, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+        """从Phase B转换的逻辑"""
+        # 检查Phase C触发信号
+        trigger = self._check_phase_triggers(events, criteria.B_TO_C_SIGNALS)
+        if trigger:
+            new_phase = self._replace_phase_type(current_phase, 'Phase C')
+            return new_phase, 0.85
+
+        # 保持Phase B
+        return current_phase, 0.7
+
+    def _transition_from_phase_c(self, current_phase: str, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+        """从Phase C转换的逻辑"""
+        # 检查Phase D确认信号
+        confirmations = self._check_phase_triggers(events, criteria.C_TO_D_SIGNALS)
+        if confirmations:
+            new_phase = self._replace_phase_type(current_phase, 'Phase D')
+            return new_phase, 0.8
+
+        # 保持Phase C
+        return current_phase, 0.7
+
+    def _transition_from_phase_d(self, current_phase: str, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+        """从Phase D转换的逻辑"""
+        # 检查是否有连续3天的确认
+        if self._has_continuous_confirmation(criteria.D_TO_E_CONFIRMATION_DAYS):
+            new_phase = self._replace_phase_type(current_phase, 'Phase E')
+            return new_phase, 0.9
+
+        # 保持Phase D
+        return current_phase, 0.7
+
+    def _identify_initial_phase(self, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+        """识别初始阶段"""
+        climax_res = events.get('climax_ar', {})
+        ar_res = events.get('climax_ar', {})
+        st_res = events.get('st', {})
+
+        # 检查Phase A
+        if self._has_complete_phase_a(events):
+            if climax_res.get('type') == 'selling_climax':
+                return 'Accumulation Phase A', 0.7
+            elif climax_res.get('type') == 'buying_climax':
+                return 'Distribution Phase A', 0.7
+
+        # 检查Spring/Upthrust直接进入Phase C
+        spring_res = events.get('spring_upthrust', {})
+        if spring_res.get('detected'):
+            if spring_res.get('_type') == 'spring':
+                return 'Accumulation Phase C', 0.8
+            elif spring_res.get('_type') == 'upthrust':
+                return 'Distribution Phase C', 0.8
+
+        return 'Unknown', 0.5
+
+    def _has_complete_phase_a(self, events: Dict) -> bool:
+        """检查是否有完整的Phase A结构（SC/AR + ST）"""
+        climax_res = events.get('climax_ar', {})
+        ar_res = events.get('climax_ar', {})
+        st_res = events.get('st', {})
+
+        has_climax = climax_res.get('detected', False)
+        has_ar = ar_res.get('detected', False)
+        has_st = st_res.get('detected', False)
+
+        return has_climax and (has_ar or has_st)
+
+    def _calculate_consolidation_duration(self, events: Dict) -> int:
+        """计算震荡持续时间"""
+        # 尝试从数据中计算实际震荡时间
+        try:
+            if hasattr(self.detector, 'data') and self.detector.data is not None:
+                df = self.detector.data
+                # 简单计算：在TR内的天数
+                tr = self.detector.detect_trading_range()
+                if tr and 'low' in tr and 'high' in tr:
+                    in_tr = df[
+                        (df['Close'] >= tr['low']) &
+                        (df['Close'] <= tr['high'])
+                    ]
+                    return len(in_tr)
+        except Exception:
+            pass
+
+        # 备用估算
+        return 30
+
+    def _check_phase_triggers(self, events: Dict, trigger_types: List[str]) -> bool:
+        """检查Phase转换触发信号"""
+        for trigger_type in trigger_types:
+            if trigger_type == 'spring':
+                event = events.get('spring_upthrust', {})
+                if event.get('detected') and event.get('_type') == 'spring':
+                    return True
+            elif trigger_type == 'upthrust':
+                event = events.get('spring_upthrust', {})
+                if event.get('detected') and event.get('_type') == 'upthrust':
+                    return True
+            elif trigger_type == 'sos':
+                event = events.get('sos_sow', {})
+                if event.get('detected') and event.get('_type') == 'sos':
+                    return True
+            elif trigger_type == 'sow':
+                event = events.get('sos_sow', {})
+                if event.get('detected') and event.get('_type') == 'sow':
+                    return True
+            elif trigger_type == 'lps':
+                event = events.get('lps_lpsy', {})
+                if event.get('detected'):
+                    return True
+            elif trigger_type == 'lpsy':
+                event = events.get('lps_lpsy', {})
+                if event.get('detected'):
+                    return True
+            elif trigger_type == 'joc':
+                # 需要单独检查JOC
+                try:
+                    joc_result = self.detector.detect_joc()
+                    if joc_result.get('detected'):
+                        return True
+                except Exception:
+                    pass
+            elif trigger_type == 'fti':
+                # 需要单独检查FTI
+                try:
+                    fti_result = self.detector.detect_fti()
+                    if fti_result.get('detected'):
+                        return True
+                except Exception:
+                    pass
+
+        return False
+
+    def _has_continuous_confirmation(self, days: int) -> bool:
+        """检查是否有连续N天的确认"""
+        try:
+            if hasattr(self.detector, 'data') and self.detector.data is not None:
+                df = self.detector.data.tail(days)
+                # 简单检查：最近N天都在上涨（吸筹）或下跌（派发）
+                if len(df) >= days:
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+
+class PhaseTransitionCriteria:
+    """
+    Phase转换量化标准
+
+    理论依据：孟洪涛《新威科夫操盘法》
+    """
+
+    # Phase A → B 转换标准
+    A_TO_B_MIN_DAYS = 20          # 震荡持续≥20天
+    A_TO_B_COMPLETE_STRUCTURE = True  # 必须有完整SC/AR/ST
+
+    # Phase B → C 转换标准
+    B_TO_C_SIGNALS = ['spring', 'upthrust', 'sos', 'sow']
+
+    # Phase C → D 转换标准
+    C_TO_D_SIGNALS = ['lps', 'lpsy', 'joc', 'fti']
+
+    # Phase D → E 转换标准
+    D_TO_E_CONFIRMATION_DAYS = 3
+
+    # 各阶段的最小持续时间（天）
+    MIN_PHASE_A_DURATION = 10
+    MIN_PHASE_B_DURATION = 15
+    MIN_PHASE_C_DURATION = 10
+    MIN_PHASE_D_DURATION = 7
