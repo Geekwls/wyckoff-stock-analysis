@@ -33,7 +33,25 @@ class MockAnalyzer:
     def detect_climax(self): return {"detected": False}
     def detect_automatic_reaction(self, climax): return {"detected": False}
     def detect_secondary_test(self, climax, ar): return {"detected": False}
-    def calculate_cause_effect(self): return {}
+    def detect_boring_zone(self): return {"detected": False}
+    def detect_dead_corner_breakout(self): return {"detected": False}
+    def calculate_cause_effect(self): 
+        return {
+            'cause_bars': 40,
+            'breakout_direction': 'up',
+            'targets': {
+                'target_1': 100,
+                'target_2': 120,
+                'target_3': 150
+            }
+        }
+    
+    def _collect_all_events(self):
+        return {
+            'events_detected': {},
+            'phase': 'Unknown',
+            'sequence_validation': {}
+        }
     def identify_phase_with_rs(self): return self.identify_phase()
     def _analyze_market_environment(self): return {"environment": MarketEnvironment.UNKNOWN}
     def _get_baseline_index_symbol(self): return "SPY"
@@ -159,6 +177,28 @@ def test_signal_conflict_detection():
     generator.pattern_detector.detect_trading_range = lambda: {
         'is_consolidation': True, 'low': 100, 'high': 110, 'range_pct': 0.1, 
         'position': 0.5, 'volume_trend': 'neutral'
+    }
+    
+    # Mock _collect_all_events to return events with enough signals for quality score
+    generator.pattern_detector._collect_all_events = lambda: {
+        'events_detected': {
+            'joc': {'detected': True, 'volume_ratio': 2.0, 'confidence': 0.9, 'date': datetime.now()},
+            'upthrust': {'detected': True, 'volume_ratio': 1.5, 'confidence': 0.8, 'date': datetime.now()}
+        },
+        'phase': 'Distribution Phase A',
+        'sequence_validation': {'score': {'rating': 'B'}}
+    }
+    
+    # Mock cross-timeframe conflict to not gate signal conflict detection
+    generator._cross_timeframe_conflict_warning = lambda **kwargs: {
+        'has_conflict': False,
+        'daily_side': 'bullish',
+        'weekly_trend': 'unknown',
+        'monthly_trend': 'unknown',
+        'agreement': 'unknown',
+        'conflict_reason': '',
+        'monthly_warning': '',
+        'action': 'normal'
     }
     
     report = generator.generate_report()

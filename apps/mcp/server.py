@@ -21,7 +21,7 @@ sys.path.insert(0, project_root)
 from src.wyckoff.facade import WyckoffAnalyzer, batch_scan
 from src.wyckoff.exceptions import *
 from src.wyckoff.schemas import ErrorResponseModel
-from src.wyckoff.error_codes import ErrorCode
+from src.wyckoff.core.enums import ErrorCode
 
 # 创建 MCP 服务器
 mcp = FastMCP("Wyckoff Stock Analyzer")

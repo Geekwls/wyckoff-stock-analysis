@@ -7,7 +7,7 @@ from ..config.settings import WyckoffConfig
 from .symbol_resolver import SymbolResolver, MarketType
 from .datasource_factory import DataSourceFactory
 from .data_validator import DataValidator, ChineseSymbolHandler
-from .technical_indicators import TechnicalIndicators
+from .technical_indicators import TechnicalIndicators, ATR
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def prepare_data(data: pd.DataFrame, config: WyckoffConfig = None) -> pd.DataFra
     df['Volume_MA20'] = TechnicalIndicators.volume_ma(df, cfg.volume_ma_period)
 
     # ATR 和 RSI
-    df['ATR'] = TechnicalIndicators.atr(df, cfg.atr_period)
+    df['ATR'] = ATR(df, cfg.atr_period)
     df['RSI'] = TechnicalIndicators.rsi(df)
 
     # 滚动极值
@@ -55,7 +55,22 @@ def prepare_data(data: pd.DataFrame, config: WyckoffConfig = None) -> pd.DataFra
         df[f'High_Max_{w}'] = TechnicalIndicators.rolling_max(df, 'High', w)
         df[f'Low_Min_{w}'] = TechnicalIndicators.rolling_min(df, 'Low', w)
 
-    return df
+        return df
+
+
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """
+    计算ATR的便捷函数（为了向后兼容）
+
+    Args:
+        df: 包含 High, Low, Close 列的 DataFrame
+        period: ATR周期（默认14）
+
+    Returns:
+        ATR序列
+    """
+    return ATR(df, period)
+
 
 class WyckoffDataFetcher:
     """威科夫数据获取器 - Facade (P1 #2)"""
