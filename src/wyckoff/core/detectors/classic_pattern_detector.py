@@ -2,7 +2,7 @@ import pandas as pd
 from typing import Dict, Optional, Tuple, List, Any
 from .base_detector import BaseDetector
 from ...config.settings import WyckoffConfig, WyckoffThresholds
-from ..utils import TypeConverter
+from ..utils import TypeConverter, PhaseAdapter
 
 class ClassicPatternDetector(BaseDetector):
     """负责检测经典威科夫形态 (Climax, Spring, Upthrust, JOC, FTI, VSA, Divergence)"""
@@ -12,6 +12,21 @@ class ClassicPatternDetector(BaseDetector):
         self.config = config
         self.thresholds = thresholds
         self._analysis_cache = analysis_cache
+
+    def _get_tech_indicators(self, window: int = 20) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        """
+        统一获取技术指标（Volume MA, Low Min, High Max）
+        减少各检测方法中的重复计算。
+        """
+        vol_ma_col = f'Volume_MA{window}'
+        low_min_col = f'Low_Min_{window}'
+        high_max_col = f'High_Max_{window}'
+
+        vol_ma = self.data[vol_ma_col] if vol_ma_col in self.data.columns else self.data['Volume'].rolling(window).mean()
+        low_min = self.data[low_min_col] if low_min_col in self.data.columns else self.data['Low'].rolling(window).min()
+        high_max = self.data[high_max_col] if high_max_col in self.data.columns else self.data['High'].rolling(window).max()
+
+        return vol_ma, low_min, high_max
 
     # --- Climax, AR, ST ---
     def detect_climax(self) -> Dict:
@@ -25,10 +40,8 @@ class ClassicPatternDetector(BaseDetector):
             return {'detected': False}
 
         df = self.data.tail(40).copy()
-        # 确保指标列存在
-        vol_ma = self.data['Volume_MA20'] if 'Volume_MA20' in self.data.columns else self.data['Volume'].rolling(20).mean()
-        low_min = self.data['Low_Min_20'] if 'Low_Min_20' in self.data.columns else self.data['Low'].rolling(20).min()
-        high_max = self.data['High_Max_20'] if 'High_Max_20' in self.data.columns else self.data['High'].rolling(20).max()
+        # 使用统一的技术指标获取方法
+        vol_ma, low_min, high_max = self._get_tech_indicators(20)
         
         # 抛售高潮 (Selling Climax)
         sc_mask = (
@@ -178,7 +191,7 @@ class ClassicPatternDetector(BaseDetector):
                     'supply_exhausted': confirmed,
                     'confidence': 0.8 if confirmed else 0.4,
                     'description': (
-                        f"二次测试确认{'✅' if confirmed else '⚠️'} — "
+                        f"二次测试 确认{'✅' if confirmed else '⚠️'} — "
                         f"ST成交量/Climax成交量 = {vol_ratio:.1%}"
                         f"{' < 40% ✓ 需求耗尽' if confirmed else ' ≥ 40% 抛压尚未完全释放'}"
                     ),
@@ -199,7 +212,7 @@ class ClassicPatternDetector(BaseDetector):
             return {'detected': False, 'reason': 'insufficient_data'}
 
         # 阶段感知验证：派发阶段直接拒绝（当阶段已识别时）
-        if self._current_phase and ('Distribution' in self._current_phase or '派发' in self._current_phase):
+        if PhaseAdapter.is_distribution(self._current_phase):
             return {'detected': False, 'reason': 'distribution_phase_no_spring'}
 
         df = self.data.tail(lookback).copy()
@@ -209,7 +222,7 @@ class ClassicPatternDetector(BaseDetector):
             return {'detected': False, 'reason': 'no_trading_range'}
 
         # 验证盘整区间幅度
-        range_pct = (df['High'].max() - df['Low'].min()) / df['Low'].min()
+        range_pct = (df['High'].max() - df['Low'].min()) / max(df['Low'].min(), 1e-9)
         if range_pct >= self.config.spring_range_threshold:
             return {'detected': False, 'reason': 'range_too_wide'}
 
@@ -324,7 +337,7 @@ class ClassicPatternDetector(BaseDetector):
         p20_idx = max(0, int(len(sorted_lows) * 0.20))
         low_cluster = [l for l in sorted_lows if l <= sorted_lows[p20_idx]]
         if len(low_cluster) > 1:
-            cluster_avg = sum(low_cluster) / len(low_cluster)
+            cluster_avg = sum(low_cluster) / len(low_cluster) if len(low_cluster) > 0 else df['Low'].min()
             support = max(support, cluster_avg)
 
         return round(float(support), 2)
@@ -381,10 +394,10 @@ class ClassicPatternDetector(BaseDetector):
                 return {'valid': True, 'confidence': 'high', 'reason': '完整吸筹结构 + Spring'}
             return {'valid': True, 'confidence': 'medium', 'reason': '吸筹阶段，但缺少完整前置结构'}
 
-        if 'Distribution' in phase or '派发' in phase:
+        if PhaseAdapter.is_distribution(phase):
             return {'valid': False, 'confidence': 'low', 'reason': '派发阶段的Spring往往是失败的陷阱'}
 
-        if 'Markup' in phase or '上涨' in phase:
+        if PhaseAdapter.is_markup(phase):
             return {'valid': True, 'confidence': 'medium', 'reason': '上涨趋势中的Spring可能是回调买点'}
 
         return {'valid': True, 'confidence': 'low', 'reason': '阶段不明，保守对待'}
@@ -476,7 +489,8 @@ class ClassicPatternDetector(BaseDetector):
             return {'detected': False, 'reason': 'insufficient_data'}
 
         df = self.data.tail(lookback).copy()
-        vol_ma = df['Volume'].rolling(20, min_periods=1).mean()
+        vol_ma, _, _ = self._get_tech_indicators(20)
+        vol_ma = vol_ma.reindex(df.index)
         tr_window = min(60, len(df))
         tr_data = df.tail(tr_window)
         creek_level = tr_data['High'].quantile(self.thresholds.JOC_CREEK_QUANTILE)
@@ -606,7 +620,8 @@ class ClassicPatternDetector(BaseDetector):
             return {'detected': False, 'reason': 'insufficient_data'}
 
         df = self.data.tail(lookback).copy()
-        vol_ma = df['Volume'].rolling(20, min_periods=1).mean()
+        vol_ma, _, _ = self._get_tech_indicators(20)
+        vol_ma = vol_ma.reindex(df.index)
         tr_window = min(60, len(df))
         tr_data = df.tail(tr_window)
         ice_level = tr_data['Low'].quantile(self.thresholds.FTI_ICE_QUANTILE)
@@ -664,7 +679,8 @@ class ClassicPatternDetector(BaseDetector):
             return {'no_supply': {'detected': False}, 'no_demand': {'detected': False}, 'stopping_vol': {'detected': False}}
 
         df = self.data.tail(lookback).copy()
-        vol_ma = df['Volume'].rolling(20, min_periods=1).mean()
+        vol_ma, _, _ = self._get_tech_indicators(20)
+        vol_ma = vol_ma.reindex(df.index)
         total_range = (df['High'] - df['Low']).replace(0, float('nan'))
         body_ratio = ((df['Close'] - df['Open']).abs() / total_range).fillna(0)
         close_position = ((df['Close'] - df['Low']) / total_range).fillna(0.5)
@@ -723,7 +739,8 @@ class ClassicPatternDetector(BaseDetector):
         if self.data is None or len(self.data) < 20:
             return {'detected': False}
         df = self.data.tail(20)
-        vol_ma = df['Volume'].rolling(20, min_periods=1).mean()
+        vol_ma, _, _ = self._get_tech_indicators(20)
+        vol_ma = vol_ma.reindex(df.index)
         
         # 逻辑：成交量极大（>3x MA），K线实体极小，收盘在下半部
         total_range = (df['High'] - df['Low']).replace(0, float('nan'))

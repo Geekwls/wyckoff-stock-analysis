@@ -23,7 +23,7 @@ class MultiTimeframeAnalyzer:
         # 简单采样 (Friday resample)
         weekly = self.data.resample('W-FRI').agg({
             'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-        }).dropna()
+        }).ffill().dropna()
         
         if len(weekly) < 20:
             return 'unknown'
@@ -46,7 +46,7 @@ class MultiTimeframeAnalyzer:
             
         monthly = self.data.resample('ME').agg({
             'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-        }).dropna()
+        }).ffill().dropna()
         
         if len(monthly) < 12:
             return 'unknown'
@@ -224,17 +224,19 @@ class MultiTimeframeAnalyzer:
 
         try:
             # 检查日线量能
-            daily_vol_ratio = self.data['Volume'].iloc[-1] / self.data['Volume'].rolling(20).mean().iloc[-1]
+            daily_vol_ma = self.data['Volume'].rolling(20).mean().iloc[-1]
+            daily_vol_ratio = self.data['Volume'].iloc[-1] / daily_vol_ma if daily_vol_ma > 0 else 1.0
 
             # 检查周线量能
             weekly_data = self.data.resample('W-FRI').agg({
                 'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-            }).dropna()
+            }).ffill().dropna()
 
             if len(weekly_data) < 10:
                 return min(1.0, daily_vol_ratio / 2)  # 仅基于日线量能
 
-            weekly_vol_ratio = weekly_data['Volume'].iloc[-1] / weekly_data['Volume'].rolling(5).mean().iloc[-1]
+            weekly_vol_ma = weekly_data['Volume'].rolling(5).mean().iloc[-1]
+            weekly_vol_ratio = weekly_data['Volume'].iloc[-1] / weekly_vol_ma if weekly_vol_ma > 0 else 1.0
 
             # 量能共振评分
             if daily_vol_ratio > 1.5 and weekly_vol_ratio > 1.3:
@@ -304,12 +306,12 @@ class MultiTimeframeAnalyzer:
             if timeframe == 'weekly':
                 resampled = self.data.resample('W-FRI').agg({
                     'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-                }).dropna()
+                }).ffill().dropna()
                 min_periods = 20
             else:
                 resampled = self.data.resample('ME').agg({
                     'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-                }).dropna()
+                }).ffill().dropna()
                 min_periods = 12
 
             if len(resampled) < min_periods: return {'insufficient_data': True}
@@ -320,7 +322,8 @@ class MultiTimeframeAnalyzer:
             has_spring = (recent_low <= low_min * 1.02) and (recent_data['Close'].iloc[-1] > recent_data['Open'].iloc[-1])
 
             recent_data['Volume_MA'] = recent_data['Volume'].rolling(5, min_periods=1).mean()
-            latest_vol_ratio = recent_data['Volume'].iloc[-1] / recent_data['Volume_MA'].iloc[-1]
+            vol_ma_val = recent_data['Volume_MA'].iloc[-1]
+            latest_vol_ratio = recent_data['Volume'].iloc[-1] / vol_ma_val if vol_ma_val > 0 else 1.0
             price_change = recent_data['Close'].pct_change().iloc[-1]
             has_sos = (latest_vol_ratio > 1.3) and (price_change > 0.03)
             

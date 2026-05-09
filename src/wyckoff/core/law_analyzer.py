@@ -448,7 +448,7 @@ class WyckoffLawAnalyzer:
             total_range_volume = df['Volume'].sum()
 
             # 计算价格紧密度（努力的质量指标）
-            range_tightness = (range_high - range_low) / ((range_high + range_low) / 2)
+            range_tightness = (range_high - range_low) / max((range_high + range_low) / 2, 1e-9)
 
             # 计算积累/派发努力的综合指标
             vol_ma20 = df['Volume_MA20'].mean() if 'Volume_MA20' in df.columns else avg_range_volume
@@ -1079,7 +1079,8 @@ class WyckoffLawAnalyzer:
                 return {'error': '无TR内数据'}
 
             # 计算VWAP（成交量加权平均价）
-            vwap = (in_tr['Volume'] * in_tr['Close']).sum() / in_tr['Volume'].sum()
+            total_vol = in_tr['Volume'].sum()
+            vwap = (in_tr['Volume'] * in_tr['Close']).sum() / total_vol if total_vol > 0 else in_tr['Close'].mean()
 
             # 计算累积成交量
             cumulative_volume = in_tr['Volume'].sum()
@@ -1155,7 +1156,8 @@ class WyckoffLawAnalyzer:
                 return {'error': '无TR内数据'}
 
             # 计算VWAP
-            vwap = (in_tr['Volume'] * in_tr['Close']).sum() / in_tr['Volume'].sum()
+            total_vol = in_tr['Volume'].sum()
+            vwap = (in_tr['Volume'] * in_tr['Close']).sum() / total_vol if total_vol > 0 else in_tr['Close'].mean()
 
             # 计算累积成交量
             cumulative_volume = in_tr['Volume'].sum()

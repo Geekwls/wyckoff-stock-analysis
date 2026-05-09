@@ -70,18 +70,23 @@ class BaseDetector(ABC):
         # 获取该类型信号的有效期
         max_days = self._signal_decay_config.get(signal_type, self._signal_decay_config['default'])
 
-        # 确保signal_date是datetime类型
-        if isinstance(signal_date, str):
-            try:
-                signal_date = pd.to_datetime(signal_date)
-            except Exception:
-                return False
+        # 统一转换为带时区的 pd.Timestamp (UTC)
+        try:
+            if isinstance(signal_date, str):
+                ts = pd.to_datetime(signal_date)
+            else:
+                ts = pd.Timestamp(signal_date)
+            
+            if ts.tz is None:
+                ts = ts.tz_localize('UTC')
+            else:
+                ts = ts.tz_convert('UTC')
+        except Exception:
+            return False
 
-        if isinstance(signal_date, pd.Timestamp):
-            signal_date = signal_date.to_pydatetime()
-
-        # 计算信号距今的天数
-        days_ago = (datetime.now() - signal_date).days
+        # 计算信号距今的天数 (统一使用 UTC 时间对比)
+        now = pd.Timestamp.now(tz='UTC')
+        days_ago = (now - ts).days
 
         return days_ago > max_days
 
@@ -98,15 +103,19 @@ class BaseDetector(ABC):
         if signal_date is None:
             return 0
 
-        # 确保signal_date是datetime类型
-        if isinstance(signal_date, str):
-            try:
-                signal_date = pd.to_datetime(signal_date)
-            except Exception:
-                return 0
+        try:
+            if isinstance(signal_date, str):
+                ts = pd.to_datetime(signal_date)
+            else:
+                ts = pd.Timestamp(signal_date)
+            
+            if ts.tz is None:
+                ts = ts.tz_localize('UTC')
+            else:
+                ts = ts.tz_convert('UTC')
+        except Exception:
+            return 0
 
-        if isinstance(signal_date, pd.Timestamp):
-            signal_date = signal_date.to_pydatetime()
-
-        days_ago = (datetime.now() - signal_date).days
+        now = pd.Timestamp.now(tz='UTC')
+        days_ago = (now - ts).days
         return max(0, days_ago)
