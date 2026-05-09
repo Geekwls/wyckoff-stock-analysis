@@ -118,12 +118,36 @@ class WyckoffLawAnalyzer:
 
         return supply_demand_analysis
 
-    def analyze_effort_vs_result_law(self) -> dict:
-        """Wyckoff第二定律：努力vs结果定律完整分析"""
+    def analyze_effort_vs_result_law(self, market_context: dict = None) -> dict:
+        """
+        Wyckoff第二定律：努力vs结果定律完整分析
+
+        🔧 P1-2修复：增加相对强度分析（与大盘比较）
+
+        Args:
+            market_context: 市场环境上下文，包含大盘涨跌幅
+                {
+                    'short_market_return': 0.02,  # 5日大盘涨跌幅
+                    'medium_market_return': -0.01,  # 20日大盘涨跌幅
+                    'long_market_return': 0.05,  # 60日大盘涨跌幅
+                    'market_trend': 'uptrend'  # 大盘趋势
+                }
+        """
         if self.data is None or len(self.data) < 20:
             raise InsufficientDataError("努力vs结果分析", required=20, actual=len(self.data) if self.data is not None else 0)
 
         df = self.data.copy()
+
+        # 🔧 P1-2修复：从market_context中提取大盘收益率（如果没有提供则默认为0）
+        market_returns = {
+            'short': 0.0,
+            'medium': 0.0,
+            'long': 0.0
+        }
+        if market_context:
+            market_returns['short'] = market_context.get('short_market_return', 0.0)
+            market_returns['medium'] = market_context.get('medium_market_return', 0.0)
+            market_returns['long'] = market_context.get('long_market_return', 0.0)
 
         # 分析多个时间框架
         timeframes = {
@@ -154,41 +178,69 @@ class WyckoffLawAnalyzer:
             price_end = recent_df['Close'].iloc[-1]
             price_result_pct = ((price_end - price_start) / price_start) * 100
 
-            # Wyckoff判断逻辑
+            # 🔧 P1-2修复：计算相对强度（个股涨幅 - 大盘涨幅）
+            market_return = market_returns.get(tf_key, 0.0) * 100  # 转换为百分比
+            relative_strength = price_result_pct - market_return
+
+            # Wyckoff判断逻辑（增强版：考虑相对强度）
             effort_magnitude = abs(volume_effort - 1.0)
             result_magnitude = abs(price_result_pct)
 
-            # 努力vs结果一致性分析
+            # 努力vs结果一致性分析（增强版）
             if effort_magnitude > 0.5:  # 明显的成交量变化
                 if result_magnitude > 2.0:  # 明显的价格变化
                     if (volume_effort > 1.0 and price_result_pct > 0) or \
                        (volume_effort < 1.0 and price_result_pct < 0):
-                        interpretation = "CONFIRMATION"
-                        meaning = "努力与结果一致，确认当前趋势"
+                        # 🔧 P1-2修复：基础确认后，检查相对强度
+                        if relative_strength > 2:
+                            interpretation = "STRONG_OUTPERFORMANCE"
+                            meaning = f"强势跑赢大盘：个股{price_result_pct:.1f}% vs 大盘{market_return:.1f}%，相对强度{relative_strength:.1f}%，主力控盘能力强"
+                        elif relative_strength < -2:
+                            interpretation = "WEAK_UNDERPERFORMANCE"
+                            meaning = f"弱势跑输大盘：个股{price_result_pct:.1f}% vs 大盘{market_return:.1f}%，相对强度{relative_strength:.1f}%，需谨慎"
+                        else:
+                            interpretation = "CONFIRMATION"
+                            meaning = f"努力与结果一致，确认当前趋势（相对强度{relative_strength:.1f}%，与大盘同步）"
                     else:
-                        interpretation = "DIVERGENCE"
-                        meaning = "努力与结果背离，警示信号"
+                        # 🔧 P1-2修复：基础背离后，检查相对强度是否提供了额外线索
+                        if relative_strength > 3:
+                            interpretation = "DIVERGENCE_WITH_STRENGTH"
+                            meaning = f"量价背离但跑赢大盘：个股{price_result_pct:.1f}% vs 大盘{market_return:.1f}%，可能存在独立行情"
+                        elif relative_strength < -3:
+                            interpretation = "DOUBLE_WEAKNESS"
+                            meaning = f"量价背离且跑输大盘：个股{price_result_pct:.1f}% vs 大盘{market_return:.1f}%，双重警示信号"
+                        else:
+                            interpretation = "DIVERGENCE"
+                            meaning = "努力与结果背离，警示信号"
                 else:
                     # 大努力但价格变化小
                     if effort_magnitude > 0.8:
                         interpretation = "EFFORT_WITHOUT_RESULT"
-                        meaning = "大努力无结果，可能是拐点信号"
+                        meaning = f"大努力无结果，可能是拐点信号（相对强度{relative_strength:.1f}%）"
                     else:
                         interpretation = "WEAK_CONFIRMATION"
-                        meaning = "努力与结果基本一致，但强度较弱"
+                        meaning = f"努力与结果基本一致，但强度较弱（相对强度{relative_strength:.1f}%）"
             else:
                 # 成交量无明显变化
                 if result_magnitude > 3.0:
                     interpretation = "RESULT_WITHOUT_EFFORT"
-                    meaning = "价格变动缺乏成交量支持，需谨慎"
+                    # 🔧 P1-2修复：无量上涨/下跌时检查相对强度
+                    if price_result_pct > 0 and relative_strength > 3:
+                        meaning = f"无量上涨但跑赢大盘{relative_strength:.1f}%，可能存在独立行情或操纵"
+                    elif price_result_pct < 0 and relative_strength < -3:
+                        meaning = f"无量下跌且跑输大盘{relative_strength:.1f}%，弱势特征明显"
+                    else:
+                        meaning = "价格变动缺乏成交量支持，需谨慎"
                 else:
                     interpretation = "NORMAL"
-                    meaning = "正常的量价关系"
+                    meaning = f"正常的量价关系（相对强度{relative_strength:.1f}%）"
 
             effort_result_analysis[tf_key] = {
                 "timeframe": tf_info['name'],
                 "volume_effort": round(volume_effort, 2),
                 "price_result": round(price_result_pct, 2),
+                "market_return": round(market_return, 2),
+                "relative_strength": round(relative_strength, 2),
                 "effort_magnitude": round(effort_magnitude, 3),
                 "result_magnitude": round(result_magnitude, 2),
                 "interpretation": interpretation,
@@ -431,7 +483,38 @@ class WyckoffLawAnalyzer:
                     targets = pnf_result.get('targets', {})
                     projected_direction = "UPSIDE" if pnf_result.get('breakout_direction') == 'up' else "DOWNSIDE"
                     effect_probability = self._calculate_breakout_probability(phase, pnf_result.get('breakout_direction', 'up'))
-                    
+
+                    # 🔧 P0-1修复：点数图方法也需要破位验证（派发期向下目标）
+                    is_distribution_phase = (
+                        'Distribution' in phase or
+                        'Markdown' in phase
+                    )
+
+                    if is_distribution_phase and projected_direction == "DOWNSIDE":
+                        # 派发期的向下目标：需要破位验证
+                        breakdown_detected = tr_story.get('breakdown', {}).get('detected', False)
+                        breakdown_point = range_low
+
+                        if not breakdown_detected:
+                            # 未破位：标注为待定状态
+                            cause_effect_interpretation = {
+                                "method": "point_and_figure",
+                                "current_situation": f"当前处于{phase}，点数图水平计数{pnf_result.get('horizontal_count', 0)}列",
+                                "effort_assessment": f"积累/派发努力质量为{accumulation_effort['effort_quality']}",
+                                "projected_direction": "DOWNSIDE_PENDING",
+                                "breakout_probability": f"待破位激活（需跌破 {breakdown_point:.2f}）",
+                                "target_projections": {
+                                    "status": "pending_breakdown",
+                                    "note": "威科夫理论约束：派发期的向下因果目标必须以跌破AR低点为激活条件",
+                                    "breakdown_threshold": float(round(breakdown_point, 2)),
+                                    "downside_targets_pending": targets,
+                                    "pnf_horizontal_count": pnf_result.get('horizontal_count', 0)
+                                },
+                                "wyckoff_logic": pnf_result.get('description', ''),
+                                "theory": "威科夫因果法则：水平计数决定垂直目标（派发期需破位激活）"
+                            }
+                            return self._build_final_cause_effect_return(basic_cause_effect, accumulation_effort, cause_effect_interpretation, tr_story)
+
                     cause_effect_interpretation = {
                         "method": "point_and_figure",
                         "current_situation": f"当前处于{phase}，点数图水平计数{pnf_result.get('horizontal_count', 0)}列",
@@ -457,24 +540,81 @@ class WyckoffLawAnalyzer:
                     contraction_factor = max(0.5, 1 + volatility_contraction * 2)
                     horizontal_potential = cause * contraction_factor * (range_duration / 30)
                     
-                    if current_position > 0.5:
-                        breakout_point = range_high
-                        targets = {
-                            "minimum_target": float(round(breakout_point + horizontal_potential * 0.618, 2)),
-                            "likely_target": float(round(breakout_point + horizontal_potential, 2)),
-                            "maximum_target": float(round(breakout_point + horizontal_potential * 1.618, 2))
-                        }
-                        projected_direction = "UPSIDE"
-                        effect_probability = self._calculate_breakout_probability(phase, "up")
+                    # 🔧 P0-1修复：破位验证 - 派发期的向下因果目标必须先跌破支撑才激活
+                    # 修正：使用phase参数判断，而非current_position
+
+                    # 判断是否为派发阶段（需要破位验证的向下目标）
+                    is_distribution_phase = (
+                        'Distribution' in phase or
+                        'Markdown' in phase
+                    )
+
+                    # 判断当前是否为向下目标（TR下半部）
+                    is_downside_target = current_position <= 0.5
+
+                    # 只有派发期 + 向下目标才需要破位验证
+                    needs_breakdown_validation = is_distribution_phase and is_downside_target
+
+                    if not needs_breakdown_validation:
+                        # 不需要破位验证：吸筹阶段 OR 派发期但向上目标
+                        if current_position > 0.5:
+                            # TR上半部：向上目标
+                            breakout_point = range_high
+                            targets = {
+                                "minimum_target": float(round(breakout_point + horizontal_potential * 0.618, 2)),
+                                "likely_target": float(round(breakout_point + horizontal_potential, 2)),
+                                "maximum_target": float(round(breakout_point + horizontal_potential * 1.618, 2))
+                            }
+                            projected_direction = "UPSIDE"
+                            effect_probability = self._calculate_breakout_probability(phase, "up")
+                        else:
+                            # TR下半部但不是派发期：向下目标（无需破位验证）
+                            breakdown_point = range_low
+                            targets = {
+                                "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
+                                "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
+                                "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
+                            }
+                            projected_direction = "DOWNSIDE"
+                            effect_probability = self._calculate_breakout_probability(phase, "down")
                     else:
+                        # 需要破位验证：派发期 + TR下半部
+                        # 从 tr_story 中获取破位状态
+                        breakdown_detected = tr_story.get('breakdown', {}).get('detected', False)
                         breakdown_point = range_low
-                        targets = {
-                            "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
-                            "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
-                            "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
-                        }
-                        projected_direction = "DOWNSIDE"
-                        effect_probability = self._calculate_breakout_probability(phase, "down")
+
+                        if not breakdown_detected:
+                            # ⚠️ 未破位：标注为待定状态，不输出具体目标
+                            cause_effect_interpretation = {
+                                "method": "volatility_contraction",
+                                "current_situation": f"当前处于{phase}（TR下半部），波动率收缩{volatility_contraction*100:.1f}%",
+                                "effort_assessment": f"积累/派发努力质量为{accumulation_effort['effort_quality']}",
+                                "projected_direction": "DOWNSIDE_PENDING",
+                                "breakout_probability": f"待破位激活（需跌破 {breakdown_point:.2f}）",
+                                "target_projections": {
+                                    "status": "pending_breakdown",
+                                    "note": "威科夫理论约束：派发期的向下因果目标必须以跌破AR低点为激活条件",
+                                    "breakdown_threshold": float(round(breakdown_point, 2)),
+                                    "downside_targets_pending": {
+                                        "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
+                                        "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
+                                        "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
+                                    }
+                                },
+                                "wyckoff_logic": f"基于波动率收缩{volatility_contraction*100:.1f}%和{range_duration}天积累，预计{cause:.2f}点的派发努力",
+                                "theory": "威科夫因果定律：派发期的目标需破位激活（书中明确要求）"
+                            }
+                            # 跳过后续的统一返回，直接进入下一个流程
+                            return self._build_final_cause_effect_return(basic_cause_effect, accumulation_effort, cause_effect_interpretation, tr_story)
+                        else:
+                            # ✅ 已破位：输出激活的下跌目标
+                            targets = {
+                                "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
+                                "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
+                                "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
+                            }
+                            projected_direction = "DOWNSIDE"
+                            effect_probability = self._calculate_breakout_probability(phase, "down")
                     
                     cause_effect_interpretation = {
                         "method": "volatility_contraction",
@@ -489,28 +629,83 @@ class WyckoffLawAnalyzer:
                     
             except Exception as e:
                 logger.warning(f"点数图计算失败，使用备用方法: {e}")
-                # 备用方法
+                # 备用方法（带破位验证）
                 atr = self.data['ATR'].iloc[-1] if 'ATR' in self.data.columns else (range_high - range_low) / 5
                 horizontal_potential = range_duration * atr * 0.25
-                
-                if current_position > 0.5:
-                    breakout_point = range_high
-                    targets = {
-                        "minimum_target": float(round(breakout_point + horizontal_potential * 0.618, 2)),
-                        "likely_target": float(round(breakout_point + horizontal_potential, 2)),
-                        "maximum_target": float(round(breakout_point + horizontal_potential * 1.618, 2))
-                    }
-                    projected_direction = "UPSIDE"
-                    effect_probability = self._calculate_breakout_probability(phase, "up")
+
+                # 🔧 P0-1修复：破位验证 - 同样适用于fallback方法
+                # 修正：使用phase参数判断，而非current_position
+
+                # 判断是否为派发阶段（需要破位验证的向下目标）
+                is_distribution_phase = (
+                    'Distribution' in phase or
+                    'Markdown' in phase
+                )
+
+                # 判断当前是否为向下目标（TR下半部）
+                is_downside_target = current_position <= 0.5
+
+                # 只有派发期 + 向下目标才需要破位验证
+                needs_breakdown_validation = is_distribution_phase and is_downside_target
+
+                if not needs_breakdown_validation:
+                    # 不需要破位验证
+                    if current_position > 0.5:
+                        # TR上半部：向上目标
+                        breakout_point = range_high
+                        targets = {
+                            "minimum_target": float(round(breakout_point + horizontal_potential * 0.618, 2)),
+                            "likely_target": float(round(breakout_point + horizontal_potential, 2)),
+                            "maximum_target": float(round(breakout_point + horizontal_potential * 1.618, 2))
+                        }
+                        projected_direction = "UPSIDE"
+                        effect_probability = self._calculate_breakout_probability(phase, "up")
+                    else:
+                        # TR下半部但不是派发期：向下目标
+                        breakdown_point = range_low
+                        targets = {
+                            "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
+                            "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
+                            "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
+                        }
+                        projected_direction = "DOWNSIDE"
+                        effect_probability = self._calculate_breakout_probability(phase, "down")
                 else:
+                    # 需要破位验证：派发期 + TR下半部
+                    breakdown_detected = tr_story.get('breakdown', {}).get('detected', False)
                     breakdown_point = range_low
-                    targets = {
-                        "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
-                        "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
-                        "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
-                    }
-                    projected_direction = "DOWNSIDE"
-                    effect_probability = self._calculate_breakout_probability(phase, "down")
+
+                    if not breakdown_detected:
+                        # ⚠️ 未破位：标注为待定状态
+                        cause_effect_interpretation = {
+                            "method": "fallback",
+                            "current_situation": f"当前处于{phase}（TR下半部），因果幅度为{cause:.2f}点",
+                            "effort_assessment": f"积累/派发努力质量为{accumulation_effort['effort_quality']}",
+                            "projected_direction": "DOWNSIDE_PENDING",
+                            "breakout_probability": f"待破位激活（需跌破 {breakdown_point:.2f}）",
+                            "target_projections": {
+                                "status": "pending_breakdown",
+                                "note": "威科夫理论约束：派发期的向下因果目标必须以跌破AR低点为激活条件",
+                                "breakdown_threshold": float(round(breakdown_point, 2)),
+                                "downside_targets_pending": {
+                                    "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
+                                    "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
+                                    "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
+                                }
+                            },
+                            "wyckoff_logic": f"备用估算：根据Wyckoff因果定律，{cause:.2f}点的派发努力",
+                            "theory": "威科夫因果定律：派发期的目标需破位激活（书中明确要求）"
+                        }
+                        return self._build_final_cause_effect_return(basic_cause_effect, accumulation_effort, cause_effect_interpretation, tr_story)
+                    else:
+                        # ✅ 已破位：输出激活的下跌目标
+                        targets = {
+                            "minimum_target": float(round(breakdown_point - horizontal_potential * 0.618, 2)),
+                            "likely_target": float(round(breakdown_point - horizontal_potential, 2)),
+                            "maximum_target": float(round(breakdown_point - horizontal_potential * 1.618, 2))
+                        }
+                        projected_direction = "DOWNSIDE"
+                        effect_probability = self._calculate_breakout_probability(phase, "down")
                 
                 cause_effect_interpretation = {
                     "method": "fallback",
@@ -692,6 +887,17 @@ class WyckoffLawAnalyzer:
             pattern, strength = "no_exhaustion", "weak"
         return {"pattern": pattern, "strength": strength,
                 "new_high": new_high, "volume_declining": vol_declining}
+
+    def _build_final_cause_effect_return(self, basic_cause_effect: dict, accumulation_effort: dict, cause_effect_interpretation: dict, tr_story: dict) -> dict:
+        """构建因果分析的最终返回结构（辅助方法，避免代码重复）"""
+        return {
+            "basic_analysis": basic_cause_effect,
+            "enhanced_analysis": {
+                "accumulation_distribution_effort": accumulation_effort,
+                "projected_effects": cause_effect_interpretation,
+                "tr_story": tr_story,
+            }
+        }
 
     def _calculate_breakout_probability(self, phase: str, direction: str) -> str:
         """计算突破概率"""

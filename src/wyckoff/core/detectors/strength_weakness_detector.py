@@ -17,6 +17,8 @@ class StrengthWeaknessDetector(BaseDetector):
         self.data = data
         self.config = config
         self.thresholds = thresholds
+        # 🔧 P0-2修复：初始化信号屏蔽集合
+        self._blocked_signals = set()
     
     def _ensure_columns(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
         """确保所需的指标列存在，缺失时动态计算"""
@@ -33,7 +35,28 @@ class StrengthWeaknessDetector(BaseDetector):
     def update_analysis_context(self, phase: str):
         """更新当前阶段，用于动态调整信号分类"""
         super().update_analysis_context(phase)
-    
+
+    def reset_blocked_signals(self):
+        """
+        🔧 P0-2修复：重置信号屏蔽状态
+
+        应在每次分析开始时调用，避免上一次分析的屏蔽状态污染下一次分析。
+        """
+        self._blocked_signals.clear()
+
+    def block_signal(self, signal_type: str):
+        """
+        🔧 P0-2修复：屏蔽特定信号类型
+
+        Args:
+            signal_type: 信号类型，如 'sos' 或 'sow'
+        """
+        self._blocked_signals.add(signal_type)
+
+    def _is_signal_blocked(self, signal_type: str) -> bool:
+        """检查信号是否被屏蔽"""
+        return signal_type in self._blocked_signals
+
     def _is_distribution_phase(self) -> bool:
         """判断当前是否处于派发阶段"""
         if self._current_phase is None:
@@ -49,12 +72,20 @@ class StrengthWeaknessDetector(BaseDetector):
     def detect_sos(self, window: int = 40) -> Dict:
         """
         检测标准 SOS (Sign of Strength)
-        
+
         关键约束：
         - SOS 只发生在吸筹阶段末期或上涨趋势中
         - 当 phase == Distribution 时，所有向上突破尝试一律归为 upthrust，不生成 sos
         - 这是解决信号混乱最根本的一刀
         """
+        # 🔧 P0-2修复：检查信号是否被屏蔽
+        if self._is_signal_blocked('sos'):
+            return {
+                'detected': False,
+                'reason': 'signal_blocked_by_phase',
+                'note': '当前阶段为派发期，向上突破应归类为UT/UTAD，SOS信号已被屏蔽'
+            }
+
         if self.data is None or len(self.data) < window:
             return {'detected': False}
         
@@ -119,6 +150,14 @@ class StrengthWeaknessDetector(BaseDetector):
 
     def detect_sow(self, window: int = 40) -> Dict:
         """检测标准 SOW"""
+        # 🔧 P0-2修复：检查信号是否被屏蔽
+        if self._is_signal_blocked('sow'):
+            return {
+                'detected': False,
+                'reason': 'signal_blocked_by_phase',
+                'note': '当前阶段为吸筹期，向下突破应归类为Spring，SOW信号已被屏蔽'
+            }
+
         if self.data is None or len(self.data) < window:
             return {'detected': False}
         df = self.data.tail(window).copy()
@@ -185,6 +224,41 @@ class StrengthWeaknessDetector(BaseDetector):
                      and ('Markup' in self._current_phase or '上涨' in self._current_phase))
         is_distribution = self._is_distribution_phase()
 
+        # 🔧 P1-1修复：验证Phase A前置结构完整性（SC→AR→ST）
+        phase_a_events = self.get_phase_a_events()
+        has_complete_phase_a_structure = False
+        phase_a_validation = {
+            'sc_detected': False,
+            'ar_detected': False,
+            'st_detected': False,
+            'structure_complete': False,
+            'missing_events': []
+        }
+
+        if is_accumulation and phase_a_events:
+            # 只有在吸筹阶段才验证Phase A结构
+            phase_a_validation['sc_detected'] = (
+                phase_a_events.get('climax', {}).get('type') == 'selling_climax' and
+                phase_a_events.get('climax', {}).get('detected', False)
+            )
+            phase_a_validation['ar_detected'] = phase_a_events.get('ar', {}).get('detected', False)
+            phase_a_validation['st_detected'] = phase_a_events.get('st', {}).get('detected', False)
+
+            has_complete_phase_a_structure = (
+                phase_a_validation['sc_detected'] and
+                phase_a_validation['ar_detected'] and
+                phase_a_validation['st_detected']
+            )
+            phase_a_validation['structure_complete'] = has_complete_phase_a_structure
+
+            # 记录缺失的事件
+            if not phase_a_validation['sc_detected']:
+                phase_a_validation['missing_events'].append('SC（恐慌抛售）')
+            if not phase_a_validation['ar_detected']:
+                phase_a_validation['missing_events'].append('AR（自然反弹）')
+            if not phase_a_validation['st_detected']:
+                phase_a_validation['missing_events'].append('ST（二次测试）')
+
         df = self._ensure_columns(self.data.tail(window), ['Volume_MA20', 'MA20'])
         df_wide = self._ensure_columns(self.data, ['Volume_MA20'])
         vol_ma = df_wide['Volume_MA20'].reindex(df.index)
@@ -209,10 +283,19 @@ class StrengthWeaknessDetector(BaseDetector):
                     'support_level': df['MA20'].iloc[i]
                 }
 
-                # 阶段约束：只有 Accumulation 阶段才叫 LPS
+                # 阶段约束：只有 Accumulation 阶段且具备完整Phase A结构才叫 LPS
                 if is_accumulation:
-                    signal['signal_type'] = 'lps'
-                    note = '吸筹阶段最后支撑点（LPS）'
+                    if has_complete_phase_a_structure:
+                        # ✅ 完整的吸筹结构 + LPS = 正式LPS
+                        signal['signal_type'] = 'lps'
+                        note = '吸筹阶段最后支撑点（LPS）| ✅ 具备完整Phase A结构（SC→AR→ST）'
+                    else:
+                        # ⚠️ 吸筹阶段但缺少完整Phase A结构 → 降级为支撑测试
+                        signal['signal_type'] = 'support_test'
+                        missing = ', '.join(phase_a_validation['missing_events'])
+                        note = (f'⚠️ 降级为支撑测试（非正式LPS）| '
+                                f'缺少完整Phase A结构：缺失[{missing}]| '
+                                f'威科夫理论要求：LPS需前置SC→AR→ST吸筹结构')
                 elif is_markup:
                     signal['signal_type'] = 'pullback'
                     note = ('上涨趋势缩量回踩（非正式LPS，因缺少SC/AR/ST吸筹前置结构；'
@@ -221,7 +304,7 @@ class StrengthWeaknessDetector(BaseDetector):
                     signal['signal_type'] = 'pullback_weak'
                     note = '派发阶段支撑测试，供应仍可能主导，不视为买入信号'
                 else:
-                    signal['signal_type'] = 'pullback'
+                    signal['signal_type'] = 'support_test'
                     note = ('阶段不明，仅视为缩量回调支撑测试，'
                             '不等同于威科夫定义的LPS（缺少SC/AR/ST前置结构）')
 
@@ -240,11 +323,13 @@ class StrengthWeaknessDetector(BaseDetector):
                 'phase_context': {
                     'phase': self._current_phase or 'unknown',
                     'is_accumulation': is_accumulation,
-                    'has_lps_qualification': is_accumulation,
+                    'has_lps_qualification': is_accumulation and has_complete_phase_a_structure,
                     'note': ('当前阶段不是标准Accumulation，'
                              '信号已按阶段上下文重新定性为"缩量回踩"而非正式LPS'
-                             if not is_accumulation else None)
-                }
+                             if not is_accumulation else None),
+                },
+                # 🔧 P1-1修复：包含Phase A验证信息
+                'phase_a_validation': phase_a_validation if is_accumulation else None
             }
         return {'detected': False}
 
