@@ -565,11 +565,24 @@ class WyckoffReportGenerator:
         signal_quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
 
         mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
-        mtf_agreement = 'agreed' if mtf.get('trend_agreement', False) else 'unknown'
+
+        # 🔧 问题1修复：优化agreement计算逻辑，避免误判为unknown
+        weekly_trend = mtf.get('weekly_trend', 'unknown')
+        monthly_trend = mtf.get('monthly_trend', 'unknown')
+        trend_agreement = mtf.get('trend_agreement', False)
+
+        # 修复：即使trend_agreement为False，如果周月趋势明确一致，也应视为agreed
+        if not trend_agreement:
+            if weekly_trend == 'bullish' and monthly_trend in ['bullish', 'neutral']:
+                trend_agreement = True  # 周线看涨 + 月线不看跌 = 一致
+            elif weekly_trend == 'bearish' and monthly_trend in ['bearish', 'neutral']:
+                trend_agreement = True  # 周线看跌 + 月线不看涨 = 一致
+
+        mtf_agreement = 'agreed' if trend_agreement else 'unknown'
         conflict = self._cross_timeframe_conflict_warning(
             phase=phase_str,
-            weekly_trend=mtf.get('weekly_trend', 'unknown'),
-            monthly_trend=mtf.get('monthly_trend', 'unknown'),
+            weekly_trend=weekly_trend,
+            monthly_trend=monthly_trend,
             agreement=mtf_agreement
         )
         quality_score = signal_quality_data.score
@@ -625,7 +638,19 @@ class WyckoffReportGenerator:
             if upthrust.get('detected'): bearish_signals.append("Upthrust")
             
             report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【核心结论】\n"
-            
+
+            # 🔧 问题2修复：确保climax_res和ar_res已定义（用于事件时间线）
+            if 'climax_res' not in locals():
+                climax_res = self.pattern_detector.detect_climax()
+            if 'ar_res' not in locals():
+                ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
+
+            # 🔧 问题2修复：增加详细事件时间线
+            report += self._generate_event_timeline(joc, spring, sos, lps, fti, upthrust, sow, lpsy, climax_res, ar_res)
+
+            # 🔧 问题2修复：增加多时间框架共振详细评分
+            report += self._generate_mtf_detailed_score(mtf, conflict)
+
             # 冲突检测
             if bullish_signals and bearish_signals:
                 report += f"""
@@ -771,6 +796,236 @@ class WyckoffReportGenerator:
 """
 
         return report
+
+    def _generate_event_timeline(self, joc: dict, spring: dict, sos: dict, lps: dict,
+                                  fti: dict, upthrust: dict, sow: dict, lpsy: dict,
+                                  climax_res: dict, ar_res: dict) -> str:
+        """
+        🔧 问题2修复：生成详细事件时间线
+
+        展示各关键事件的：
+        - 发生时间
+        - 信号质量
+        - JOC回测状态
+        - 事件间的关系
+        """
+        from datetime import datetime
+
+        timeline_text = """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【详细事件时间线】
+"""
+        events = []
+
+        # 收集所有事件
+        if climax_res.get('detected'):
+            events.append({
+                'name': f"{'SC' if climax_res.get('type') == 'selling_climax' else 'BC'}",
+                'date': climax_res.get('date'),
+                'price': climax_res.get('price'),
+                'volume': climax_res.get('volume'),
+                'quality': 'High'
+            })
+
+        if ar_res.get('detected'):
+            events.append({
+                'name': 'AR',
+                'date': ar_res.get('date'),
+                'price': ar_res.get('price'),
+                'quality': 'Medium'
+            })
+
+        if spring.get('detected'):
+            events.append({
+                'name': 'Spring',
+                'date': spring.get('latest_spring', {}).get('date') if spring.get('latest_spring') else None,
+                'price': spring.get('latest_spring', {}).get('recovery_price') if spring.get('latest_spring') else None,
+                'quality': spring.get('latest_spring', {}).get('strength', 'unknown').capitalize(),
+                'score': spring.get('latest_spring', {}).get('total_score', 0)
+            })
+
+        if sos.get('detected'):
+            events.append({
+                'name': 'SOS',
+                'date': sos.get('date'),
+                'price': sos.get('price'),
+                'quality': 'High'
+            })
+
+        if lps.get('detected'):
+            latest = lps.get('latest', {})
+            events.append({
+                'name': 'LPS',
+                'date': latest.get('date'),
+                'price': latest.get('price'),
+                'quality': latest.get('volume_ratio', 1),
+                'validation': latest.get('phase_a_validation', {})
+            })
+
+        if joc.get('detected'):
+            joc_info = {
+                'name': 'JOC',
+                'date': joc.get('date'),
+                'price': joc.get('close_price'),
+                'quality': 'High',
+                'creek_level': joc.get('creek_level'),
+                'test_detected': joc.get('test_detected', False),
+                'test_date': joc.get('test_date'),
+                'confidence': joc.get('confidence', 0)
+            }
+            events.append(joc_info)
+
+        if fti.get('detected'):
+            events.append({
+                'name': 'FTI',
+                'date': fti.get('date'),
+                'price': fti.get('close_price'),
+                'quality': 'High'
+            })
+
+        if upthrust.get('detected'):
+            events.append({
+                'name': 'Upthrust',
+                'date': upthrust.get('latest_upthrust', {}).get('date') if upthrust.get('latest_upthrust') else None,
+                'price': upthrust.get('latest_upthrust', {}).get('breakout_price') if upthrust.get('latest_upthrust') else None,
+                'quality': 'Medium'
+            })
+
+        if sow.get('detected'):
+            events.append({
+                'name': 'SOW',
+                'date': sow.get('date'),
+                'price': sow.get('price'),
+                'quality': 'High'
+            })
+
+        if lpsy.get('detected'):
+            events.append({
+                'name': 'LPSY',
+                'date': lpsy.get('date'),
+                'price': lpsy.get('price'),
+                'quality': 'High'
+            })
+
+        # 按日期排序
+        def get_event_date(event):
+            date = event.get('date')
+            if isinstance(date, str):
+                try:
+                    return datetime.strptime(date, '%Y-%m-%d')
+                except:
+                    return datetime.min
+            elif isinstance(date, datetime):
+                return date
+            return datetime.min
+
+        events.sort(key=get_event_date)
+
+        # 构建时间线文本
+        for i, event in enumerate(events, 1):
+            date = event.get('date')
+            date_str = date.strftime('%Y-%m-%d') if isinstance(date, datetime) else str(date) if date else 'N/A'
+
+            timeline_text += f"\n{i}. 【{event['name']}】 ({date_str})\n"
+
+            # 添加事件详情
+            if 'price' in event:
+                timeline_text += f"   价格: {event['price']:.2f}\n"
+
+            if 'creek_level' in event:
+                timeline_text += f"   小溪位: {event['creek_level']:.2f}\n"
+
+            if 'test_detected' in event:
+                test_status = "✅ 已回测确认" if event['test_detected'] else "⏳ 等待回测"
+                test_date_str = f" ({event['test_date']})" if event.get('test_date') else ""
+                timeline_text += f"   回测状态: {test_status}{test_date_str}\n"
+
+                # 🔧 关键修复：明确说明"等待什么"
+                if not event['test_detected']:
+                    timeline_text += f"   📌 等待条件: 价格缩量回调至 {event['creek_level']:.2f} 附近且企稳\n"
+
+            if 'score' in event:
+                timeline_text += f"   信号评分: {event['score']}/100\n"
+
+            if 'confidence' in event:
+                conf_pct = event['confidence'] * 100
+                timeline_text += f"   突破置信度: {conf_pct:.0f}%\n"
+
+            if 'validation' in event and event['validation']:
+                validation = event['validation']
+                if validation.get('structure_complete'):
+                    timeline_text += f"   ✅ Phase A结构完整 (SC→AR→ST)\n"
+                else:
+                    missing = ', '.join(validation.get('missing_events', []))
+                    timeline_text += f"   ⚠️ Phase A结构不完整，缺失: {missing}\n"
+
+        timeline_text += "\n"
+
+        return timeline_text
+
+    def _generate_mtf_detailed_score(self, mtf: dict, conflict: dict) -> str:
+        """
+        🔧 问题2修复：生成多时间框架共振详细评分
+
+        展示：
+        - 各时间框架趋势状态
+        - 共振强度评分
+        - 趋势一致性判断
+        - 冲突/警告详情
+        """
+        score_text = """
+【多时间框架共振评分】
+"""
+        weekly_trend = mtf.get('weekly_trend', 'unknown')
+        monthly_trend = mtf.get('monthly_trend', 'unknown')
+        resonance_level = mtf.get('resonance_level', 'no_resonance')
+        resonance_strength = mtf.get('resonance_strength', 0)
+        trend_agreement = mtf.get('trend_agreement', False)
+
+        # 趋势状态展示
+        trend_map = {
+            'bullish': '📈 看涨',
+            'bearish': '📉 看跌',
+            'neutral': '➡️ 中性',
+            'unknown': '❓ 未知'
+        }
+
+        score_text += f"   周线趋势: {trend_map.get(weekly_trend, weekly_trend)}\n"
+        score_text += f"   月线趋势: {trend_map.get(monthly_trend, monthly_trend)}\n"
+
+        # 共振评分
+        resonance_map = {
+            'strong_resonance': ('🔥 强共振 (85-100分)', 90),
+            'moderate_resonance': ('🟡 中等共振 (60-84分)', 70),
+            'weak_resonance': ('⚪ 弱共振 (30-59分)', 45),
+            'no_resonance': ('❌ 无共振 (0-29分)', 15)
+        }
+
+        label, base_score = resonance_map.get(resonance_level, ('未知', 0))
+        final_score = min(100, base_score + resonance_strength * 2)
+
+        score_text += f"\n   共振级别: {label}\n"
+        score_text += f"   综合评分: {final_score:.0f}/100\n"
+        score_text += f"   共振信号数: {len(mtf.get('resonance_signals', []))}\n"
+
+        # 趋势一致性
+        agreement_label = "✅ 一致" if trend_agreement else "⚠️ 不明确"
+        score_text += f"\n   趋势一致性: {agreement_label}\n"
+
+        # 冲突详情
+        if conflict.get('has_conflict'):
+            score_text += f"\n⚠️ 冲突警告: {conflict.get('conflict_reason', '')}\n"
+            score_text += f"   影响: 交易建议已被降级为观望\n"
+
+        # 月线警告
+        monthly_warning = conflict.get('monthly_warning', '')
+        if monthly_warning:
+            score_text += f"\n⚠️ {monthly_warning}\n"
+
+        score_text += "\n"
+
+        return score_text
 
 
     def _quantify_boredom_zone(self, window: int = 20) -> dict:
