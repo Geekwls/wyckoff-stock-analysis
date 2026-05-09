@@ -49,6 +49,10 @@ class PhaseCoordinator:
         Returns:
             包含所有检测到的事件的字典
         """
+        # 🔧 P0-2修复步骤1：在每次分析开始时重置屏蔽状态，避免污染
+        if hasattr(self.detector, 'sw_detector'):
+            self.detector.sw_detector.reset_blocked_signals()
+
         # 1. 收集基础价格形态（不依赖全局阶段）
         climax_res = self.detector.detect_climax()
         ar_res = self.detector.detect_automatic_reaction(climax_res)
@@ -59,10 +63,32 @@ class PhaseCoordinator:
 
         boring_zone_res = self.detector.detect_boring_zone()
 
+        # 🔧 P1-1修复步骤1：收集完Phase A事件后，立即存储到detector中供后续验证使用
+        phase_a_events = {
+            'climax': climax_res,
+            'ar': ar_res,
+            'st': st_res
+        }
+        # 设置到所有子detector中
+        for detector in self.detector.all_detectors:
+            if hasattr(detector, 'set_phase_a_events'):
+                detector.set_phase_a_events(phase_a_events)
+
         # 2. 初步阶段识别
         preliminary_phase = self._preliminary_phase_identification(
             climax_res, ar_res, st_res, spring_res, upthrust_res
         )
+
+        # 🔧 P0-2修复步骤2：初步阶段识别后立即屏蔽矛盾信号（从源头杜绝信号污染）
+        if hasattr(self.detector, 'sw_detector'):
+            if 'Distribution' in preliminary_phase:
+                # 派发期的向上突破一律归为UT，禁用SOS检测
+                self.detector.sw_detector.block_signal('sos')
+                logger.info(f"[P0-2修复] 初步识别为{preliminary_phase}，屏蔽SOS检测")
+            elif 'Accumulation' in preliminary_phase:
+                # 吸筹期的向下突破应归类为Spring，禁用SOW检测
+                self.detector.sw_detector.block_signal('sow')
+                logger.info(f"[P0-2修复] 初步识别为{preliminary_phase}，屏蔽SOW检测")
 
         # 3. 用威科夫事件边界更新交易区间检测器
         self._update_trading_range_from_events(climax_res, ar_res, preliminary_phase)
@@ -98,6 +124,7 @@ class PhaseCoordinator:
 
         # 6. 统一使用强类型模型封装
         # 保存原始检测结果供 scoring 引擎使用
+        # 🔧 问题四修复：将AR和ST也加入raw_events_map，确保评分引擎可以访问
         raw_events_map = {
             'spring': spring_res,
             'upthrust': upthrust_res,
@@ -107,6 +134,8 @@ class PhaseCoordinator:
             'lpsy': lpsy_res,
             'joc': joc_res,
             'fti': fti_res,
+            'secondary_test': st_res,  # 🔧 新增：ST是Phase A关键信号
+            'automatic_reaction': ar_res,  # 🔧 新增：AR定义TR边界
         }
         events = {
             'trading_range': TradingRangeModel(**tr_res),

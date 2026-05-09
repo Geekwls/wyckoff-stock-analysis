@@ -142,10 +142,10 @@ class WyckoffThresholds(BaseModel):
     # ── VSA (Volume Spread Analysis) 参数 ─────────────────────
     VSA_NO_SUPPLY_BODY_RATIO: float = Field(0.45, description="No Supply: 实体最大占波幅比")
     VSA_NO_SUPPLY_VOL_RATIO: float = Field(0.60, description="No Supply: 量能上限（<均量60%，书：极度萎缩<50%）")
-    VSA_NO_SUPPLY_CLOSE_POS: float = Field(0.60, description="No Supply: 收盘最低位置（书：中高位）")
+    VSA_NO_SUPPLY_CLOSE_POS: float = Field(0.50, description="No Supply: 收盘最低位置（书：中高位）")
     VSA_NO_DEMAND_BODY_RATIO: float = Field(0.45, description="No Demand: 实体最大占波幅比")
     VSA_NO_DEMAND_VOL_RATIO: float = Field(0.60, description="No Demand: 量能上限（<均量60%）")
-    VSA_NO_DEMAND_CLOSE_POS: float = Field(0.40, description="No Demand: 收盘最高位置（书：中低位）")
+    VSA_NO_DEMAND_CLOSE_POS: float = Field(0.75, description="No Demand: 收盘最高位置（书：中低位）")
     VSA_STOPPING_VOL_RATIO: float = Field(1.50, description="Stopping Volume: 量能下限")
     VSA_STOPPING_BODY_RATIO: float = Field(0.40, description="Stopping Volume: 实体最大占波幅比")
     VSA_STOPPING_CLOSE_POS: float = Field(0.45, description="Stopping Volume: 收盘最低位置")
