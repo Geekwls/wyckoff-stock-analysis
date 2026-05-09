@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
-from typing import Dict
+from typing import Dict, Optional
 
 class WyckoffConfig(BaseModel):
     """威科夫分析配置（带验证）"""
@@ -8,14 +8,18 @@ class WyckoffConfig(BaseModel):
     atr_period: int = Field(14, ge=5, le=50)
     atr_multiplier: float = Field(1.5, ge=0.5, le=5.0)
     volume_ma_period: int = Field(20, ge=5, le=100)
-    
+
+    # 🔧 v1.3新增：动态阈值系统
+    enable_adaptive_thresholds: bool = Field(True, description="启用动态阈值自适应系统")
+    adaptive_thresholds_atr_period: int = Field(14, ge=5, le=50, description="动态阈值ATR计算周期")
+
     # Spring检测参数
     spring_lookback: int = Field(120, ge=30, le=252)
     spring_max_recovery_days: int = Field(3, ge=1, le=10)
     spring_range_threshold: float = Field(0.30, ge=0.1, le=0.5)
-    
+
     climax_range_multiplier: float = Field(1.5, ge=1.0, le=5.0)
-    
+
     # 突破搜索窗口 (Spring/Upthrust 搜索最后 M 根 K线)
     breakout_search_window: int = Field(5, ge=1, le=20)
     

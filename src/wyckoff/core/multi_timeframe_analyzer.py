@@ -63,7 +63,15 @@ class MultiTimeframeAnalyzer:
         return 'neutral'
 
     def analyze_resonance(self) -> Dict:
-        """增强的多时间框架共振分析"""
+        """
+        🔧 v1.3增强：增强的多时间框架共振分析
+
+        新增功能：
+        1. 更精确的趋势一致性计算
+        2. 信号共振强度评分
+        3. 量能共振检测
+        4. 交易建议生成
+        """
         try:
             daily_analysis = self.pattern_detector.identify_phase()
         except Exception as e:
@@ -77,16 +85,16 @@ class MultiTimeframeAnalyzer:
         resonance_strength = 0
         resonance_signals = []
 
-        # Spring共振
+        # Spring共振（权重调整）
         spring_upthrust = daily_events.get('spring_upthrust') or {}
         if spring_upthrust.get('_type') == 'spring':
             resonance_strength += 1
             resonance_signals.append('daily_spring')
         if weekly_resonance.get('has_spring'):
-            resonance_strength += 2
+            resonance_strength += 2  # 周线Spring权重更高
             resonance_signals.append('weekly_spring')
         if monthly_resonance.get('has_spring'):
-            resonance_strength += 3
+            resonance_strength += 3  # 月线Spring权重最高
             resonance_signals.append('monthly_spring')
 
         # SOS共振
@@ -101,36 +109,193 @@ class MultiTimeframeAnalyzer:
             resonance_strength += 3
             resonance_signals.append('monthly_sos')
 
+        # JOC共振（新增）
+        joc_result = self.pattern_detector.detect_joc()
+        if joc_result.get('detected'):
+            resonance_strength += 1
+            resonance_signals.append('daily_joc')
+
         weekly_trend = self.get_weekly_trend()
         monthly_trend = self.get_monthly_trend()
 
-        trend_agreement = False
-        phase_str = daily_analysis.get('phase', '')
-        if 'Accumulation' in phase_str or 'Markup' in phase_str:
-            trend_agreement = (weekly_trend == 'bullish' and monthly_trend != 'bearish')
-        elif 'Distribution' in phase_str or 'Markdown' in phase_str:
-            trend_agreement = (weekly_trend == 'bearish' and monthly_trend != 'bullish')
+        # 🔧 v1.3增强：更精确的趋势一致性计算
+        trend_alignment_score = self._calculate_trend_alignment_enhanced(
+            daily_analysis.get('phase', 'unknown'), weekly_trend, monthly_trend
+        )
 
-        if trend_agreement:
+        # 🔧 v1.3新增：量能共振检测
+        volume_resonance = self._detect_volume_resonance_enhanced()
+
+        # 🔧 v1.3增强：综合评分（考虑趋势一致性和量能共振）
+        resonance_strength = resonance_strength * 0.7 + trend_alignment_score * 0.2 + volume_resonance * 0.1
+
+        if trend_alignment_score >= 0.8:
             resonance_strength += 2
-            resonance_signals.append('trend_agreement')
+            resonance_signals.append('strong_trend_alignment')
+        elif trend_alignment_score >= 0.6:
+            resonance_strength += 1
+            resonance_signals.append('moderate_trend_alignment')
 
+        if volume_resonance >= 0.8:
+            resonance_strength += 1
+            resonance_signals.append('volume_resonance')
+
+        # 共振等级分类
         if resonance_strength >= 8: resonance_level = 'strong_resonance'
         elif resonance_strength >= 5: resonance_level = 'moderate_resonance'
         elif resonance_strength >= 2: resonance_level = 'weak_resonance'
         else: resonance_level = 'no_resonance'
 
+        # 🔧 v1.3新增：生成交易建议
+        trading_implication = self._generate_mtf_trading_advice(
+            resonance_level, resonance_strength, trend_alignment_score
+        )
+
         return {
             'resonance_level': resonance_level,
-            'resonance_strength': resonance_strength,
+            'resonance_strength': round(resonance_strength, 2),
             'resonance_signals': resonance_signals,
             'daily_phase': daily_analysis.get('phase', 'unknown'),
             'weekly_trend': weekly_trend,
             'monthly_trend': monthly_trend,
-            'trend_agreement': trend_agreement,
+            'trend_alignment_score': round(trend_alignment_score, 3),
+            'volume_resonance': round(volume_resonance, 3),
+            'trading_implication': trading_implication,
+            'confidence_boost': round(self._calculate_confidence_boost(resonance_strength), 2),
             'weekly_analysis': weekly_resonance,
             'monthly_analysis': monthly_resonance
         }
+
+    def _calculate_trend_alignment_enhanced(self, daily_phase: str, weekly_trend: str, monthly_trend: str) -> float:
+        """
+        🔧 v1.3新增：增强版趋势一致性计算
+
+        Args:
+            daily_phase: 日线阶段
+            weekly_trend: 周线趋势
+            monthly_trend: 月线趋势
+
+        Returns:
+            趋势一致性评分（0-1）
+        """
+        # 检查周线和月线趋势是否一致
+        if weekly_trend == monthly_trend:
+            weekly_monthly_alignment = 1.0
+        elif (weekly_trend == 'bullish' and monthly_trend == 'neutral') or \
+             (weekly_trend == 'neutral' and monthly_trend == 'bullish'):
+            weekly_monthly_alignment = 0.7
+        elif (weekly_trend == 'bearish' and monthly_trend == 'neutral') or \
+             (weekly_trend == 'neutral' and monthly_trend == 'bearish'):
+            weekly_monthly_alignment = 0.7
+        else:
+            weekly_monthly_alignment = 0.3
+
+        # 检查日线阶段与更长周期趋势的一致性
+        daily_phase_trend = self._extract_trend_from_phase(daily_phase)
+
+        if daily_phase_trend == weekly_trend:
+            daily_weekly_alignment = 1.0
+        elif daily_phase_trend == 'neutral' or weekly_trend == 'neutral':
+            daily_weekly_alignment = 0.6
+        else:
+            daily_weekly_alignment = 0.2
+
+        # 综合评分
+        return weekly_monthly_alignment * 0.6 + daily_weekly_alignment * 0.4
+
+    def _extract_trend_from_phase(self, phase: str) -> str:
+        """从阶段中提取趋势方向"""
+        if 'Accumulation' in phase or 'Markup' in phase:
+            return 'bullish'
+        elif 'Distribution' in phase or 'Markdown' in phase:
+            return 'bearish'
+        else:
+            return 'neutral'
+
+    def _detect_volume_resonance_enhanced(self) -> float:
+        """
+        🔧 v1.3新增：增强版量能共振检测
+
+        Returns:
+            量能共振评分（0-1）
+        """
+        if self.data is None or len(self.data) < 60:
+            return 0.0
+
+        try:
+            # 检查日线量能
+            daily_vol_ratio = self.data['Volume'].iloc[-1] / self.data['Volume'].rolling(20).mean().iloc[-1]
+
+            # 检查周线量能
+            weekly_data = self.data.resample('W-FRI').agg({
+                'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+            }).dropna()
+
+            if len(weekly_data) < 10:
+                return min(1.0, daily_vol_ratio / 2)  # 仅基于日线量能
+
+            weekly_vol_ratio = weekly_data['Volume'].iloc[-1] / weekly_data['Volume'].rolling(5).mean().iloc[-1]
+
+            # 量能共振评分
+            if daily_vol_ratio > 1.5 and weekly_vol_ratio > 1.3:
+                return 1.0
+            elif daily_vol_ratio > 1.3 and weekly_vol_ratio > 1.2:
+                return 0.8
+            elif daily_vol_ratio > 1.5:
+                return 0.6
+            elif daily_vol_ratio > 1.2:
+                return 0.4
+            else:
+                return 0.2
+
+        except Exception as e:
+            logger.warning(f"量能共振检测失败: {e}")
+            return 0.0
+
+    def _generate_mtf_trading_advice(self, resonance_level: str, strength: float, trend_score: float) -> str:
+        """
+        🔧 v1.3新增：生成多时间框架交易建议
+
+        Args:
+            resonance_level: 共振等级
+            strength: 共振强度
+            trend_score: 趋势一致性评分
+
+        Returns:
+            交易建议文本
+        """
+        if resonance_level == 'strong_resonance':
+            return (f"🎯 多时间框架强共振（强度{strength:.1f}），信号可信度极高。"
+                   f"趋势一致性强（{trend_score:.1%}），建议积极建仓，"
+                   f"止损可相对宽松，目标可看高一线。")
+        elif resonance_level == 'moderate_resonance':
+            return (f"✅ 多时间框架中等共振（强度{strength:.1f}），信号可信度较高。"
+                   f"建议适量建仓，注意风险控制，止损设在关键支撑位。")
+        elif resonance_level == 'weak_resonance':
+            return (f"⚠️ 多时间框架弱共振（强度{strength:.1f}），信号可信度一般。"
+                   f"建议谨慎操作，等待更明确的信号或减少仓位。")
+        else:
+            return (f"❌ 多时间框架无共振（强度{strength:.1f}），信号可信度低。"
+                   f"建议观望为主，避免盲目操作，等待共振出现。")
+
+    def _calculate_confidence_boost(self, resonance_strength: float) -> float:
+        """
+        🔧 v1.3新增：计算置信度加成
+
+        Args:
+            resonance_strength: 共振强度
+
+        Returns:
+            置信度加成（-0.2 到 +0.4）
+        """
+        if resonance_strength >= 8:
+            return 0.4  # 强共振显著提高置信度
+        elif resonance_strength >= 5:
+            return 0.2  # 中等共振适度提高置信度
+        elif resonance_strength >= 2:
+            return 0.0  # 弱共振不影响置信度
+        else:
+            return -0.2  # 无共振降低置信度
 
     def _check_signal_resonance(self, timeframe: str) -> Dict:
         """检查特定时间框架的信号"""
