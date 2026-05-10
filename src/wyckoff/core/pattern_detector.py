@@ -58,7 +58,11 @@ class WyckoffPatternDetector:
                 prior_shrink_mu=getattr(self.config, 'prior_shrink_mu', 0.6),
                 prior_sigma=getattr(self.config, 'prior_sigma', 0.5)
             )
-            self.bayesian_model.fit(self.data)
+            self.bayesian_model.fit(
+                self.data,
+                breakout_percentile=getattr(self.config, 'amplitude_breakout_percentile', 85.0),
+                shrink_percentile=getattr(self.config, 'amplitude_shrink_percentile', 15.0)
+            )
     
     def _update_all_detectors_context(self, phase: str):
         """统一更新所有子检测器的分析上下文"""

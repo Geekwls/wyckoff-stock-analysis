@@ -27,3 +27,6 @@ build/
 scratch/
 output.json
 SRC_API_REFERENCE.md
+docs/
+memory/
+vectorization_optimization_summary.md

@@ -12,8 +12,12 @@
 """
 
 import pandas as pd
+import numpy as np
+import logging
 from typing import Dict, Optional, Tuple, List, Any, Union
-from .detectors.base_detector import BaseDetector
+from .detectors.base_detector import BaseDetector, USE_VECTORIZED
+
+logger = logging.getLogger(__name__)
 
 
 class MengPatternEnhancer(BaseDetector):
@@ -34,6 +38,109 @@ class MengPatternEnhancer(BaseDetector):
         self._cache = None
 
     def detect_spring_enhanced(self) -> Dict:
+        if USE_VECTORIZED:
+            try:
+                return self._detect_spring_enhanced_vectorized()
+            except Exception as e:
+                logger.warning(f"Vectorized Spring failed: {e}. Falling back to iterative method.")
+                return self._detect_spring_enhanced_iterative()
+        return self._detect_spring_enhanced_iterative()
+
+    def _detect_spring_enhanced_vectorized(self) -> Dict:
+        """NumPy 向量化加速版的 Meng Spring 检测"""
+        if self.data is None or len(self.data) < 20:
+            return {"detected": False, "reason": "insufficient_data"}
+
+        df = self.data.copy()
+        
+        atr = self._calculate_atr(df, 14)
+        last_close = df['Close'].values[-1]
+        atr_pct = atr / last_close * 100 if last_close > 0 else 0
+
+        if atr_pct < 1.5: max_recovery_days = 5
+        elif atr_pct < 3: max_recovery_days = 3
+        else: max_recovery_days = 2
+
+        lows = df['Low'].values
+        closes = df['Close'].values
+        highs = df['High'].values
+        opens = df['Open'].values
+        volumes = df['Volume'].values
+
+        # 使用 rolling min 预先计算 support_levels
+        # support_levels[i] = min(lows[i-20:i])
+        lows_series = df['Low']
+        support_levels = lows_series.rolling(window=20).min().shift(1).values
+        
+        # 构建 breakdown 掩码
+        # 条件：跌破幅度检查(1-3%) - 使用 np.where 安全除法
+        safe_support_levels = np.where(support_levels > 1e-9, support_levels, 1.0)
+        breakdown_pcts = (safe_support_levels - lows) / safe_support_levels * 100
+
+        valid_breakdown = (lows < support_levels * 0.97) & (breakdown_pcts >= 1) & (breakdown_pcts <= 3)
+        
+        # 将前 20 天设为 False (因为 rolling min 会有 NaN)
+        valid_breakdown[:20] = False
+        # 最后 5 天不产生 breakdown，以留出 recovery 时间
+        valid_breakdown[-5:] = False
+
+        breakdown_indices = np.where(valid_breakdown)[0]
+        
+        signals = []
+        n = len(df)
+        
+        for i in breakdown_indices:
+            support_level = support_levels[i]
+            breakdown_price = lows[i]
+            breakdown_vol = volumes[i]
+            breakdown_pct = breakdown_pcts[i]
+
+            # 寻找回收
+            max_idx = min(i + max_recovery_days + 1, n)
+            
+            for j in range(i + 1, max_idx):
+                if closes[j] > support_level:
+                    recovery_days = j - i
+                    recovery_vol = volumes[j]
+                    vol_ratio = recovery_vol / breakdown_vol if breakdown_vol > 0 else 1.0
+                    
+                    if vol_ratio <= 1.0:
+                        continue
+                        
+                    daily_range = highs[j] - lows[j]
+                    close_position = (closes[j] - lows[j]) / daily_range if daily_range > 0 else 0.5
+                    
+                    if close_position < 0.7:
+                        continue
+                        
+                    signal = {
+                        "date": df.index[j],
+                        "breakdown_price": float(breakdown_price),
+                        "support_level": float(support_level),
+                        "recovery_price": float(closes[j]),
+                        "recovery_days": int(recovery_days),
+                        "vol_ratio": round(float(vol_ratio), 2),
+                        "close_position": round(float(close_position) * 100, 1),
+                        "confidence": self._calculate_spring_confidence(breakdown_pct, recovery_days, vol_ratio, close_position)
+                    }
+                    signals.append(signal)
+                    break
+                    
+        if not signals:
+            return {"detected": False, "reason": "no_valid_spring_found"}
+
+        latest_spring = signals[-1]
+        latest_spring["confidence"] = round(latest_spring["confidence"], 2)
+
+        return {
+            "detected": True,
+            "signals": signals,
+            "latest_spring": latest_spring,
+            "method": "meng_hongtao_5_filters_vectorized",
+            "description": "孟洪涛5重过滤Spring(震仓)检测"
+        }
+
+    def _detect_spring_enhanced_iterative(self) -> Dict:
         """
         孟洪涛Spring(震仓)增强检测
 
@@ -166,6 +273,117 @@ class MengPatternEnhancer(BaseDetector):
         return score
 
     def detect_joc_enhanced(self) -> Dict:
+        if USE_VECTORIZED:
+            try:
+                return self._detect_joc_enhanced_vectorized()
+            except Exception as e:
+                logger.warning(f"Vectorized JOC failed: {e}. Falling back to iterative method.")
+                return self._detect_joc_enhanced_iterative()
+        return self._detect_joc_enhanced_iterative()
+
+    def _detect_joc_enhanced_vectorized(self) -> Dict:
+        """NumPy 向量化加速版的 Meng JOC 检测"""
+        if self.data is None or len(self.data) < 40:
+            return {"detected": False, "reason": "insufficient_data"}
+
+        df = self.data.copy()
+
+        trading_range = self._detect_trading_range(df, window=60)
+        if not trading_range.get("is_consolidation"):
+            return {"detected": False, "reason": "not_in_consolidation"}
+
+        creek_level = trading_range["high"]
+        
+        # 预计算 Volume_MA20
+        if 'Volume_MA20' in df.columns:
+            volume_ma20_series = df['Volume_MA20'].values
+        else:
+            volume_ma20_series = df['Volume'].rolling(20, min_periods=1).mean().values
+            
+        volume_ma20 = volume_ma20_series[-1]
+
+        closes = df['Close'].values
+        opens = df['Open'].values
+        highs = df['High'].values
+        lows = df['Low'].values
+        volumes = df['Volume'].values
+        
+        n = len(df)
+        signals = []
+        
+        # 提取候选突破掩码 (向量化)
+        # 条件: current close > creek AND prev close <= creek
+        prev_closes = np.roll(closes, 1)
+        prev_closes[0] = closes[0]
+        
+        is_breakout = (closes > creek_level) & (prev_closes <= creek_level)
+        is_breakout[:20] = False
+
+        # 使用 np.where 安全除法
+        safe_opens = np.where(np.abs(opens) > 1e-9, opens, 1.0)
+        price_changes = (closes - opens) / safe_opens * 100
+        volume_ratios = np.where(volume_ma20 > 0, volumes / volume_ma20, 1.0)
+        daily_ranges = highs - lows
+        close_positions = np.where(daily_ranges > 0, (closes - lows) / daily_ranges, 0.5)
+
+        valid_joc_mask = is_breakout & (price_changes >= 3) & (volume_ratios >= 1.5) & (close_positions >= 0.75)
+        
+        joc_indices = np.where(valid_joc_mask)[0]
+        
+        for i in joc_indices:
+            test_detected = False
+            test_date = None
+            test_vol_ratio = None
+            
+            end_idx = min(i + 1 + 10, n)
+            if end_idx > i + 1:
+                test_lows = lows[i+1:end_idx]
+                test_closes = closes[i+1:end_idx]
+                test_vols = volumes[i+1:end_idx]
+                
+                near_creek = test_lows < creek_level * 1.02
+                above_creek = test_closes > creek_level
+                shrink_vols = (test_vols / volume_ma20) < 1.0 if volume_ma20 > 0 else test_vols < test_vols # always false if ma is 0 but we safeguard
+                if volume_ma20 <= 0: shrink_vols = np.zeros_like(test_vols, dtype=bool)
+
+                test_hits = near_creek & above_creek & shrink_vols
+                hit_indices = np.where(test_hits)[0]
+                
+                if len(hit_indices) > 0:
+                    first_hit = hit_indices[0] + i + 1
+                    test_detected = True
+                    test_date = df.index[first_hit]
+                    test_vol_ratio = float(volumes[first_hit] / volume_ma20) if volume_ma20 > 0 else 1.0
+
+            signal = {
+                "date": df.index[i],
+                "creek_level": float(creek_level),
+                "close_price": float(closes[i]),
+                "breakout_pct": round(float(price_changes[i]), 2),
+                "volume_ratio": round(float(volume_ratios[i]), 2),
+                "close_position": round(float(close_positions[i]) * 100, 1),
+                "test_detected": test_detected,
+                "test_date": test_date,
+                "test_vol_ratio": round(test_vol_ratio, 2) if test_vol_ratio else None,
+                "confidence": self._calculate_joc_confidence(price_changes[i], volume_ratios[i], close_positions[i], test_detected)
+            }
+            signals.append(signal)
+
+        if not signals:
+            return {"detected": False, "reason": "no_valid_joc_found"}
+
+        latest_joc = signals[-1]
+        latest_joc["confidence"] = round(latest_joc["confidence"], 2)
+
+        return {
+            "detected": True,
+            "signals": signals,
+            "latest": latest_joc,
+            "method": "meng_hongtao_joc_vectorized",
+            "description": "孟洪涛JOC(跃过小溪)检测"
+        }
+
+    def _detect_joc_enhanced_iterative(self) -> Dict:
         """
         孟洪涛JOC(跃过小溪)增强检测
 

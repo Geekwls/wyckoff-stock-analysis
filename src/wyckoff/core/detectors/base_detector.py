@@ -1,6 +1,9 @@
 from abc import ABC
 from datetime import datetime
 import pandas as pd
+import os
+
+USE_VECTORIZED = os.environ.get('WYCKOFF_VECTORIZED', '1') == '1'
 
 class BaseDetector(ABC):
     """

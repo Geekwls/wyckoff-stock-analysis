@@ -17,6 +17,8 @@ class WyckoffConfig(BaseModel):
     prior_breakout_mu: float = Field(1.5, ge=1.0, le=5.0, description="突破量比先验均值")
     prior_shrink_mu: float = Field(0.6, ge=0.1, le=1.0, description="缩量量比先验均值")
     prior_sigma: float = Field(0.5, ge=0.1, le=2.0, description="量比先验标准差")
+    amplitude_breakout_percentile: float = Field(85.0, ge=50.0, le=99.0, description="贝叶斯推断：突破日振幅截取分位数")
+    amplitude_shrink_percentile: float = Field(15.0, ge=1.0, le=50.0, description="贝叶斯推断：缩量日振幅截取分位数")
 
     # Spring检测参数
     spring_lookback: int = Field(120, ge=30, le=252)

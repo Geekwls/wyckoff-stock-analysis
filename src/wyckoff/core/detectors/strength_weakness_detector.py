@@ -1,6 +1,10 @@
 import pandas as pd
+import numpy as np
+import logging
 from typing import Dict, Optional, Tuple, List, Any
-from .base_detector import BaseDetector
+from .base_detector import BaseDetector, USE_VECTORIZED
+
+logger = logging.getLogger(__name__)
 from ...config.settings import WyckoffConfig, WyckoffThresholds
 
 class StrengthWeaknessDetector(BaseDetector):
@@ -72,11 +76,109 @@ class StrengthWeaknessDetector(BaseDetector):
     def detect_sos(self, window: int = 40) -> Dict:
         """
         检测标准 SOS (Sign of Strength)
+        """
+        if USE_VECTORIZED:
+            try:
+                return self._detect_sos_vectorized(window)
+            except Exception as e:
+                logger.warning(f"Vectorized SOS failed: {e}. Falling back to iterative method.")
+                return self._detect_sos_iterative(window)
+        return self._detect_sos_iterative(window)
 
-        关键约束：
-        - SOS 只发生在吸筹阶段末期或上涨趋势中
-        - 当 phase == Distribution 时，所有向上突破尝试一律归为 upthrust，不生成 sos
-        - 这是解决信号混乱最根本的一刀
+    def _detect_sos_vectorized(self, window: int = 40) -> Dict:
+        if self._is_signal_blocked('sos'):
+            return {'detected': False, 'reason': 'signal_blocked_by_phase', 'note': '当前阶段为派发期，向上突破应归类为UT/UTAD，SOS信号已被屏蔽'}
+        
+        if self.data is None or len(self.data) < window:
+            return {'detected': False}
+            
+        if self._is_distribution_phase():
+            return {'detected': False, 'reason': 'distribution_phase_no_sos'}
+            
+        df = self.data.tail(window).copy()
+        
+        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
+        price_change_threshold = self.thresholds.SOS_PRICE_CHANGE_DEFAULT
+        
+        # 转换为 NumPy 数组
+        closes = df['Close'].values
+        opens = df['Open'].values
+        highs = df['High'].values
+        lows = df['Low'].values
+        volumes = df['Volume'].values
+        
+        # 计算 vol_ma (这里使用简单的 rolling mean 近似或者提取已计算好的)
+        if 'Volume_MA20' in df.columns:
+            vol_ma = df['Volume_MA20'].values
+        else:
+            vol_ma = df['Volume'].rolling(20, min_periods=1).mean().values
+
+        # price_pct_change - 使用 np.where 安全除法
+        prev_closes = np.roll(closes, 1)
+        prev_closes[0] = closes[0]
+        safe_prev_closes = np.where(np.abs(prev_closes) > 1e-9, prev_closes, 1.0)
+        price_pct_change = (closes - prev_closes) / safe_prev_closes
+        
+        # 安全计算 close_position
+        denominators = highs - lows
+        safe_denominators = np.where(denominators == 0, 1.0, denominators)
+        close_position = (closes - lows) / safe_denominators
+        
+        upper_shadow = highs - closes
+        body = np.abs(closes - opens)
+        upper_shadow_ratio = upper_shadow / (body + 0.001)
+
+        sos_mask = (
+            (closes > opens) &
+            (volumes > vol_ma * vol_ratio_threshold) &
+            (price_pct_change > price_change_threshold) &
+            (close_position >= 0.70) &
+            (upper_shadow_ratio < 0.50)
+        )
+        
+        sos_indices = np.where(sos_mask)[0]
+        
+        if len(sos_indices) > 0:
+            idx_pos = sos_indices[-1]
+            idx = df.index[idx_pos]
+            
+            # 区分突破性质
+            if idx_pos >= 20:
+                pre_sos_high = np.max(highs[idx_pos-20:idx_pos])
+            else:
+                pre_sos_high = np.max(highs[:idx_pos+1])
+                
+            tr_data = self.data.tail(60)
+            tr_high = tr_data['High'].max()
+            sos_close = closes[idx_pos]
+            
+            if sos_close >= tr_high * 0.98:
+                breakout_type = 'breakout_sos'
+                interpretation = '强势突破前期盘整区间阻力，JOC前兆信号'
+            elif sos_close >= pre_sos_high * 0.98:
+                breakout_type = 'range_high_sos'
+                interpretation = '突破近20日高点，但仍在更大区间之内'
+            else:
+                breakout_type = 'within_range_sos'
+                interpretation = '区间内放量阳线，非突破性信号'
+                
+            return {
+                'detected': True, 
+                'type': 'sos', 
+                'date': idx, 
+                'price': float(closes[idx_pos]), 
+                'volume_ratio': round(float(volumes[idx_pos] / vol_ma[idx_pos]) if vol_ma[idx_pos] > 0 else 1.0, 2), 
+                'price_change': round(float(price_pct_change[idx_pos]), 4), 
+                'breakthrough_level': round(float(tr_high), 3),
+                'breakout_type': breakout_type,
+                'phase_context': 'accumulation_or_uptrend',
+                'interpretation': interpretation
+            }
+        return {'detected': False}
+
+    def _detect_sos_iterative(self, window: int = 40) -> Dict:
+        """
+        检测标准 SOS (Sign of Strength) - 迭代/Pandas 版
         """
         # 🔧 P0-2修复：检查信号是否被屏蔽
         if self._is_signal_blocked('sos'):
@@ -149,6 +251,77 @@ class StrengthWeaknessDetector(BaseDetector):
         return {'detected': False}
 
     def detect_sow(self, window: int = 40) -> Dict:
+        if USE_VECTORIZED:
+            try:
+                return self._detect_sow_vectorized(window)
+            except Exception as e:
+                logger.warning(f"Vectorized SOW failed: {e}. Falling back to iterative method.")
+                return self._detect_sow_iterative(window)
+        return self._detect_sow_iterative(window)
+
+    def _detect_sow_vectorized(self, window: int = 40) -> Dict:
+        if self._is_signal_blocked('sow'):
+            return {'detected': False, 'reason': 'signal_blocked_by_phase', 'note': '当前阶段为吸筹期，向下突破应归类为Spring，SOW信号已被屏蔽'}
+            
+        if self.data is None or len(self.data) < window:
+            return {'detected': False}
+            
+        df = self.data.tail(window).copy()
+        
+        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
+        price_change_threshold = self.thresholds.SOW_PRICE_CHANGE_DEFAULT
+        
+        closes = df['Close'].values
+        opens = df['Open'].values
+        highs = df['High'].values
+        lows = df['Low'].values
+        volumes = df['Volume'].values
+        
+        if 'Volume_MA20' in df.columns:
+            vol_ma = df['Volume_MA20'].values
+        else:
+            vol_ma = df['Volume'].rolling(20, min_periods=1).mean().values
+
+        # price_pct_change - 使用 np.where 安全除法
+        prev_closes = np.roll(closes, 1)
+        prev_closes[0] = closes[0]
+        safe_prev_closes = np.where(np.abs(prev_closes) > 1e-9, prev_closes, 1.0)
+        price_pct_change = (closes - prev_closes) / safe_prev_closes
+            
+        denominators = highs - lows
+        safe_denominators = np.where(denominators == 0, 1.0, denominators)
+        close_position = (closes - lows) / safe_denominators
+        
+        lower_shadow = lows - np.where(opens < closes, opens, closes)
+        body = np.abs(closes - opens)
+        lower_shadow_ratio = np.abs(lower_shadow) / (body + 0.001)
+        
+        sow_mask = (
+            (closes < opens) &
+            (volumes > vol_ma * vol_ratio_threshold) &
+            (price_pct_change < price_change_threshold) &
+            (close_position <= 0.30) &
+            (lower_shadow_ratio < 0.50)
+        )
+        
+        sow_indices = np.where(sow_mask)[0]
+        
+        if len(sow_indices) > 0:
+            idx_pos = sow_indices[-1]
+            idx = df.index[idx_pos]
+            breakdown_level = df['Low'].rolling(20).min().iloc[-1]
+            return {
+                'detected': True, 
+                'type': 'sow', 
+                'date': idx, 
+                'price': float(closes[idx_pos]), 
+                'volume_ratio': round(float(volumes[idx_pos] / vol_ma[idx_pos]) if vol_ma[idx_pos] > 0 else 1.0, 2), 
+                'price_change': round(float(price_pct_change[idx_pos]), 4), 
+                'breakdown_level': float(breakdown_level)
+            }
+        return {'detected': False}
+
+    def _detect_sow_iterative(self, window: int = 40) -> Dict:
         """检测标准 SOW"""
         # 🔧 P0-2修复：检查信号是否被屏蔽
         if self._is_signal_blocked('sow'):
