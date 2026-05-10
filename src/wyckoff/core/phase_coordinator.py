@@ -123,8 +123,20 @@ class PhaseCoordinator:
         sequence_validation = SequenceValidator(raw_events, self.detector.data).validate_all()
 
         # 6. 统一使用强类型模型封装
+        # 安全地构造Pydantic模型：过滤掉dict中模型不存在的字段
+        def _safe_model(model_cls, data: dict):
+            # 修复问题2：兼容 Pydantic v1 和 v2
+            if hasattr(model_cls, "model_fields"):
+                # Pydantic v2
+                valid_fields = model_cls.model_fields.keys()
+            else:
+                # Pydantic v1
+                valid_fields = model_cls.__fields__.keys()
+                
+            filtered = {k: v for k, v in data.items() if k in valid_fields}
+            return model_cls(**filtered)
+
         # 保存原始检测结果供 scoring 引擎使用
-        # 🔧 问题四修复：将AR和ST也加入raw_events_map，确保评分引擎可以访问
         raw_events_map = {
             'spring': spring_res,
             'upthrust': upthrust_res,
@@ -134,23 +146,23 @@ class PhaseCoordinator:
             'lpsy': lpsy_res,
             'joc': joc_res,
             'fti': fti_res,
-            'secondary_test': st_res,  # 🔧 新增：ST是Phase A关键信号
-            'automatic_reaction': ar_res,  # 🔧 新增：AR定义TR边界
+            'secondary_test': st_res,
+            'automatic_reaction': ar_res,
         }
         events = {
-            'trading_range': TradingRangeModel(**tr_res),
+            'trading_range': _safe_model(TradingRangeModel, tr_res),
             '_raw_events': raw_events_map,
-            'climax': ClimaxModel(**climax_res),
-            'automatic_reaction': WyckoffEventModel(**ar_res) if ar_res.get('detected') else WyckoffEventModel(detected=False),
-            'secondary_test': WyckoffEventModel(**st_res) if st_res.get('detected') else WyckoffEventModel(detected=False),
+            'climax': _safe_model(ClimaxModel, climax_res),
+            'automatic_reaction': _safe_model(WyckoffEventModel, ar_res) if ar_res.get('detected') else WyckoffEventModel(detected=False),
+            'secondary_test': _safe_model(WyckoffEventModel, st_res) if st_res.get('detected') else WyckoffEventModel(detected=False),
             'spring_upthrust': None,
             'sos_sow': None,
             'lps_lpsy': {
-                'lps': LpsModel(**lps_res),
-                'lpsy': LpsyModel(**lpsy_res)
+                'lps': _safe_model(LpsModel, lps_res),
+                'lpsy': _safe_model(LpsyModel, lpsy_res)
             },
-            'joc': JocModel(**joc_res) if joc_res.get('detected') else None,
-            'fti': FtiModel(**fti_res) if fti_res.get('detected') else None,
+            'joc': _safe_model(JocModel, joc_res) if joc_res.get('detected') else None,
+            'fti': _safe_model(FtiModel, fti_res) if fti_res.get('detected') else None,
             'boring_zone': boring_zone_res,
             'phase_revision_log': [],
             'sequence_validation': sequence_validation,
@@ -382,9 +394,9 @@ class PhaseCoordinator:
 
     def _identify_initial_phase(self, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """识别初始阶段"""
-        climax_res = events.get('climax_ar', {})
-        ar_res = events.get('climax_ar', {})
-        st_res = events.get('st', {})
+        climax_res = events.get('climax', {})
+        ar_res = events.get('automatic_reaction', {})
+        st_res = events.get('secondary_test', {})
 
         # 检查Phase A
         if self._has_complete_phase_a(events):
@@ -405,9 +417,9 @@ class PhaseCoordinator:
 
     def _has_complete_phase_a(self, events: Dict) -> bool:
         """检查是否有完整的Phase A结构（SC/AR + ST）"""
-        climax_res = events.get('climax_ar', {})
-        ar_res = events.get('climax_ar', {})
-        st_res = events.get('st', {})
+        climax_res = events.get('climax', {})
+        ar_res = events.get('automatic_reaction', {})
+        st_res = events.get('secondary_test', {})
 
         has_climax = climax_res.get('detected', False)
         has_ar = ar_res.get('detected', False)
@@ -456,11 +468,13 @@ class PhaseCoordinator:
                     return True
             elif trigger_type == 'lps':
                 event = events.get('lps_lpsy', {})
-                if event.get('detected'):
+                lps = event.get('lps', {})
+                if lps.get('detected'):
                     return True
             elif trigger_type == 'lpsy':
                 event = events.get('lps_lpsy', {})
-                if event.get('detected'):
+                lpsy = event.get('lpsy', {})
+                if lpsy.get('detected'):
                     return True
             elif trigger_type == 'joc':
                 # 需要单独检查JOC
@@ -482,13 +496,16 @@ class PhaseCoordinator:
         return False
 
     def _has_continuous_confirmation(self, days: int) -> bool:
-        """检查是否有连续N天的确认"""
+        """检查是否有连续N天的同向确认"""
         try:
             if hasattr(self.detector, 'data') and self.detector.data is not None:
-                df = self.detector.data.tail(days)
-                # 简单检查：最近N天都在上涨（吸筹）或下跌（派发）
-                if len(df) >= days:
-                    return True
+                df = self.detector.data.tail(days + 1)
+                if len(df) < days + 1:
+                    return False
+                changes = df['Close'].pct_change().dropna()
+                positive_ratio = (changes > 0).sum() / len(changes)
+                negative_ratio = (changes < 0).sum() / len(changes)
+                return positive_ratio >= 0.8 or negative_ratio >= 0.8
         except Exception:
             pass
 

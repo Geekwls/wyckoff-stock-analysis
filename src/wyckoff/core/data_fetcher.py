@@ -55,7 +55,7 @@ def prepare_data(data: pd.DataFrame, config: WyckoffConfig = None) -> pd.DataFra
         df[f'High_Max_{w}'] = TechnicalIndicators.rolling_max(df, 'High', w)
         df[f'Low_Min_{w}'] = TechnicalIndicators.rolling_min(df, 'Low', w)
 
-        return df
+    return df
 
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -121,7 +121,8 @@ class WyckoffDataFetcher:
                     logger.info("尝试自动清理数据...")
                     data = DataValidator.clean_dataframe(data)
 
-            if data is None or (frequency == "d" and len(data) < self.config.min_data_length):
+            is_daily = frequency and "d" in str(frequency).lower()
+            if data is None or (is_daily and len(data) < self.config.min_data_length):
                 raise InsufficientDataError(
                     info.normalized, 
                     self.config.min_data_length, 

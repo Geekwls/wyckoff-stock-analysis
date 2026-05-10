@@ -36,18 +36,22 @@ class WyckoffReportGenerator:
         self.law_analyzer = getattr(analyzer, 'law_analyzer', None)
         self.rec_engine = getattr(analyzer, 'orchestrator', Any).rec_engine if hasattr(analyzer, 'orchestrator') else RecommendationEngine(self.config)
         self.thresholds = WyckoffThresholds()
+        self._is_a_stock_fn = getattr(analyzer, '_is_a_stock', lambda s: False)
+        self._get_intraday_data_fn = getattr(analyzer, 'get_intraday_data', lambda tf: None)
+        self._analyze_market_env_fn = getattr(analyzer, '_analyze_market_environment', lambda: {})
+        self._get_baseline_index_fn = getattr(analyzer, '_get_baseline_index_symbol', lambda: '')
+        self._get_cached_index_fn = getattr(analyzer, '_get_cached_index_analyzer', lambda: None)
+        self._calculate_cause_effect_fn = getattr(analyzer, 'calculate_cause_effect', lambda: {})
 
     def generate_report(self) -> str:
-        """生成分析报告"""
         if self.data is None:
             data = self.analyzer.fetch_data()
             if data is None or (isinstance(data, pd.DataFrame) and data.empty):
                 return f"无法获取数据: {self.symbol}"
             self.data = self.analyzer.data
             self.pattern_detector = self.analyzer.pattern_detector
-            self.law_analyzer = self.analyzer.law_analyzer
+            self.law_analyzer = getattr(self.analyzer, 'law_analyzer', None)
 
-        # ── 提前计算阶段信息，供报告头部和交易建议共用 ──────────
         phase_result = self.pattern_detector.identify_phase()
         phase_str    = phase_result.get('phase', 'Unknown')
         phase_conf   = phase_result.get('confidence', 0.0)
@@ -56,15 +60,77 @@ class WyckoffReportGenerator:
         ma_conf      = phase_result.get('ma_confidence', 0)
         vol_conf     = phase_result.get('vol_confidence', 0)
 
-        # 阶段置信度颜色标记
-        if phase_conf >= 0.75:
-            conf_icon = '🟢'
-        elif phase_conf >= 0.50:
-            conf_icon = '🟡'
-        else:
-            conf_icon = '🔴'
+        if phase_conf >= 0.75: conf_icon = '🟢'
+        elif phase_conf >= 0.50: conf_icon = '🟡'
+        else: conf_icon = '🔴'
 
-        report = f"""
+        report = self._build_header(conf_icon, phase_str, phase_conf, ma_conf, vol_conf, seq_rating)
+        report += self._build_core_evidence(phase_result)
+
+        boring_res = self.pattern_detector.detect_boring_zone()
+        dead_corner = self.pattern_detector.detect_dead_corner_breakout()
+        report += self._build_boring_zone_warning(boring_res, dead_corner)
+        report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+        trading_range = self.pattern_detector.detect_trading_range()
+        duration_days = trading_range.get('duration_days', 0)
+        consolidation_duration = trading_range.get('consolidation_duration_days', 0)
+        report += self._build_basic_data_section(phase_result, duration_days, consolidation_duration)
+
+        spring = self.pattern_detector.detect_spring_menhongtao()
+        upthrust = self.pattern_detector.detect_upthrust()
+        if hasattr(self.pattern_detector, 'sw_detector') and hasattr(self.pattern_detector.sw_detector, 'set_current_phase'):
+            self.pattern_detector.sw_detector.set_current_phase(phase_str)
+        sos = self.pattern_detector.detect_sos()
+        sow = self.pattern_detector.detect_sow()
+        lps = self.pattern_detector.detect_lps()
+        lpsy = self.pattern_detector.detect_lpsy()
+
+        report += self._build_pattern_results(trading_range, spring, upthrust, sos, sow, lps, lpsy, phase_str)
+
+        joc = self.pattern_detector.detect_joc_menhongtao()
+        fti = self.pattern_detector.detect_fti()
+        vsa = self.pattern_detector.detect_vsa_menhongtao()
+        report += self._build_advanced_signals(joc, fti, vsa)
+
+        boring_res2 = self.pattern_detector.detect_boring_zone()
+        report += self._build_boring_analysis(boring_res2)
+
+        cause_effect = self._calculate_cause_effect_fn()
+        report += self._build_cause_effect_section(cause_effect, trading_range)
+
+        market_env_res = self._analyze_market_env_fn()
+        market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
+        patterns = self.pattern_detector._collect_all_events()
+        patterns['phase'] = phase_str
+        patterns['boring_zone'] = boring_res
+        patterns['dead_corner_breakout'] = dead_corner
+        signal_quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
+
+        mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
+        weekly_trend = mtf.get('weekly_trend', 'unknown')
+        monthly_trend = mtf.get('monthly_trend', 'unknown')
+        trend_agreement = mtf.get('trend_agreement', False)
+        if not trend_agreement:
+            if weekly_trend == 'bullish' and monthly_trend in ['bullish', 'neutral']:
+                trend_agreement = True
+            elif weekly_trend == 'bearish' and monthly_trend in ['bearish', 'neutral']:
+                trend_agreement = True
+        mtf_agreement = 'agreed' if trend_agreement else 'unknown'
+        conflict = self._cross_timeframe_conflict_warning(phase=phase_str, weekly_trend=weekly_trend, monthly_trend=monthly_trend, agreement=mtf_agreement)
+        quality_score = signal_quality_data.score
+        max_score = signal_quality_data.max_score
+
+        report += self._build_conflict_section(conflict)
+        report += self._build_core_conclusion(quality_score, max_score, phase_conf, phase_str, conflict, joc, spring, sos, lps, fti, upthrust, sow, lpsy, trading_range, cause_effect, mtf, boring_res, dead_corner, market_env)
+
+        report += self._build_falsification(phase_str, trading_range)
+        return report
+
+    # ========== Builder methods extracted from generate_report ==========
+
+    def _build_header(self, conf_icon, phase_str, phase_conf, ma_conf, vol_conf, seq_rating) -> str:
+        return f"""
 {'='*60}
 威科夫形态 analysis 报告
 {'='*60}
@@ -82,95 +148,61 @@ class WyckoffReportGenerator:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-        # 添加孟洪涛核心证据清单
+    def _build_core_evidence(self, phase_result) -> str:
         core_evidence = phase_result.get('core_evidence', {})
-        if core_evidence and 'error' not in core_evidence:
-            evidence = core_evidence.get('evidence', {})
-            evidence_count = core_evidence.get('evidence_count', 0)
-            total_checks = core_evidence.get('total_checks', 4)
-            strength = core_evidence.get('strength', 'none')
+        if not core_evidence or 'error' in core_evidence:
+            return ''
+        evidence = core_evidence.get('evidence', {})
+        evidence_count = core_evidence.get('evidence_count', 0)
+        total_checks = core_evidence.get('total_checks', 4)
+        strength = core_evidence.get('strength', 'none')
+        text = f"\n【核心证据清单】（孟洪涛方法）\n   Phase A 确认度: {evidence_count}/{total_checks} ({strength.upper()})\n"
 
-            report += f"""
-【核心证据清单】（孟洪涛方法）
-   Phase A 确认度: {evidence_count}/{total_checks} ({strength.upper()})
-"""
+        sc = evidence.get('sc', {})
+        if sc.get('detected') and all(k in sc for k in ['date', 'price', 'volume_ratio', 'confidence']):
+            text += f"   ✓ SC (恐慌抛售): {sc['date']} 价格{sc['price']:.2f} 量比{sc['volume_ratio']:.1f}x 置信度{sc['confidence']:.0f}%\n"
+        else:
+            text += "   ✗ SC (恐慌抛售): 未检测到\n"
 
-            # SC (恐慌性抛售)
-            sc = evidence.get('sc', {})
-            if sc.get('detected') and all(k in sc for k in ['date', 'price', 'volume_ratio', 'confidence']):
-                report += f"""
-   ✓ SC (恐慌抛售): {sc['date']} 价格{sc['price']:.2f} 量比{sc['volume_ratio']:.1f}x 置信度{sc['confidence']:.0f}%
-"""
-            else:
-                report += f"""
-   ✗ SC (恐慌抛售): 未检测到
-"""
+        ps = evidence.get('ps', {})
+        if ps.get('detected') and all(k in ps for k in ['rebound_pct', 'sc_date', 'ps_date', 'confidence']):
+            text += f"   ✓ PS (初步支撑): 反弹{ps['rebound_pct']:.1f}% ({ps['sc_date']} → {ps['ps_date']}) 置信度{ps['confidence']:.0f}%\n"
+        else:
+            text += "   ✗ PS (初步支撑): 未检测到\n"
 
-            # PS (初步支撑)
-            ps = evidence.get('ps', {})
-            if ps.get('detected') and all(k in ps for k in ['rebound_pct', 'sc_date', 'ps_date', 'confidence']):
-                report += f"""
-   ✓ PS (初步支撑): 反弹{ps['rebound_pct']:.1f}% ({ps['sc_date']} → {ps['ps_date']}) 置信度{ps['confidence']:.0f}%
-"""
-            else:
-                report += f"""
-   ✗ PS (初步支撑): 未检测到
-"""
+        sot = evidence.get('sot', {})
+        if sot.get('detected') and all(k in sot for k in ['date', 'volume_ratio', 'body_ratio', 'confidence']):
+            text += f"   ✓ SOT (停止行为): {sot['date']} 量比{sot['volume_ratio']:.1f}x 实体比{sot['body_ratio']*100:.0f}% 置信度{sot['confidence']:.0f}%\n"
+        else:
+            text += "   ✗ SOT (停止行为): 未检测到（放量滞跌）\n"
 
-            # SOT (停止行为)
-            sot = evidence.get('sot', {})
-            if sot.get('detected') and all(k in sot for k in ['date', 'volume_ratio', 'body_ratio', 'confidence']):
-                report += f"""
-   ✓ SOT (停止行为): {sot['date']} 量比{sot['volume_ratio']:.1f}x 实体比{sot['body_ratio']*100:.0f}% 置信度{sot['confidence']:.0f}%
-"""
-            else:
-                report += f"""
-   ✗ SOT (停止行为): 未检测到（放量滞跌）
-"""
+        spring_ev = evidence.get('spring', {})
+        if spring_ev.get('detected') and all(k in spring_ev for k in ['date', 'close', 'filters_passed']):
+            try:
+                intraday_data = self._get_intraday_data_fn("60m")
+                spring_quality = self.pattern_detector.meng_enhancer._analyze_spring_intraday_quality(intraday_data)
+                quality_text = f"质量评分{spring_quality['quality_score']} ({spring_quality['recovery_type']})"
+                observation = f"\n       微观细节: {spring_quality['observation']}"
+            except Exception:
+                quality_text = "质量未评估 (数据获取失败)"
+                observation = ""
+            text += f"   ✓ Spring (弹簧): {spring_ev['date']} 收盘{spring_ev['close']:.2f} 滤网{spring_ev['filters_passed']}/5 {quality_text}{observation}\n"
+        else:
+            text += "   ✗ Spring (弹簧): 未检测到\n"
 
-            # Spring (弹簧)
-            spring = evidence.get('spring', {})
-            if spring.get('detected') and all(k in spring for k in ['date', 'close', 'filters_passed']):
-                # 尝试获取日内数据进行微观分析
-                try:
-                    intraday_data = self.analyzer.get_intraday_data("60m")
-                    # 这里通过 enhancer 分析日内质量
-                    spring_quality = self.pattern_detector.meng_enhancer._analyze_spring_intraday_quality(intraday_data)
-                    quality_text = f"质量评分{spring_quality['quality_score']} ({spring_quality['recovery_type']})"
-                    observation = f"\n       微观细节: {spring_quality['observation']}"
-                except Exception:
-                    quality_text = "质量未评估 (数据获取失败)"
-                    observation = ""
+        if strength == 'strong':
+            text += f"   >>> 强 Phase A ({evidence_count}/{total_checks}) - 可考虑LPS入场\n"
+        elif strength == 'weak':
+            text += f"   >>> 弱 Phase A ({evidence_count}/{total_checks}) - 建议等待更多证据\n"
+        else:
+            text += "   >>> 无 Phase A 证据 - 当前处于趋势或深度休整中\n"
+        return text
 
-                report += f"""
-   ✓ Spring (弹簧): {spring['date']} 收盘{spring['close']:.2f} 滤网{spring['filters_passed']}/5 {quality_text}{observation}
-"""
-            else:
-                report += f"""
-   ✗ Spring (弹簧): 未检测到
-"""
-
-            # 证据强度总结
-            if strength == 'strong':
-                report += f"""
-   >>> 强 Phase A ({evidence_count}/{total_checks}) - 可考虑LPS入场
-"""
-            elif strength == 'weak':
-                report += f"""
-   >>> 弱 Phase A ({evidence_count}/{total_checks}) - 建议等待更多证据
-"""
-            else:
-                report += f"""
-   >>> 无 Phase A 证据 - 当前处于趋势或深度休整中
-"""
-
-        # ── 孟洪涛进阶预警：枯燥区与死角突破 ──────────
-        boring_res = self.pattern_detector.detect_boring_zone()
-        dead_corner = self.pattern_detector.detect_dead_corner_breakout()
-        
-        if boring_res.get('detected') or boring_res.get('score', 0) >= 70:
-            status = "🔥 高能预警" if boring_res.get('high_alert') else "⚡ 深度关注"
-            report += f"""
+    def _build_boring_zone_warning(self, boring_res, dead_corner) -> str:
+        if not boring_res.get('detected') and boring_res.get('score', 0) < 70:
+            return ''
+        status = "🔥 高能预警" if boring_res.get('high_alert') else "⚡ 深度关注"
+        text = f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 【{status}：孟洪涛枯燥区】
    状态: 检测到显著枯燥区
@@ -179,32 +211,23 @@ class WyckoffReportGenerator:
    波动收敛: {boring_res['atr_contraction']*100:.0f}%
    预警等级: {"死角突破临界" if boring_res.get('high_alert') else "能量积蓄中"}
 """
-            if dead_corner.get('detected'):
-                report += f"""
+        if dead_corner.get('detected'):
+            text += f"""
    >>> 🎯 [实战确认] 死角突破已发生！
        突破价: {dead_corner['breakout_price']}
        量比: {dead_corner['breakout_volume_ratio']:.1f}x
 """
+        return text
 
-        report += """
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"""
-
-        # 时间维度分析：计算结构持续时间
-        trading_range = self.pattern_detector.detect_trading_range()
-        duration_days = trading_range.get('duration_days', 0)
-        consolidation_duration = trading_range.get('consolidation_duration_days', 0)
-        
-        # 时间维度评估
-        time_assessment = ""
+    def _build_basic_data_section(self, phase_result, duration_days, consolidation_duration) -> str:
         if duration_days >= 60:
             time_assessment = "✅ 该结构已运行60天以上，已具备充足的时间基础，结构可靠性高"
         elif duration_days >= 30:
             time_assessment = "⚠️ 该结构已运行30-60天，时间基础尚可，结构正在形成中"
         else:
             time_assessment = "⏳ 该结构运行不足30天，时间基础薄弱，结构尚未成熟"
-        
-        report += f"""
+
+        text = f"""
 【基础数据】
 当前价格: {self.data['Close'].iloc[-1]:.2f}
 52周最高: {self.data['High'].tail(252).max():.2f}
@@ -213,18 +236,12 @@ class WyckoffReportGenerator:
 量比: {self.data['Volume'].iloc[-1] / max(self.data['Volume_MA20'].iloc[-1], 1):.2f}
 """
 
-        # 🔧 问题三修复：展示RS异常警告
-        phase_result = self.pattern_detector.identify_phase()
         rs_data = phase_result.get('relative_strength', {})
         rs_anomaly_warning = rs_data.get('rs_anomaly_warning')
         if rs_anomaly_warning:
-            report += f"""
+            text += f"\n⚠️ 【数据质量警告】\n{rs_anomaly_warning}\n"
 
-⚠️ 【数据质量警告】
-{rs_anomaly_warning}
-"""
-
-        report += f"""
+        text += f"""
 
 【时间维度分析】
 结构持续时间: {duration_days} 天
@@ -236,35 +253,37 @@ class WyckoffReportGenerator:
 
 【形态检测】
 """
+        return text
 
-        # 检测各种形态（优先使用孟洪涛增强方法）
-        trading_range = self.pattern_detector.detect_trading_range()
-        spring = self.pattern_detector.detect_spring_menhongtao()  # 使用孟洪涛5重过滤
-        upthrust = self.pattern_detector.detect_upthrust()
-        
-        # 关键修复：在检测SOS之前，先设置当前阶段
-        # 这样SOS检测器可以根据阶段动态调整信号分类
-        if hasattr(self.pattern_detector, 'sw_detector') and hasattr(self.pattern_detector.sw_detector, 'set_current_phase'):
-            self.pattern_detector.sw_detector.set_current_phase(phase_str)
-        
-        sos = self.pattern_detector.detect_sos()
-        sow = self.pattern_detector.detect_sow()
-        lps = self.pattern_detector.detect_lps()
-        lpsy = self.pattern_detector.detect_lpsy()
-
+    def _build_pattern_results(self, trading_range, spring, upthrust, sos, sow, lps, lpsy, phase_str) -> str:
+        text = ""
         if trading_range.get('is_consolidation'):
-            report += f"""
+            text += f"""
 ✅ 检测到交易区间:
    区间: {trading_range['low']:.2f} - {trading_range['high']:.2f}
    幅度: {trading_range['range_pct']*100:.1f}%
    当前位置: {trading_range['position']*100:.0f}% (0%=底部, 100%=顶部)
    成交量趋势: {trading_range['volume_trend']}
 """
-
         if spring.get('detected'):
-            # 孟洪涛Spring检测返回格式
             if 'filters_passed' in spring:
-                report += f"""
+                text += self._fmt_spring_meng(spring)
+            elif 'latest_spring' in spring:
+                text += self._fmt_spring_traditional(spring)
+        if upthrust.get('detected'):
+            text += self._fmt_upthrust(upthrust)
+        if sos.get('detected') and sos.get('latest'):
+            text += self._fmt_sos(sos)
+        if sow.get('detected') and sow.get('latest'):
+            text += self._fmt_sow(sow)
+        if lps.get('detected'):
+            text += self._fmt_lps(lps)
+        if lpsy.get('detected'):
+            text += self._fmt_lpsy(lpsy, phase_str)
+        return text
+
+    def _fmt_spring_meng(self, spring) -> str:
+        return f"""
 ✅ 检测到Spring（孟洪涛5滤网）:
    日期: {spring.get('date', 'N/A')}
    最低价: {spring.get('low', 0):.2f}
@@ -273,25 +292,22 @@ class WyckoffReportGenerator:
    成交量倍数: {spring.get('volume_ratio', 0):.1f}x
    通过滤网: {spring.get('filters_passed', 0)}/5
    置信度: {spring.get('confidence', 0):.0f}%
-   💡 孟洪涛建议：Spring是积累期最重要的买入信号之一。必须满足5个滤网条件才能确认，特别是要有充分的底部准备（因）。
 """
-            # 传统Spring检测返回格式
-            elif 'latest_spring' in spring:
-                latest = spring['latest_spring']
-                report += f"""
+
+    def _fmt_spring_traditional(self, spring) -> str:
+        latest = spring['latest_spring']
+        return f"""
 ✅ 检测到Spring:
    日期: {latest['date'].strftime('%Y-%m-%d')}
    跌破价: {latest['breakdown_price']:.2f}
    支撑位: {latest['support_level']:.2f}
    收回价: {latest['recovery_price']:.2f}
    收回天数: {latest['recovery_days']}天
-   ✓ 真Spring（3天内收回且放量）
-   💡 孟洪涛建议：Spring是积累期最重要的买入信号之一。如果收回时伴随成交量放大，说明主力已完成洗盘，准备拉升。
 """
 
-        if upthrust.get('detected'):
-            latest = upthrust['latest_upthrust']
-            report += f"""
+    def _fmt_upthrust(self, upthrust) -> str:
+        latest = upthrust['latest_upthrust']
+        return f"""
 ✅ 检测到Upthrust:
    日期: {latest['date'].strftime('%Y-%m-%d')}
    突破价: {latest['breakout_price']:.2f}
@@ -299,139 +315,104 @@ class WyckoffReportGenerator:
    回落价: {latest['rejection_price']:.2f}
    回落天数: {latest['rejection_days']}天
    收盘距高点: {latest['close_from_high']*100:.1f}%
-   ✓ 真Upthrust（3天内回落且放量）
-   💡 孟洪涛建议：Upthrust是派发期最危险的信号。在阻力位上方的短暂突破往往是诱多，若无法站稳应果断减仓。
 """
 
-        if sos.get('detected') and sos.get('latest'):
-            latest = sos['latest']
-            signal_type = latest.get('type', 'sos')
-            phase_context = latest.get('phase_context', 'unknown')
-            
-            if signal_type == 'ut' or phase_context == 'distribution':
-                # 在派发阶段，向上突破应显示为UT/UTAD警告
-                report += f"""
+    def _fmt_sos(self, sos) -> str:
+        latest = sos['latest']
+        st = latest.get('type', 'sos')
+        pc = latest.get('phase_context', 'unknown')
+        if st == 'ut' or pc == 'distribution':
+            return f"""
 ⚠️ 检测到UT/UTAD（派发阶段的向上突破）:
    日期: {latest.get('date', 'N/A')}
    价格: {latest.get('price', 0):.2f}
    成交量倍数: {latest.get('volume_ratio', 0):.1f}x
    涨幅: {latest.get('price_change', 0)*100:.1f}%
    阻力位: {latest.get('resistance_level', 0):.2f}
-   ❌ 派发阶段的向上突破（诱多信号）
-   ⚠️ 警告：这是派发阶段的假突破，通常会回落，是卖出机会而非买入
-   💡 威科夫理论：在派发阶段，向上突破是主力诱多，应视为卖出信号
+   警告：这是派发阶段的假突破，通常会回落，是卖出机会而非买入
 """
-            else:
-                # 在吸筹阶段或上涨趋势中，才是真正的SOS
-                report += f"""
+        return f"""
 ✅ 检测到SOS（Sign of Strength）:
    日期: {latest.get('date', 'N/A')}
    价格: {latest.get('price', 0):.2f}
    成交量倍数: {latest.get('volume_ratio', 0):.1f}x
    涨幅: {latest.get('price_change', 0)*100:.1f}%
    突破位: {latest.get('breakthrough_level', 0):.2f}
-   ✓ 强势信号（放量突破）
-   💡 孟洪涛建议：SOS确认了需求主导地位。在JOC（跃过小溪）后的SOS往往标志着趋势进入加速期。
 """
 
-        if sow.get('detected') and sow.get('latest'):
-            latest = sow['latest']
-            report += f"""
+    def _fmt_sow(self, sow) -> str:
+        latest = sow['latest']
+        return f"""
 ✅ 检测到SOW（Sign of Weakness）:
    日期: {latest.get('date', 'N/A')}
    价格: {latest.get('price', 0):.2f}
    成交量倍数: {latest.get('volume_ratio', 0):.1f}x
    跌幅: {latest.get('price_change', 0)*100:.1f}%
    跌破位: {latest.get('breakdown_level', 0):.2f}
-   ✓ 弱势信号（放量跌破）
 """
 
-        if lps.get('detected'):
-            # 检查是否有date字段
-            if 'date' in lps:
-                report += f"""
+    def _fmt_lps(self, lps) -> str:
+        if 'date' in lps:
+            return f"""
 ✅ 检测到LPS（Last Point of Support）:
    日期: {lps['date'].strftime('%Y-%m-%d')}
    价格: {lps['price']:.2f}
    回调幅度: {lps['pullback_pct']*100:.1f}%
    成交量缩小: 是
-   ⭐ 建议做多入场点
+   建议做多入场点
 """
-            else:
-                report += f"""
+        return f"""
 ✅ 检测到LPS（Last Point of Support）:
    价格: {lps.get('price', 0):.2f}
-   ⭐ 建议做多入场点
+   建议做多入场点
 """
 
-        if lpsy.get('detected'):
-            # 关键修复：将LPSY与关键支撑位绑定
-            # 获取关键支撑位（自动回落AR的低点）
-            climax_res = self.pattern_detector.detect_climax()
-            ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
-            key_support = ar_res.get('price', 0) if ar_res.get('detected') else trading_range.get('low', 0)
-            
-            # 检查当前价格是否已跌破关键支撑
-            current_price = self.data['Close'].iloc[-1]
-            support_broken = current_price < key_support if key_support > 0 else False
-            
-            # 检查是否有date字段
-            if 'date' in lpsy:
-                report += f"""
-⚠️ 检测到LPSY（Last Point of Supply）:
+    def _fmt_lpsy(self, lpsy, phase_str) -> str:
+        climax_res = self.pattern_detector.detect_climax()
+        ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
+        key_support = ar_res.get('price', 0) if ar_res.get('detected') else 0
+        current_price = self.data['Close'].iloc[-1]
+        support_broken = current_price < key_support if key_support > 0 else False
+
+        header = f"""⚠️ 检测到LPSY（Last Point of Supply）"""
+        key_line = f"   关键支撑位: {key_support:.2f} {'(已跌破)' if support_broken else '(未跌破)'}"
+
+        if 'date' in lpsy:
+            return f"""
+{header}:
    日期: {lpsy['date'].strftime('%Y-%m-%d')}
    价格: {lpsy['price']:.2f}
    反弹幅度: {lpsy['rally_pct']*100:.1f}%
    成交量缩小: 是
-   关键支撑位: {key_support:.2f} {'(已跌破)' if support_broken else '(未跌破)'}
-   ❌ 弱势反弹信号：价格已跌破支撑后的反弹回测
-   ⚠️ 警告：成交量萎缩，确认上方供应压力沉重，需求无力重返阻力区
-   💡 威科夫理论：LPSY是派发阶段的最后卖出机会，反弹无力确认下跌趋势
-   {'🔴 关键支撑已跌破，更高质量的LPSY将出现在后续反弹中' if support_broken else '🟡 当前LPSY发生在派发区内部，是弱势信号。更高质量的LPSY将出现在关键支撑被跌破后的反弹中'}
+{key_line}
+   弱势反弹信号：价格已跌破支撑后的反弹回测
 """
-            else:
-                # 获取LPSY的详细信息
-                lpsy_signals = lpsy.get('signals', [])
-                latest_lpsy = lpsy.get('latest', {})
-                
-                if latest_lpsy:
-                    report += f"""
-⚠️ 检测到LPSY（Last Point of Supply）:
-   日期: {latest_lpsy.get('date', 'N/A')}
-   价格: {latest_lpsy.get('price', 0):.2f}
-   成交量比率: {latest_lpsy.get('volume_ratio', 0):.2f}x
-   阻力位: {latest_lpsy.get('resistance_level', 0):.2f}
-   关键支撑位: {key_support:.2f} {'(已跌破)' if support_broken else '(未跌破)'}
-   ❌ 弱势反弹信号：价格已跌破支撑后的反弹回测
-   ⚠️ 警告：成交量萎缩，确认上方供应压力沉重，需求无力重返阻力区
-   💡 威科夫理论：LPSY是派发阶段的最后卖出机会，反弹无力确认下跌趋势
-   {'🔴 关键支撑已跌破，更高质量的LPSY将出现在后续反弹中' if support_broken else '🟡 当前LPSY发生在派发区内部，是弱势信号。更高质量的LPSY将出现在关键支撑被跌破后的反弹中'}
+        latest = lpsy.get('latest', {})
+        if latest:
+            return f"""
+{header}:
+   日期: {latest.get('date', 'N/A')}
+   价格: {latest.get('price', 0):.2f}
+   成交量比率: {latest.get('volume_ratio', 0):.2f}x
+   阻力位: {latest.get('resistance_level', 0):.2f}
+{key_line}
+   弱势反弹信号：价格已跌破支撑后的反弹回测
 """
-                else:
-                    report += f"""
-⚠️ 检测到LPSY（Last Point of Supply）:
+        return f"""
+{header}:
    价格: {lpsy.get('price', 0):.2f}
-   关键支撑位: {key_support:.2f} {'(已跌破)' if support_broken else '(未跌破)'}
-   ❌ 弱势反弹信号：价格已跌破支撑后的反弹回测
-   ⚠️ 警告：成交量萎缩，确认上方供应压力沉重，需求无力重返阻力区
-   💡 威科夫理论：LPSY是派发阶段的最后卖出机会，反弹无力确认下跌趋势
-   {'🔴 关键支撑已跌破，更高质量的LPSY将出现在后续反弹中' if support_broken else '🟡 当前LPSY发生在派发区内部，是弱势信号。更高质量的LPSY将出现在关键支撑被跌破后的反弹中'}
+{key_line}
+   弱势反弹信号：价格已跌破支撑后的反弹回测
 """
 
-        # ── 新威科夫操盘法信号 (孟洪涛) ──────────────────────────
-        # 优先使用孟洪涛增强检测方法
-        joc = self.pattern_detector.detect_joc_menhongtao()
-        fti = self.pattern_detector.detect_fti()
-        vsa = self.pattern_detector.detect_vsa_menhongtao()
-
-        if joc.get('detected') or fti.get('detected') or any(
+    def _build_advanced_signals(self, joc, fti, vsa) -> str:
+        text = ""
+        has_advanced = joc.get('detected') or fti.get('detected') or any(
             vsa.get(k, {}).get('detected') for k in ('no_supply', 'no_demand', 'stopping_vol')
-        ):
-            report += """
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        )
+        if has_advanced:
+            text += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【新威科夫信号（孟洪涛）】\n"
 
-【新威科夫信号（孟洪涛）】
-"""
         if joc.get('detected'):
             joc_date = joc['date'].strftime('%Y-%m-%d') if hasattr(joc['date'], 'strftime') else str(joc['date'])
             test_info = ""
@@ -440,19 +421,16 @@ class WyckoffReportGenerator:
                 test_info = f"\n   回测确认: {td}（缩量{joc.get('test_vol_ratio', 0):.2f}x） ✓"
             else:
                 test_info = "\n   回测确认: 等待回测（Test of JOC）中"
-
-            # 添加孟洪涛方法标识
             method_note = " [孟洪涛5重过滤]" if joc.get('method') == 'meng_hongtao_joc' else ""
             confidence = joc.get('confidence', 0) * 100 if isinstance(joc.get('confidence'), (int, float)) else 75
-
-            report += f"""
+            text += f"""
 🚀 检测到JOC（跃过小溪 / Jump Across the Creek）{method_note}:
    日期: {joc_date}
    小溪阻力位: {joc['creek_level']:.2f}
    突破收盘: {joc['close_price']:.2f} (+{joc['breakout_pct']:.1f}%)
    成交量: {joc['volume_ratio']:.1f}x 均量{test_info}
    置信度: {confidence:.0f}%
-   ⭐ 趋势跟踪买入信号（等待缩量回测 JOC 位入场）
+   趋势跟踪买入信号（等待缩量回测 JOC 位入场）
 """
 
         if fti.get('detected'):
@@ -463,36 +441,28 @@ class WyckoffReportGenerator:
                 test_info = f"\n   回测确认: {td}（无需求反弹 {fti.get('test_vol_ratio', 0):.2f}x） ✓ 最佳做空点"
             else:
                 test_info = "\n   回测确认: 等待无需求反弹（Test of Ice）中"
-            report += f"""
+            text += f"""
 🔻 检测到FTI（跌破冰层 / Fall Through the Ice）:
    日期: {fti_date}
    冰层支撑位: {fti['ice_level']:.2f}
    跌破收盘: {fti['close_price']:.2f} ({fti['breakdown_pct']:.1f}%)
    成交量: {fti['volume_ratio']:.1f}x 均量{test_info}
    置信度: {fti['confidence']*100:.0f}%
-   ⚠️  做空警示信号（等待缩量回测冰层位入场）
+   做空警示信号（等待缩量回测冰层位入场）
 """
 
-        # VSA 辅助信号
         vsa_lines = []
-        ns = vsa.get('no_supply', {})
-        nd = vsa.get('no_demand', {})
-        sv = vsa.get('stopping_vol', {})
-        if ns.get('detected'):
-            ns_date = ns['date'].strftime('%Y-%m-%d') if hasattr(ns.get('date'), 'strftime') else str(ns.get('date', ''))
-            vsa_lines.append(f"   🟢 No Supply（无供应）: {ns_date} 缩量{ns.get('vol_ratio', 0):.2f}x 回调 → 买入辅助确认")
-        if nd.get('detected'):
-            nd_date = nd['date'].strftime('%Y-%m-%d') if hasattr(nd.get('date'), 'strftime') else str(nd.get('date', ''))
-            vsa_lines.append(f"   🔴 No Demand（无需求）: {nd_date} 缩量{nd.get('vol_ratio', 0):.2f}x 反弹 → 做空辅助确认")
-        if sv.get('detected'):
-            sv_date = sv['date'].strftime('%Y-%m-%d') if hasattr(sv.get('date'), 'strftime') else str(sv.get('date', ''))
-            vsa_lines.append(f"   🟡 Stopping Volume（停止行为）: {sv_date} 放量{sv.get('vol_ratio', 0):.2f}x 窄幅 → 主力吸收供应")
+        for k, icon, label in [('no_supply', '🟢', 'No Supply（无供应）'), ('no_demand', '🔴', 'No Demand（无需求）'), ('stopping_vol', '🟡', 'Stopping Volume（停止行为）')]:
+            sig = vsa.get(k, {})
+            if sig.get('detected'):
+                d = sig['date'].strftime('%Y-%m-%d') if hasattr(sig.get('date'), 'strftime') else str(sig.get('date', ''))
+                vsa_lines.append(f"   {icon} {label}: {d} 量比{sig.get('vol_ratio', 0):.2f}x → 辅助确认")
         if vsa_lines:
-            report += "\n📊 VSA辅助信号（量价微观分析）:\n" + "\n".join(vsa_lines) + "\n"
+            text += "\n📊 VSA辅助信号（量价微观分析）:\n" + "\n".join(vsa_lines) + "\n"
+        return text
 
-        # ── 孟洪涛枯燥区分析 ──────────
-        boredom = self.pattern_detector.detect_boring_zone()
-        report += f"""
+    def _build_boring_analysis(self, boredom) -> str:
+        return f"""
 【枯燥区分析】
 枯燥区评分: {boredom.get('score', 0)}/100 
 量能收缩比: {boredom.get('vol_contraction', 1.0)*100:.1f}%
@@ -501,38 +471,27 @@ class WyckoffReportGenerator:
 结论: {'🔥 检测到高价值枯燥区，系统已进入高能预警状态。' if boredom.get('detected') else '暂未形成典型枯燥区。'}
 """
 
-        # 因果测算
-        # 关键修复：把目标展示分为"未激活"与"激活"两种状态
-        # 避免在价格未跌破支撑前展示极端下跌目标，制造无谓恐慌
-        cause_effect = self.analyzer.calculate_cause_effect()
+    def _build_cause_effect_section(self, cause_effect, trading_range) -> str:
         targets_ok = cause_effect and 'targets' in cause_effect
-
-        # 检查价格是否已经突破区间
         current_price = self.data['Close'].iloc[-1]
         tr_high = trading_range.get('high', 0)
         tr_low = trading_range.get('low', 0)
         breakout_direction = cause_effect.get('breakout_direction', '') if cause_effect else ''
-
-        # 计算因果幅度（交易区间宽度）
         cause_size = tr_high - tr_low if tr_high > 0 and tr_low > 0 else 0
         if cause_effect and 'cause_bars' in cause_effect:
-            # 如果有点数图数据，优先使用
             cause_effect['cause_size'] = cause_size
-
-        # 判断目标是否已激活
         targets_activated = False
         if targets_ok:
             if breakout_direction == 'up' and current_price > tr_high:
                 targets_activated = True
             elif breakout_direction == 'down' and current_price < tr_low:
                 targets_activated = True
-        
         t1 = cause_effect['targets'].get('target_1', 0)
         t2 = cause_effect['targets'].get('target_2', 0)
         t3 = cause_effect['targets'].get('target_3', 0)
 
         if targets_activated:
-            report += f"""
+            return f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【因果测算】
@@ -544,15 +503,13 @@ class WyckoffReportGenerator:
    备注: 极端情景下（连续放量阳线+回测缩量+大盘共振），最大延伸目标 {t3:.2f} (2.618×)
 """
         elif targets_ok:
-            prefix = "⏸️ 潜在目标（待触发）：当价格有效突破"
-            suffix = ""
             if breakout_direction == 'down':
                 trigger = f"跌破 {tr_low:.2f}元并确认LPSY"
                 suffix = "上方测算逻辑失效，以下做空目标将被激活——"
             else:
                 trigger = f"突破 {tr_high:.2f}元并确认SOS"
                 suffix = "以下做多目标将被激活——"
-            report += f"""
+            return f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【因果测算】
@@ -564,46 +521,11 @@ class WyckoffReportGenerator:
    备注: 极端情景下（连续放量阳线+回测缩量+大盘共振），最大延伸目标 {t3:.2f} (2.618×)
 💡 威科夫理论：因果法则的目标测算，应只在价格有效突破区间后才被激活
 """
+        return ''
 
-        # ── 核心结论评估 (委派至建议引擎) ──────────────────
-        current_price = self.data['Close'].iloc[-1]
-        market_env_res = self.analyzer._analyze_market_environment()
-        market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
-        
-        # 收集所有识别出的形态供建议引擎评分
-        patterns = self.pattern_detector._collect_all_events()
-        patterns['phase'] = phase_str
-        patterns['boring_zone'] = boring_res
-        patterns['dead_corner_breakout'] = dead_corner
-        
-        signal_quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
-
-        mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
-
-        # 🔧 问题1修复：优化agreement计算逻辑，避免误判为unknown
-        weekly_trend = mtf.get('weekly_trend', 'unknown')
-        monthly_trend = mtf.get('monthly_trend', 'unknown')
-        trend_agreement = mtf.get('trend_agreement', False)
-
-        # 修复：即使trend_agreement为False，如果周月趋势明确一致，也应视为agreed
-        if not trend_agreement:
-            if weekly_trend == 'bullish' and monthly_trend in ['bullish', 'neutral']:
-                trend_agreement = True  # 周线看涨 + 月线不看跌 = 一致
-            elif weekly_trend == 'bearish' and monthly_trend in ['bearish', 'neutral']:
-                trend_agreement = True  # 周线看跌 + 月线不看涨 = 一致
-
-        mtf_agreement = 'agreed' if trend_agreement else 'unknown'
-        conflict = self._cross_timeframe_conflict_warning(
-            phase=phase_str,
-            weekly_trend=weekly_trend,
-            monthly_trend=monthly_trend,
-            agreement=mtf_agreement
-        )
-        quality_score = signal_quality_data.score
-        max_score = signal_quality_data.max_score
-
+    def _build_conflict_section(self, conflict) -> str:
         if conflict.get('has_conflict'):
-            report += f"""
+            return f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【跨周期冲突警告】
@@ -611,15 +533,16 @@ class WyckoffReportGenerator:
    日线: {conflict.get('daily_side')} | 周线: {conflict.get('weekly_trend')} | 月线: {conflict.get('monthly_trend')}
    仲裁动作: 延迟执行，等待跨周期一致后再开仓。
 """
-        
-        # 关键修复：判断当前阶段，严格区分上涨和下跌两个不同剧本的路径
-        # 将变量定义移到if/else之前，确保后续代码能访问
+        return ''
+
+    def _build_core_conclusion(self, quality_score, max_score, phase_conf, phase_str, conflict, joc, spring, sos, lps, fti, upthrust, sow, lpsy, trading_range, cause_effect, mtf, boring_res, dead_corner, market_env) -> str:
         is_distribution = 'Distribution' in phase_str or '派发' in phase_str
         is_accumulation = 'Accumulation' in phase_str or '吸筹' in phase_str
+        current_price = self.data['Close'].iloc[-1]
+        targets_ok = cause_effect and 'targets' in cause_effect
 
-        # 阈值门控：如果评分过低或置信度太低，强制观望
         if quality_score < 4 or phase_conf < 0.5 or conflict.get('has_conflict'):
-            report += f"""
+            return f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【核心结论】
@@ -627,123 +550,102 @@ class WyckoffReportGenerator:
    当前评分: {quality_score}/{max_score} | 置信度: {phase_conf*100:.0f}%
    结论: 信号强度或可靠性低于执行阈值，建议继续观察。
 """
+
+        bullish_signals = []
+        bearish_signals = []
+        if joc.get('detected'): bullish_signals.append("JOC")
+        if is_distribution:
+            if sos.get('detected'): bearish_signals.append("UT/UTAD（派发阶段的假突破）")
+            if lps.get('detected'): bearish_signals.append("LPS（派发阶段的最后离场点）")
+            if spring.get('detected'): bearish_signals.append("Spring（派发阶段不适用）")
         else:
-            
-            # 收集信号并检测冲突
-            bullish_signals = []
-            bearish_signals = []
-            
-            # 关键修复：在派发阶段，SOS/LPS/Spring不应被视为看多信号
-            if joc.get('detected'): bullish_signals.append("JOC")
-            if is_distribution:
-                # 派发阶段：SOS/LPS/Spring不是真正的看多信号
-                if sos.get('detected'): bearish_signals.append("UT/UTAD（派发阶段的假突破）")
-                if lps.get('detected'): bearish_signals.append("LPS（派发阶段的最后离场点）")
-                if spring.get('detected'): bearish_signals.append("Spring（派发阶段不适用）")
-            else:
-                # 非派发阶段：SOS/LPS/Spring是真正的看多信号
-                if sos.get('detected'): bullish_signals.append("SOS")
-                if lps.get('detected'): bullish_signals.append("LPS")
-                if spring.get('detected'): bullish_signals.append("Spring")
-            
-            if fti.get('detected'): bearish_signals.append("FTI")
-            if sow.get('detected'): bearish_signals.append("SOW")
-            if lpsy.get('detected'): bearish_signals.append("LPSY")
-            if upthrust.get('detected'): bearish_signals.append("Upthrust")
-            
-            report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【核心结论】\n"
+            if sos.get('detected'): bullish_signals.append("SOS")
+            if lps.get('detected'): bullish_signals.append("LPS")
+            if spring.get('detected'): bullish_signals.append("Spring")
+        if fti.get('detected'): bearish_signals.append("FTI")
+        if sow.get('detected'): bearish_signals.append("SOW")
+        if lpsy.get('detected'): bearish_signals.append("LPSY")
+        if upthrust.get('detected'): bearish_signals.append("Upthrust")
 
-            # 🔧 问题2修复：确保climax_res和ar_res已定义（用于事件时间线）
-            if 'climax_res' not in locals():
-                climax_res = self.pattern_detector.detect_climax()
-            if 'ar_res' not in locals():
-                ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
+        text = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【核心结论】\n"
 
-            # 🔧 问题2修复：增加详细事件时间线
-            report += self._generate_event_timeline(joc, spring, sos, lps, fti, upthrust, sow, lpsy, climax_res, ar_res)
+        climax_res = self.pattern_detector.detect_climax()
+        ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
+        text += self._generate_event_timeline(joc, spring, sos, lps, fti, upthrust, sow, lpsy, climax_res, ar_res)
+        text += self._generate_mtf_detailed_score(mtf, conflict)
 
-            # 🔧 问题2修复：增加多时间框架共振详细评分
-            report += self._generate_mtf_detailed_score(mtf, conflict)
-
-            # 冲突检测
-            if bullish_signals and bearish_signals:
-                report += f"""
+        if bullish_signals and bearish_signals:
+            text += f"""
 ⚠️ 信号冲突警示:
    看多信号: {', '.join(bullish_signals)}
    看空信号: {', '.join(bearish_signals)}
    结论: 市场多空分歧剧烈，建议在冲突消解前保持空仓或显著收紧止损。
 """
-            # 决策树逻辑
-            # 关键修复：在派发阶段，禁用LPS做多机会，只显示UTAD/LPSY做空机会
-            elif joc.get('detected') and joc.get('test_detected'):
-                # JOC突破确认：只有在非派发阶段才显示做多机会
-                if not is_distribution:
-                    joc_entry = joc.get('creek_level', current_price)
-                    stop_price = round(joc_entry * 0.96, 2)
-                    target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
-                    report += f"""
+        elif joc.get('detected') and joc.get('test_detected'):
+            if not is_distribution:
+                joc_entry = joc.get('creek_level', current_price)
+                stop_price = round(joc_entry * 0.96, 2)
+                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
+                text += f"""
 🚀 趋势跟踪买入（JOC 突破确认）:
    参考入场区间: {joc_entry:.2f} ~ {round(joc_entry * 1.02, 2):.2f}
    止损: {stop_price:.2f} | 目标2: {target2:.2f}
    策略: JOC 突破位附近缩量分批买入。
 """
-                else:
-                    # 派发阶段的JOC可能是假突破
-                    report += f"""
+            else:
+                text += f"""
 ⚠️ JOC突破存疑（派发阶段）:
    当前处于派发阶段，JOC突破可能是假突破。
    策略: 等待回测确认，如果回测不破支撑，才能确认真突破。
 """
-            elif lps.get('detected'):
-                # 关键修复：在派发阶段，LPS是最后离场点，不是做多机会
-                if is_distribution:
-                    report += f"""
+        elif lps.get('detected'):
+            if is_distribution:
+                text += f"""
 ⚠️ LPS最后离场点（派发阶段）:
    价格: {lps['price']:.2f}
-   ⚠️ 处于派发期内的 LPS，是持仓多头最后的主动离场点，并非新多开仓的买点。
+   处于派发期内的 LPS，是持仓多头最后的主动离场点，并非新多开仓的买点。
    策略: 持仓多头应在LPS附近减仓或离场，等待更明确的信号。
 """
-                else:
-                    # 非派发阶段的LPS是做多机会
-                    stop_price = round(lps['price'] * 0.95, 2)
-                    target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
-                    report += f"""
+            else:
+                stop_price = round(lps['price'] * 0.95, 2)
+                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 1.15, 2)
+                text += f"""
 ✅ 做多机会（LPS 最后支撑）:
    入场价格: {lps['price']:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
 """
-            elif fti.get('detected') and fti.get('test_detected'):
-                fti_entry = fti.get('ice_level', current_price)
-                stop_price = round(fti_entry * 1.04, 2)
-                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
-                report += f"""
+        elif fti.get('detected') and fti.get('test_detected'):
+            fti_entry = fti.get('ice_level', current_price)
+            stop_price = round(fti_entry * 1.04, 2)
+            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
+            text += f"""
 🔻 做空/减仓警示（FTI 跌破确认）:
    参考入场: {fti_entry:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
-   提示: {('建议减仓/止损' if self.analyzer._is_a_stock(self.symbol) else '可尝试做空')}
+   提示: {('建议减仓/止损' if self._is_a_stock_fn(self.symbol) else '可尝试做空')}
 """
-            elif lpsy.get('detected'):
-                stop_price = round(lpsy['price'] * 1.05, 2)
-                target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
-                
-                # 关键修复：在派发阶段，LPSY是做空良机
-                if is_distribution:
-                    report += f"""
+        elif lpsy.get('detected'):
+            stop_price = round(lpsy['price'] * 1.05, 2)
+            target2 = cause_effect['targets']['target_2'] if targets_ok else round(current_price * 0.85, 2)
+            if is_distribution:
+                text += f"""
 🔴 做空/减仓机会（LPSY 最后供应 - 派发阶段）:
    价格: {lpsy['price']:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
-   ⚠️ 派发阶段的LPSY确认了上方抛压沉重，是不可错过的减仓/做空良机。
+   派发阶段的LPSY确认了上方抛压沉重，是不可错过的减仓/做空良机。
    策略: 寻找UTAD（上冲回落）之后的LPSY（无需求反弹）进行做空。
 """
-                else:
-                    report += f"""
+            else:
+                text += f"""
 ✅ 卖出/减仓机会（LPSY 最后供应）:
    价格: {lpsy['price']:.2f} | 止损: {stop_price:.2f} | 目标: {target2:.2f}
 """
-            elif trading_range.get('is_consolidation'):
-                report += "⏳ 观望等待: 横盘整理阶段，等待信号。\n"
-            else:
-                report += "⏸️ 无明显信号: 建议继续观察。\n"
+        elif trading_range.get('is_consolidation'):
+            text += "⏳ 观望等待: 横盘整理阶段，等待信号。\n"
+        else:
+            text += "⏸️ 无明显信号: 建议继续观察。\n"
+        return text
 
-        # 逻辑证伪点：明确列出什么情况下判断错了
-        # 获取关键价位
+    def _build_falsification(self, phase_str, trading_range) -> str:
+        is_distribution = 'Distribution' in phase_str or '派发' in phase_str
+        is_accumulation = 'Accumulation' in phase_str or '吸筹' in phase_str
         tr_high = trading_range.get('high', 0)
         tr_low = trading_range.get('low', 0)
         ar_price = 0
@@ -751,25 +653,19 @@ class WyckoffReportGenerator:
         ar_res = self.pattern_detector.detect_automatic_reaction(climax_res)
         if ar_res.get('detected'):
             ar_price = ar_res.get('price', 0)
-        
-        # 构建证伪条件
         falsification_conditions = []
-        
         if is_distribution:
-            # 派发逻辑的证伪条件
             falsification_conditions.append(f"日线收盘价站稳 {tr_high:.2f}元之上（突破派发区上沿）")
             falsification_conditions.append(f"放量突破 {tr_high:.2f}元并完成JOC回测确认")
-            falsification_conditions.append(f"相对强度RS转正并持续走强")
+            falsification_conditions.append("相对强度RS转正并持续走强")
             falsification_conditions.append("周线与月线趋势共振看涨")
         elif is_accumulation:
-            # 吸筹逻辑的证伪条件
             falsification_conditions.append(f"日线收盘价跌破 {tr_low:.2f}元（跌破吸筹区下沿）")
             falsification_conditions.append(f"放量跌破 {tr_low:.2f}元并完成FTI回测确认")
             falsification_conditions.append("相对强度RS持续走弱")
-        
-        # 添加证伪条件模块
         if falsification_conditions:
-            report += f"""
+            conds = '\n'.join(f"   {i}. {c}\n" for i, c in enumerate(falsification_conditions, 1))
+            return f"""
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -777,11 +673,7 @@ class WyckoffReportGenerator:
 💡 顶级交易计划不仅告诉你什么情况下你对了，更明确告诉你什么情况下你判断错了。
 
 🔴 派发逻辑的证伪条件（以下任一条件满足，派发判断失效）:
-"""
-            for i, condition in enumerate(falsification_conditions, 1):
-                report += f"   {i}. {condition}\n"
-            
-            report += f"""
+{conds}
 📊 后续观察要点:
    • 关键阻力位: {tr_high:.2f}元（派发区上沿）
    • 关键支撑位: {tr_low:.2f}元（派发区下沿）
@@ -795,8 +687,7 @@ class WyckoffReportGenerator:
 
 {'='*60}
 """
-        else:
-            report += f"""
+        return f"""
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -809,20 +700,11 @@ class WyckoffReportGenerator:
 {'='*60}
 """
 
-        return report
+    # ========== Original helper methods ==========
 
     def _generate_event_timeline(self, joc: dict, spring: dict, sos: dict, lps: dict,
                                   fti: dict, upthrust: dict, sow: dict, lpsy: dict,
-                                  climax_res: dict, ar_res: dict) -> str:
-        """
-        🔧 问题2修复：生成详细事件时间线
-
-        展示各关键事件的：
-        - 发生时间
-        - 信号质量
-        - JOC回测状态
-        - 事件间的关系
-        """
+                                  climax_res: dict, ar_res: dict) -> str:        
         from datetime import datetime
 
         timeline_text = """
@@ -1444,10 +1326,6 @@ class WyckoffReportGenerator:
         if self.data is None or (isinstance(self.data, pd.DataFrame) and self.data.empty):
             raise DataFetchError(self.symbol, "无法获取数据")
             
-        self.data = self.analyzer.data
-        self.pattern_detector = self.analyzer.pattern_detector
-        self.law_analyzer = self.analyzer.law_analyzer
-        
         # 1. 先获取阶段识别（含事件收集），使 TR 检测器获得 BC/AR 边界
         phase_dict = self.analyzer.identify_phase_with_rs()
         phase_str = phase_dict.get('phase', 'Unknown')
@@ -1494,18 +1372,18 @@ class WyckoffReportGenerator:
         relative_strength = RelativeStrengthModel(**rs_data) if rs_data else RelativeStrengthModel()
         
         # 构建因果分析
-        cause_effect_data = self.analyzer.calculate_cause_effect()
+        cause_effect_data = self._calculate_cause_effect_fn()
         cause_effect = CauseEffectAnalysisModel(**cause_effect_data)
         
         # 获取大盘基准
-        index_symbol = self.analyzer._get_baseline_index_symbol()
-        idx_analyzer = self.analyzer._get_cached_index_analyzer()
+        index_symbol = self._get_baseline_index_fn()
+        idx_analyzer = self._get_cached_index_fn()
 
         market_context = MarketContextModel(index_symbol=index_symbol)
         if idx_analyzer is not None:
             market_phase_dict = idx_analyzer.identify_phase_with_rs()
             market_phase_str = market_phase_dict.get('phase', 'Unknown')
-            env_dict = self.analyzer._analyze_market_environment()
+            env_dict = self._analyze_market_env_fn()
             market_context = MarketContextModel(
                 index_symbol=index_symbol,
                 phase=market_phase_str,
@@ -1526,7 +1404,7 @@ class WyckoffReportGenerator:
         
         # 使用TradingPlanGenerator生成交易计划
         trading_plan_generator = TradingPlanGenerator(self.data, self.pattern_detector)
-        trading_plan_data = trading_plan_generator.generate(global_sentiment_data, phase_str, is_a_stock=self.analyzer._is_a_stock(self.symbol))
+        trading_plan_data = trading_plan_generator.generate(global_sentiment_data, phase_str, is_a_stock=self._is_a_stock_fn(self.symbol))
         trading_plan = TradingPlanModel(**trading_plan_data)
         
         # 增加Wyckoff三大定律完整分析

@@ -108,7 +108,7 @@ class TradingPlanGenerator:
             "position_sizing": pos_sizing,
             "scale_in_triggers": scale_in_triggers,
             "exit_rules": exit_rules,
-            "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周） Gord",
+            "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周）",
             "atr_value": round(atr, 2),
             "dynamic_warning": dynamic_warning,
             "market_constraint": "A股无法直接做空，建议以减仓或对冲替代" if self.is_a_stock and not is_bullish else None

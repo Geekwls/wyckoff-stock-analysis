@@ -72,15 +72,18 @@ class CacheKey:
         """生成缓存键"""
         # 使用SHA256哈希确保键的唯一性和一致性
         key_str = ":".join([namespace] + [str(p) for p in parts])
-        # 使用完整哈希避免碰撞风险（之前截断到16位可能增加碰撞概率）
-        return hashlib.sha256(key_str.encode()).hexdigest()
+        # 使用完整哈希避免碰撞风险
+        hashed = hashlib.sha256(key_str.encode()).hexdigest()
+        # 🔧 修复问题1：在 key 前部保留 namespace 名称，以便 MemoryCache 能通过前缀失效缓存
+        # 使用 '_' 作为分隔符，避免 Windows 文件名中的 ':' 冲突
+        return f"{namespace}_{hashed}"
 
     @staticmethod
     def generate_version_key(symbol: str, period: str, data_timestamp: float) -> str:
         """生成版本键（基于数据时间戳）"""
         version_str = f"{symbol}:{period}:{int(data_timestamp)}"
-        # 使用完整哈希避免碰撞风险（之前截断到16位可能增加碰撞概率）
-        return hashlib.sha256(version_str.encode()).hexdigest()
+        hashed = hashlib.sha256(version_str.encode()).hexdigest()
+        return f"version_{hashed}"
 
 
 class MemoryCache:
@@ -143,19 +146,18 @@ class MemoryCache:
             self.cache.clear()
             self.stats = {"hits": 0, "misses": 0, "evictions": 0}
 
-    def invalidate_namespace(self, namespace_prefix: str):
-        """失效指定命名空间的所有缓存"""
+    def invalidate_namespace(self, namespace: str):
+        """失效指定命名空间的所有缓存（基于 key 前缀匹配）"""
+        prefix = f"{namespace}_"
         with self.lock:
-            # 通过反向映射精确删除目标命名空间的 key
             keys_to_delete = [
-                cache_key for cache_key, ns in self._key_namespace_map.items()
-                if ns == namespace_prefix
+                key for key in self.cache
+                if key.startswith(prefix)
             ]
             for key in keys_to_delete:
                 self.cache.pop(key, None)
-                self._key_namespace_map.pop(key, None)
             if keys_to_delete:
-                logger.debug(f"Invalidated {len(keys_to_delete)} keys in namespace '{namespace_prefix}'")
+                logger.debug(f"Invalidated {len(keys_to_delete)} keys in namespace '{namespace}'")
 
     def get_stats(self) -> Dict:
         """获取缓存统计"""
@@ -273,8 +275,9 @@ class CacheService:
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
+                    instance = super().__new__(cls)
+                    instance._initialized = False
+                    cls._instance = instance
         return cls._instance
 
     def __init__(self, memory_max_size: int = 1000, cache_dir: str = None):

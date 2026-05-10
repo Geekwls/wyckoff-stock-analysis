@@ -2,31 +2,37 @@
 # -*- coding: utf-8 -*-
 """
 动态阈值自适应系统
-
-理论依据：
-- 不同波动率的股票需要不同的检测阈值
-- 高波动股票需要更宽松的阈值
-- 低波动股票需要更严格的阈值
-
-威科夫理论适配：
-- Spring/JOC/LPS等信号需要根据市场波动率动态调整
-- ATR（Average True Range）作为波动率基准
-- 提高不同市场环境下的检测准确率
 """
-
 import logging
 from typing import Dict, Any
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# ============================================================
+# 命名常量：波动率体制边界
+# ============================================================
+ATR_PCT_LOW_MEDIUM_BOUNDARY = 1.0   # ATR% < 1.0% → 低波动
+ATR_PCT_MEDIUM_HIGH_BOUNDARY = 2.5  # ATR% ≥ 2.5% → 高波动
+DEFAULT_MEDIUM_ATR_PCT = 1.5        # 默认中等波动率
+VOLUME_CONFIRMATION_STRONG = 2.0     # 强势成交量确认倍数
+VOLUME_CONFIRMATION_MODERATE = 1.5   # 中等成交量确认倍数
+SPRING_BREAKDOWN_MIN_PCT = 1.0      # Spring最小跌破百分比
+SPRING_BREAKDOWN_MAX_PCT = 3.0      # Spring最大跌破百分比
+JOC_MIN_BREAKOUT_PCT = 3.0          # JOC最小突破百分比
+JOC_MIN_VOLUME_RATIO = 1.5          # JOC最小量比
+JOC_MIN_CLOSE_POSITION = 0.75       # JOC最低收盘位置
+SOT_VOLUME_THRESHOLD = 1.3          # SOT量比阈值
+SOT_BODY_RATIO_THRESHOLD = 0.3      # SOT实体占比阈值
+MAX_RECOVERY_DAYS_LOW_VOL = 5       # 低波动最大收回天数
+MAX_RECOVERY_DAYS_MEDIUM_VOL = 3    # 中波动最大收回天数
+MAX_RECOVERY_DAYS_HIGH_VOL = 2      # 高波动最大收回天数
 
-@dataclass
+
 class VolatilityRegime:
     """波动率体制"""
-    LOW = "low"        # 低波动：ATR% < 1.0%
-    MEDIUM = "medium"  # 中波动：1.0% ≤ ATR% < 2.5%
-    HIGH = "high"      # 高波动：ATR% ≥ 2.5%
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class AdaptiveThresholds:

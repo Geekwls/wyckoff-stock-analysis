@@ -5,14 +5,16 @@
 """
 from typing import Dict, Optional, Tuple
 
-SIGNAL_TTL: Dict[str, int] = {
+from types import MappingProxyType
+
+SIGNAL_TTL: Dict[str, int] = MappingProxyType({
     "spring": 3,
     "sos": 2,
     "lps": 3,
     "lpsy": 3,
     "joc": 2,
     "fti": 2,
-}
+})
 
 
 def build_snapshot(

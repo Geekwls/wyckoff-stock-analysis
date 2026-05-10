@@ -71,9 +71,6 @@ class PhaseAdapter:
         
         return MarketSide.NEUTRAL.value
 
-# 为了兼容性，保留 PhaseClassifier 别名
-PhaseClassifier = PhaseAdapter
-
 
 class TypeConverter:
     """

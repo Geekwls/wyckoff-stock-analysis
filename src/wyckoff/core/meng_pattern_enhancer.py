@@ -513,6 +513,8 @@ class MengPatternEnhancer(BaseDetector):
         1. No Supply(无供应)
         2. No Demand(无需求)
         3. Stopping Volume(停止行为)
+        
+        优化：三个检测合并为一次遍历
         """
         if self.data is None or len(self.data) < 20:
             return {
@@ -524,61 +526,44 @@ class MengPatternEnhancer(BaseDetector):
         df = self.data.copy()
         volume_ma20 = df['Volume_MA20'].iloc[-1]
 
-        # No Supply检测
         no_supply_signals = []
-        for i in range(10, len(df)):
-            # 上涨趋势中
-            if df['Close'].iloc[i] > df['MA20'].iloc[i]:
-                # 极小实体
-                price_range = df['High'].iloc[i] - df['Low'].iloc[i]
-                if price_range > 0:
-                    body_pct = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / price_range
-                    if body_pct < 0.3:  # 实体小于波动的30%
-                        # 收在中高位
-                        close_position = (df['Close'].iloc[i] - df['Low'].iloc[i]) / price_range
-                        if close_position > 0.5:
-                            # 极低成交量
-                            vol_ratio = df['Volume'].iloc[i] / volume_ma20 if volume_ma20 > 0 else 1
-                            if vol_ratio < 0.6:  # 成交量小于均量的60%
-                                no_supply_signals.append({
-                                    "date": df.index[i],
-                                    "vol_ratio": round(vol_ratio, 2),
-                                    "close_position": round(close_position * 100, 1)
-                                })
-
-        # No Demand检测
         no_demand_signals = []
-        for i in range(10, len(df)):
-            # 下跌趋势中
-            if df['Close'].iloc[i] < df['MA20'].iloc[i]:
-                # 极小实体
-                price_range = df['High'].iloc[i] - df['Low'].iloc[i]
-                if price_range > 0:
-                    body_pct = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / price_range
-                    if body_pct < 0.3:
-                        # 极低成交量
-                        vol_ratio = df['Volume'].iloc[i] / volume_ma20 if volume_ma20 > 0 else 1
-                        if vol_ratio < 0.6:
-                            no_demand_signals.append({
-                                "date": df.index[i],
-                                "vol_ratio": round(vol_ratio, 2)
-                            })
-
-        # Stopping Volume检测
         stopping_vol_signals = []
+
         for i in range(10, len(df)):
-            # 下跌趋势中
+            price_range = df['High'].iloc[i] - df['Low'].iloc[i]
+            if price_range <= 0:
+                continue
+
+            body_pct = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / price_range
+            vol_ratio = df['Volume'].iloc[i] / volume_ma20 if volume_ma20 > 0 else 1
+
+            # No Supply: 上涨趋势 + 极小实体 + 收中高位 + 极低成交量
+            if df['Close'].iloc[i] > df['MA20'].iloc[i]:
+                if body_pct < 0.3:
+                    close_position = (df['Close'].iloc[i] - df['Low'].iloc[i]) / price_range
+                    if close_position > 0.5 and vol_ratio < 0.6:
+                        no_supply_signals.append({
+                            "date": df.index[i],
+                            "vol_ratio": round(vol_ratio, 2),
+                            "close_position": round(close_position * 100, 1)
+                        })
+
+            # No Demand: 下跌趋势 + 极小实体 + 极低成交量
+            if df['Close'].iloc[i] < df['MA20'].iloc[i]:
+                if body_pct < 0.3 and vol_ratio < 0.6:
+                    no_demand_signals.append({
+                        "date": df.index[i],
+                        "vol_ratio": round(vol_ratio, 2)
+                    })
+
+            # Stopping Volume: 下跌趋势 + 大成交量 + 窄幅 + 下影线
             if df['Close'].iloc[i] < df['MA50'].iloc[i]:
-                # 大成交量
-                vol_ratio = df['Volume'].iloc[i] / volume_ma20 if volume_ma20 > 0 else 1
                 if vol_ratio > 1.5:
-                    # 价格止跌(窄幅波动)
-                    price_range = df['High'].iloc[i] - df['Low'].iloc[i]
                     open_close_range = abs(df['Close'].iloc[i] - df['Open'].iloc[i])
-                    if price_range > 0 and open_close_range / price_range < 0.3:
-                        # 可能有下影线
+                    if open_close_range / price_range < 0.3:
                         lower_shadow = min(df['Open'].iloc[i], df['Close'].iloc[i]) - df['Low'].iloc[i]
-                        if lower_shadow > price_range * 0.3:  # 下影线大于波动的30%
+                        if lower_shadow > price_range * 0.3:
                             stopping_vol_signals.append({
                                 "date": df.index[i],
                                 "vol_ratio": round(vol_ratio, 2),
@@ -588,7 +573,7 @@ class MengPatternEnhancer(BaseDetector):
         return {
             "no_supply": {
                 "detected": len(no_supply_signals) > 0,
-                "signals": no_supply_signals[-5:] if no_supply_signals else [],  # 最近5个
+                "signals": no_supply_signals[-5:] if no_supply_signals else [],
                 "latest": no_supply_signals[-1] if no_supply_signals else None
             },
             "no_demand": {
@@ -598,24 +583,23 @@ class MengPatternEnhancer(BaseDetector):
             },
             "stopping_vol": {
                 "detected": len(stopping_vol_signals) > 0,
-                "signals": stopping_vol_signals[-3:] if stopping_vol_signals else [],  # 最近3个
+                "signals": stopping_vol_signals[-3:] if stopping_vol_signals else [],
                 "latest": stopping_vol_signals[-1] if stopping_vol_signals else None
             }
         }
 
     def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
-        """计算ATR"""
+        """计算ATR（优先使用已缓存列）"""
+        if 'ATR' in df.columns and period == 14:
+            return float(df['ATR'].iloc[-1])
         high = df['High']
         low = df['Low']
         close = df['Close'].shift(1)
-
         tr1 = high - low
         tr2 = (high - close).abs()
         tr3 = (low - close).abs()
-
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         atr = tr.rolling(window=period, min_periods=1).mean()
-
         return atr.iloc[-1] if len(atr) > 0 else 0
 
     def detect_boring_zone(self, window: int = 14) -> Dict:
@@ -712,7 +696,9 @@ class MengPatternEnhancer(BaseDetector):
             }
 
     def _calculate_atr_series(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        """计算ATR序列"""
+        """计算ATR序列（优先使用已缓存列）"""
+        if 'ATR' in df.columns and period == 14:
+            return df['ATR']
         high = df['High']
         low = df['Low']
         close = df['Close'].shift(1)

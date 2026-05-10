@@ -297,18 +297,6 @@ class RecommendationEngine:
             reasons=reasons
         )
 
-        # 针对枯燥区 85 分以上的特殊提升
-        if self._get_attr(boring, 'score', 0) >= 85 and final_score < 85:
-            final_score = 85
-            reasons.append("触发高能预警阈值，综合评分上调至 85 (死角突破临界)")
-
-        return SignalQualityModel(
-            score=final_score,
-            max_score=100,
-            confidence="极高" if final_score >= 85 else "高" if final_score >= 70 else "中" if final_score >= 40 else "低",
-            reasons=reasons
-        )
-
     def calculate_signal_quality(self, data: Any, pattern_results: Dict[str, Any], market_env: MarketEnvironment) -> SignalQualityModel:
         """兼容旧接口，内部调用加权评分"""
         return self.calculate_weighted_score(data, pattern_results, market_env)
