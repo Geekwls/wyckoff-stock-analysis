@@ -27,15 +27,19 @@ class WyckoffPatternDetector:
         self.config = config
         self.thresholds = WyckoffThresholds()
         self._analysis_cache = analysis_cache
+        
+        # 初始化技术指标缓存（统一管理）
+        from .indicator_cache import IndicatorCache
+        self._indicator_cache = IndicatorCache(data)
 
         # 初始化专门的检测器
         self.range_detector = TradingRangeDetector(data, config)
-        self.classic_detector = ClassicPatternDetector(data, config, self.thresholds, analysis_cache)
+        self.classic_detector = ClassicPatternDetector(data, config, self.thresholds, analysis_cache, indicator_cache=self._indicator_cache)
         self.sw_detector = StrengthWeaknessDetector(data, config, self.thresholds)
         self.phase_identifier = PhaseIdentifier(data, config, self.thresholds)
 
         # 初始化孟洪涛增强检测器
-        self.meng_enhancer = MengPatternEnhancer(data, config)
+        self.meng_enhancer = MengPatternEnhancer(data, config, indicator_cache=self._indicator_cache)
 
         # 初始化阶段协调器（负责事件收集和阶段验证）
         self.phase_coordinator = PhaseCoordinator(self)

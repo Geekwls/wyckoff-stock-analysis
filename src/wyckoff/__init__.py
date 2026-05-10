@@ -2,8 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 威科夫分析库 - 公共 API 导出
-Wyckoff Analysis Library - Public API Exports
-
 这是纯库层，提供威科夫分析的公共 API。
 应用层（CLI/MCP/其他）应仅从此处导入。
 """
@@ -15,10 +13,25 @@ from .facade import WyckoffAnalyzer, batch_scan
 from .config.settings import WyckoffConfig, WyckoffThresholds
 
 # 异常
-from .exceptions import *
+from .exceptions import (
+    WyckoffError,
+    DataFetchError,
+    AnalysisError,
+    PatternDetectionError,
+    InsufficientDataError
+)
 
 # Schema
-from .schemas import *
+from .schemas import (
+    ReportModel,
+    ErrorResponseModel,
+    WyckoffEventModel,
+    ClimaxModel,
+    SpringModel,
+    UpthrustModel,
+    SosModel,
+    SowModel
+)
 
 # 公共 API 导出
 __all__ = [
@@ -34,9 +47,16 @@ __all__ = [
     "WyckoffError",
     "DataFetchError",
     "AnalysisError",
-    "ValidationError",
+    "PatternDetectionError",
+    "InsufficientDataError",
 
     # Schema
-    "WyckoffResultModel",
+    "ReportModel",
     "ErrorResponseModel",
+    "WyckoffEventModel",
+    "ClimaxModel",
+    "SpringModel",
+    "UpthrustModel",
+    "SosModel",
+    "SowModel"
 ]

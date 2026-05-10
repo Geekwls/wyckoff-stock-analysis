@@ -441,7 +441,8 @@ class PhaseCoordinator:
                         (df['Close'] <= tr['high'])
                     ]
                     return len(in_tr)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to calculate consolidation duration: {e}")
             pass
 
         # 备用估算
@@ -482,7 +483,8 @@ class PhaseCoordinator:
                     joc_result = self.detector.detect_joc()
                     if joc_result.get('detected'):
                         return True
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"JOC trigger check failed: {e}")
                     pass
             elif trigger_type == 'fti':
                 # 需要单独检查FTI
@@ -490,7 +492,8 @@ class PhaseCoordinator:
                     fti_result = self.detector.detect_fti()
                     if fti_result.get('detected'):
                         return True
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"FTI trigger check failed: {e}")
                     pass
 
         return False
@@ -506,7 +509,8 @@ class PhaseCoordinator:
                 positive_ratio = (changes > 0).sum() / len(changes)
                 negative_ratio = (changes < 0).sum() / len(changes)
                 return positive_ratio >= 0.8 or negative_ratio >= 0.8
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Confirmation check failed: {e}")
             pass
 
         return False

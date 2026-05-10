@@ -163,8 +163,8 @@ class IndicatorCache:
         if not kwargs:
             return indicator_name
 
-        # 将参数排序后拼接
-        params_str = '_'.join(f"{k}={v}" for k, v in sorted(kwargs.items()))
+        # 将参数排序并包含类型信息后拼接，避免 20 vs "20" 冲突
+        params_str = '_'.join(f"{k}:{type(v).__name__}={v}" for k, v in sorted(kwargs.items()))
         return f"{indicator_name}_{params_str}"
 
     def _parse_indicator_name(self, name: str):

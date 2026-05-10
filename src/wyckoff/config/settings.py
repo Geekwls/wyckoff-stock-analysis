@@ -44,6 +44,13 @@ class WyckoffConfig(BaseModel):
             raise ValueError('ATR周期必须在5-50之间')
         return v
 
+    @field_validator('spring_lookback')
+    @classmethod
+    def validate_spring_lookback(cls, v):
+        if v < 30:
+            raise ValueError('Spring回溯窗口至少30天')
+        return v
+
     @field_validator('spring_range_threshold')
     @classmethod
     def validate_spring_range(cls, v):
@@ -179,6 +186,20 @@ class WyckoffThresholds(BaseModel):
     )
     TIME_DECAY_HALF_LIFE: int = Field(20, description="信号强度随时间衰减的半衰期（天）")
     CONFLICT_PENALTY: float = Field(30.0, description="多空冲突时的扣分")
+    
+    # ── 孟洪涛增强器阈值 (MENG_ENHANCER) ────────────────────
+    MENG_SPRING_BREAKDOWN_MIN: float = Field(1.0, description="Spring跌破最小百分比")
+    MENG_SPRING_BREAKDOWN_MAX: float = Field(3.0, description="Spring跌破最大百分比")
+    MENG_SPRING_RECOVERY_CLOSE_POS: float = Field(0.7, description="Spring收回日最小收盘位置")
+    MENG_SPRING_VOL_RATIO: float = Field(1.0, description="Spring收回日量比要求")
+    
+    MENG_VSA_BODY_RATIO: float = Field(0.3, description="VSA(无供应/无需求)实体最大占比")
+    MENG_VSA_VOL_RATIO: float = Field(0.6, description="VSA(无供应/无需求)成交量上限")
+    MENG_VSA_CLOSE_POS: float = Field(0.5, description="VSA(无供应)最小收盘位置")
+    
+    MENG_STOPPING_VOL_RATIO: float = Field(1.5, description="Stopping Volume最小量比")
+    MENG_STOPPING_BODY_RATIO: float = Field(0.3, description="Stopping Volume实体最大占比")
+    MENG_STOPPING_SHADOW_RATIO: float = Field(0.3, description="Stopping Volume下影线最小占比")
     
     # ── 交易成本与滑点 ──────────────────────────────────
     COMMISSION_RATE: float = Field(0.0003, description="佣金率 (万三)")

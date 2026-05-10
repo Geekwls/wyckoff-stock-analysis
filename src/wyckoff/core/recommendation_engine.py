@@ -135,7 +135,8 @@ class RecommendationEngine:
             if sig_date:
                 if isinstance(sig_date, str):
                     try: sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
-                    except: pass
+                    except Exception:
+                        pass
 
                 if isinstance(sig_date, datetime):
                     # 处理时区问题
@@ -143,8 +144,9 @@ class RecommendationEngine:
                     now = datetime.now(timezone.utc) if sig_date.tzinfo else datetime.now()
                     try:
                         days_ago = (now - sig_date).days
-                    except:
+                    except Exception as e:
                         # 如果时区不兼容，转换为UTC
+                        logger.debug(f"Timezone conversion fallback for {sig_date}: {e}")
                         if sig_date.tzinfo:
                             sig_date = sig_date.replace(tzinfo=None)
                         now = datetime.now()

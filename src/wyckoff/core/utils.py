@@ -12,32 +12,27 @@ class PhaseAdapter:
     """负责解析和分类阶段（支持 Enum 和 String，实现双轨期兼容）"""
     
     @staticmethod
-    def is_accumulation(phase: Union[str, WyckoffPhase]) -> bool:
-        if isinstance(phase, WyckoffPhase):
-            # 虽然 WyckoffPhase 目前只有 A-E，但保留对 Enum 的类型检查以备扩展
-            return False 
-        p_str = str(phase)
+    def is_accumulation(phase: Any) -> bool:
+        """判断是否为吸筹阶段"""
+        p_str = phase.value if hasattr(phase, 'value') else str(phase)
         return bool(re.search(r'\bAccumulation\b', p_str, re.I)) or '建仓' in p_str
 
     @staticmethod
-    def is_distribution(phase: Union[str, WyckoffPhase]) -> bool:
-        if isinstance(phase, WyckoffPhase):
-            return False
-        p_str = str(phase)
+    def is_distribution(phase: Any) -> bool:
+        """判断是否为派发阶段"""
+        p_str = phase.value if hasattr(phase, 'value') else str(phase)
         return bool(re.search(r'\bDistribution\b', p_str, re.I)) or '出货' in p_str
 
     @staticmethod
-    def is_markup(phase: Union[str, WyckoffPhase]) -> bool:
-        if isinstance(phase, WyckoffPhase):
-            return False
-        p_str = str(phase)
+    def is_markup(phase: Any) -> bool:
+        """判断是否为上涨阶段"""
+        p_str = phase.value if hasattr(phase, 'value') else str(phase)
         return bool(re.search(r'\bMarkup\b', p_str, re.I)) or '上涨' in p_str
 
     @staticmethod
-    def is_markdown(phase: Union[str, WyckoffPhase]) -> bool:
-        if isinstance(phase, WyckoffPhase):
-            return False
-        p_str = str(phase)
+    def is_markdown(phase: Any) -> bool:
+        """判断是否为下跌阶段"""
+        p_str = phase.value if hasattr(phase, 'value') else str(phase)
         return bool(re.search(r'\bMarkdown\b', p_str, re.I)) or '下跌' in p_str
 
     @staticmethod
@@ -121,8 +116,10 @@ class TypeConverter:
                     ts = ts[0]
                 return ts if ts.tz is not None else ts.tz_localize('UTC')
             except Exception as e:
+                logger.error(f"Type conversion failed for string '{value}': {e}")
                 raise ValueError(f"无法将字符串 '{value}' 转换为 Timestamp: {e}")
 
+        logger.error(f"Unsupported conversion type: {type(value).__name__}")
         raise ValueError(f"不支持的转换类型: {type(value).__name__}")
 
     @staticmethod

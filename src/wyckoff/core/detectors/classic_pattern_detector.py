@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class ClassicPatternDetector(BaseDetector):
     """负责检测经典威科夫形态 (Climax, Spring, Upthrust, JOC, FTI, VSA, Divergence)"""
-    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds, analysis_cache, bayesian_model=None):
+    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds, analysis_cache, bayesian_model=None, indicator_cache=None):
         super().__init__()
         self.data = data
         self.config = config
@@ -19,8 +19,8 @@ class ClassicPatternDetector(BaseDetector):
         self._analysis_cache = analysis_cache
         self.bayesian_model = bayesian_model
 
-        # 初始化技术指标缓存
-        self._indicator_cache = IndicatorCache(data)
+        # 使用注入的缓存或初始化新缓存
+        self._indicator_cache = indicator_cache or IndicatorCache(data)
         self._cache_warmed = False
 
     def _warm_up_indicator_cache(self):
@@ -381,8 +381,8 @@ class ClassicPatternDetector(BaseDetector):
         # T+1日: 收回日
         # T+2日: 跟随确认日
 
-        # 预筛选：跌破支撑的bar
-        breakdown_mask = lows[:-2] < support * 0.97
+        # 预筛选：跌破支撑的bar (修正逻辑：移除误导性的 0.97 限制，允许 1-3% 的标准 Spring)
+        breakdown_mask = lows[:-2] < support
 
         # 条件1：跌破幅度检查（1-5%）- 使用 np.where 安全除法
         safe_support = np.where(support > 1e-9, support, 1.0)
@@ -484,8 +484,8 @@ class ClassicPatternDetector(BaseDetector):
         """
         springs = []
 
-        # 预筛选：只检查跌破支撑的 bar（向量化，避免逐行循环）
-        breakdown_mask = recent['Low'] < support * 0.97
+        # 预筛选：只检查跌破支撑的 bar（修正逻辑：移除误导性的 0.97 限制，允许 1-3% 的标准 Spring）
+        breakdown_mask = recent['Low'] < support
         candidate_indices = recent.index[breakdown_mask]
 
         for idx in candidate_indices:

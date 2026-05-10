@@ -31,11 +31,12 @@ class MengPatternEnhancer(BaseDetector):
     4. 动态时间窗口(基于ATR)
     """
 
-    def __init__(self, data: pd.DataFrame, config):
+    def __init__(self, data: pd.DataFrame, config, indicator_cache=None):
         super().__init__()
         self.data = data
         self.config = config
-        self._cache = None
+        self.thresholds = getattr(config, 'thresholds', None) or getattr(self, 'thresholds', None)
+        self._indicator_cache = indicator_cache
 
     def detect_spring_enhanced(self) -> Dict:
         if USE_VECTORIZED:
@@ -77,7 +78,10 @@ class MengPatternEnhancer(BaseDetector):
         safe_support_levels = np.where(support_levels > 1e-9, support_levels, 1.0)
         breakdown_pcts = (safe_support_levels - lows) / safe_support_levels * 100
 
-        valid_breakdown = (lows < support_levels * 0.97) & (breakdown_pcts >= 1) & (breakdown_pcts <= 3)
+        t = self.thresholds
+        valid_breakdown = (lows < support_levels) & \
+                         (breakdown_pcts >= t.MENG_SPRING_BREAKDOWN_MIN) & \
+                         (breakdown_pcts <= t.MENG_SPRING_BREAKDOWN_MAX)
         
         # 将前 20 天设为 False (因为 rolling min 会有 NaN)
         valid_breakdown[:20] = False
@@ -176,14 +180,15 @@ class MengPatternEnhancer(BaseDetector):
         for i in range(lookback, len(df) - 5):
             support_level = df['Low'].iloc[i-lookback:i].min()
 
-            # 检测跌破
-            if df['Low'].iloc[i] < support_level * 0.97:  # 跌破3%以内
+            # 检测跌破 (存在跌破行为)
+            if df['Low'].iloc[i] < support_level:
                 breakdown_price = df['Low'].iloc[i]
                 breakdown_vol = df['Volume'].iloc[i]
 
-                # 条件1:跌破幅度检查(1-3%,用实际最低价计算)
+                # 条件1:跌破幅度检查
                 breakdown_pct = (support_level - breakdown_price) / support_level * 100
-                if not (1 <= breakdown_pct <= 3):
+                t = self.thresholds
+                if not (t.MENG_SPRING_BREAKDOWN_MIN <= breakdown_pct <= t.MENG_SPRING_BREAKDOWN_MAX):
                     continue  # 跌破太深或太浅
 
                 # 检查收回(后续几天)
@@ -192,21 +197,20 @@ class MengPatternEnhancer(BaseDetector):
                         # 条件2:收回时间检查
                         recovery_days = j - i
 
-                        # 条件3:收回确认(收盘价站稳支撑位上方)
-                        close_above_support = df['Close'].iloc[j] > support_level
-                        if not close_above_support:
+                        # 条件3:收回确认
+                        if df['Close'].iloc[j] <= support_level:
                             continue
 
-                        # 条件4:成交量检查(收回时成交量 > 跌破时成交量)
+                        # 条件4:成交量检查
                         recovery_vol = df['Volume'].iloc[j]
                         vol_ratio = recovery_vol / breakdown_vol if breakdown_vol > 0 else 1
-                        if vol_ratio <= 1.0:
+                        if vol_ratio < t.MENG_SPRING_VOL_RATIO:
                             continue  # 成交量没有放大
 
-                        # 条件5:收盘位置检查(在日内高位70%以上)
+                        # 条件5:收盘位置检查
                         daily_range = df['High'].iloc[j] - df['Low'].iloc[j]
                         close_position = (df['Close'].iloc[j] - df['Low'].iloc[j]) / daily_range if daily_range > 0 else 0.5
-                        if close_position < 0.7:
+                        if close_position < t.MENG_SPRING_RECOVERY_CLOSE_POS:
                             continue  # 收盘位置不够高
 
                         # 所有条件满足,这是一个真Spring
@@ -537,12 +541,13 @@ class MengPatternEnhancer(BaseDetector):
 
             body_pct = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / price_range
             vol_ratio = df['Volume'].iloc[i] / volume_ma20 if volume_ma20 > 0 else 1
+            t = self.thresholds
 
             # No Supply: 上涨趋势 + 极小实体 + 收中高位 + 极低成交量
             if df['Close'].iloc[i] > df['MA20'].iloc[i]:
-                if body_pct < 0.3:
+                if body_pct < t.MENG_VSA_BODY_RATIO:
                     close_position = (df['Close'].iloc[i] - df['Low'].iloc[i]) / price_range
-                    if close_position > 0.5 and vol_ratio < 0.6:
+                    if close_position > t.MENG_VSA_CLOSE_POS and vol_ratio < t.MENG_VSA_VOL_RATIO:
                         no_supply_signals.append({
                             "date": df.index[i],
                             "vol_ratio": round(vol_ratio, 2),
@@ -589,18 +594,17 @@ class MengPatternEnhancer(BaseDetector):
         }
 
     def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
-        """计算ATR（优先使用已缓存列）"""
-        if 'ATR' in df.columns and period == 14:
-            return float(df['ATR'].iloc[-1])
-        high = df['High']
-        low = df['Low']
-        close = df['Close'].shift(1)
-        tr1 = high - low
-        tr2 = (high - close).abs()
-        tr3 = (low - close).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(window=period, min_periods=1).mean()
-        return atr.iloc[-1] if len(atr) > 0 else 0
+        """计算ATR（通过缓存或指标类）"""
+        if self._indicator_cache:
+            try:
+                atr_series = self._indicator_cache.get('ATR', period=period)
+                return float(atr_series.iloc[-1])
+            except Exception:
+                pass
+        
+        # 降级逻辑或直接计算（如果缓存不可用）
+        atr_series = self._calculate_atr_series(df, period)
+        return float(atr_series.iloc[-1]) if len(atr_series) > 0 else 0.0
 
     def detect_boring_zone(self, window: int = 14) -> Dict:
         """
@@ -696,9 +700,13 @@ class MengPatternEnhancer(BaseDetector):
             }
 
     def _calculate_atr_series(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        """计算ATR序列（优先使用已缓存列）"""
-        if 'ATR' in df.columns and period == 14:
-            return df['ATR']
+        """计算ATR序列（通过缓存或直接计算）"""
+        if self._indicator_cache and len(df) == len(self.data):
+            try:
+                return self._indicator_cache.get('ATR', period=period)
+            except Exception:
+                pass
+        
         high = df['High']
         low = df['Low']
         close = df['Close'].shift(1)

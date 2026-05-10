@@ -132,7 +132,9 @@ class SignalExtractor:
             if sig_date:
                 if isinstance(sig_date, str):
                     try: sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
-                    except: pass
+                    except Exception:
+                        # 转换失败保持原样，后面会有类型检查
+                        pass
                 
                 if isinstance(sig_date, datetime):
                     if latest_date is None or sig_date > latest_date:
