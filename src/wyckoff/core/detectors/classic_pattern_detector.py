@@ -6,12 +6,19 @@ from ..utils import TypeConverter, PhaseAdapter
 
 class ClassicPatternDetector(BaseDetector):
     """负责检测经典威科夫形态 (Climax, Spring, Upthrust, JOC, FTI, VSA, Divergence)"""
-    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds, analysis_cache):
+    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds, analysis_cache, bayesian_model=None):
         super().__init__()
         self.data = data
         self.config = config
         self.thresholds = thresholds
         self._analysis_cache = analysis_cache
+        self.bayesian_model = bayesian_model
+        
+    def _get_volume_threshold(self, signal_type: str, default: float) -> float:
+        """获取自适应或静态成交量阈值"""
+        if self.bayesian_model:
+            return self.bayesian_model.get_volume_threshold(signal_type, default=default)
+        return default
 
     def _get_tech_indicators(self, window: int = 20) -> Tuple[pd.Series, pd.Series, pd.Series]:
         """
@@ -507,7 +514,7 @@ class ClassicPatternDetector(BaseDetector):
             (df['Close'] > df['Open']) &
             (body_ratio >= self.thresholds.JOC_BODY_RATIO) &
             (upper_shadow_ratio < self.thresholds.JOC_UPPER_SHADOW_RATIO) &
-            (df['Volume'] >= vol_ma * self.thresholds.JOC_VOLUME_RATIO)
+            (df['Volume'] >= vol_ma * self._get_volume_threshold('breakout', self.thresholds.JOC_VOLUME_RATIO))
         )
 
         if not breakout_mask.any():
@@ -544,7 +551,8 @@ class ClassicPatternDetector(BaseDetector):
             for idx_test in df_after_joc.index:
                 row_test = df_after_joc.loc[idx_test]
                 near_creek = creek_level * (1 - self.thresholds.JOC_TEST_BAND) <= row_test['Low'] <= creek_level * (1 + self.thresholds.JOC_TEST_BAND * 2)
-                vol_shrinking = row_test['Volume'] < vol_ma.loc[idx_test] * self.thresholds.JOC_TEST_VOL_RATIO
+                test_vol_threshold = self._get_volume_threshold('shrink', self.thresholds.JOC_TEST_VOL_RATIO)
+                vol_shrinking = row_test['Volume'] < vol_ma.loc[idx_test] * test_vol_threshold
                 if near_creek and vol_shrinking:
                     if not test_detected:
                         test_detected = True
@@ -638,7 +646,7 @@ class ClassicPatternDetector(BaseDetector):
             (df['Close'] < df['Open']) &
             (body_ratio >= self.thresholds.FTI_BODY_RATIO) &
             (lower_shadow_ratio < self.thresholds.FTI_LOWER_SHADOW_RATIO) &
-            (df['Volume'] >= vol_ma * self.thresholds.FTI_VOLUME_RATIO)
+            (df['Volume'] >= vol_ma * self._get_volume_threshold('breakout', self.thresholds.FTI_VOLUME_RATIO))
         )
 
         if not breakdown_mask.any():
@@ -658,7 +666,8 @@ class ClassicPatternDetector(BaseDetector):
             for idx_test in df_after_fti.index:
                 row_test = df_after_fti.loc[idx_test]
                 near_ice = ice_level * (1 - self.thresholds.FTI_TEST_BAND * 1.5) <= row_test['High'] <= ice_level * (1 + self.thresholds.FTI_TEST_BAND)
-                vol_shrinking = row_test['Volume'] < vol_ma.loc[idx_test] * self.thresholds.FTI_TEST_VOL_RATIO
+                test_vol_threshold = self._get_volume_threshold('shrink', self.thresholds.FTI_TEST_VOL_RATIO)
+                vol_shrinking = row_test['Volume'] < vol_ma.loc[idx_test] * test_vol_threshold
                 failed_recovery = row_test['Close'] < ice_level * (1 + self.thresholds.FTI_TEST_BAND/2)
                 if near_ice and vol_shrinking and failed_recovery:
                     test_detected = True
@@ -686,8 +695,8 @@ class ClassicPatternDetector(BaseDetector):
         close_position = ((df['Close'] - df['Low']) / total_range).fillna(0.5)
 
         # 修复：移除K线颜色限制（No Supply可以是任何颜色的小实体，书：十字星/纺锤线）
-        no_supply_mask = (body_ratio < self.thresholds.VSA_NO_SUPPLY_BODY_RATIO) & (df['Volume'] < vol_ma * self.thresholds.VSA_NO_SUPPLY_VOL_RATIO) & (close_position >= self.thresholds.VSA_NO_SUPPLY_CLOSE_POS)
-        no_demand_mask = (body_ratio < self.thresholds.VSA_NO_DEMAND_BODY_RATIO) & (df['Volume'] < vol_ma * self.thresholds.VSA_NO_DEMAND_VOL_RATIO) & (close_position <= self.thresholds.VSA_NO_DEMAND_CLOSE_POS)
+        no_supply_mask = (body_ratio < self.thresholds.VSA_NO_SUPPLY_BODY_RATIO) & (df['Volume'] < vol_ma * self._get_volume_threshold('shrink', self.thresholds.VSA_NO_SUPPLY_VOL_RATIO)) & (close_position >= self.thresholds.VSA_NO_SUPPLY_CLOSE_POS)
+        no_demand_mask = (body_ratio < self.thresholds.VSA_NO_DEMAND_BODY_RATIO) & (df['Volume'] < vol_ma * self._get_volume_threshold('shrink', self.thresholds.VSA_NO_DEMAND_VOL_RATIO)) & (close_position <= self.thresholds.VSA_NO_DEMAND_CLOSE_POS)
         stopping_mask = (df['Volume'] > vol_ma * self.thresholds.VSA_STOPPING_VOL_RATIO) & (body_ratio < self.thresholds.VSA_STOPPING_BODY_RATIO) & (close_position >= self.thresholds.VSA_STOPPING_CLOSE_POS)
 
         res = {'no_supply': {'detected': False}, 'no_demand': {'detected': False}, 'stopping_vol': {'detected': False}}

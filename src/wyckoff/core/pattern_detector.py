@@ -6,6 +6,7 @@ from .detectors.strength_weakness_detector import StrengthWeaknessDetector
 from .detectors.phase_identifier import PhaseIdentifier
 from .meng_pattern_enhancer import MengPatternEnhancer
 from .phase_coordinator import PhaseCoordinator
+from .adaptive.bayesian_updater import BayesianThresholdModel
 from ..config.settings import WyckoffConfig, WyckoffThresholds
 from ..schemas import (
     ClimaxModel, WyckoffEventModel, SpringModel, UpthrustModel,
@@ -48,6 +49,16 @@ class WyckoffPatternDetector:
 
         # 计算ATR百分比用于动态阈值
         self._atr_pct = self._calculate_atr_pct()
+        
+        # 贝叶斯自适应阈值系统
+        self.bayesian_model = None
+        if getattr(self.config, 'enable_adaptive_thresholds', False):
+            self.bayesian_model = BayesianThresholdModel(
+                prior_breakout_mu=getattr(self.config, 'prior_breakout_mu', 1.5),
+                prior_shrink_mu=getattr(self.config, 'prior_shrink_mu', 0.6),
+                prior_sigma=getattr(self.config, 'prior_sigma', 0.5)
+            )
+            self.bayesian_model.fit(self.data)
     
     def _update_all_detectors_context(self, phase: str):
         """统一更新所有子检测器的分析上下文"""
@@ -81,7 +92,16 @@ class WyckoffPatternDetector:
         Returns:
             动态成交量阈值
         """
+        if self.bayesian_model:
+            return self.bayesian_model.get_volume_threshold('breakout', default=base_threshold)
+            
         return self.thresholds.get_dynamic_volume_threshold(self._atr_pct, base_threshold)
+    
+    def _get_dynamic_shrink_volume_threshold(self, base_threshold: float = 0.6) -> float:
+        """获取缩量时的动态阈值"""
+        if self.bayesian_model:
+            return self.bayesian_model.get_volume_threshold('shrink', default=base_threshold)
+        return base_threshold
     
     def _get_dynamic_price_threshold(self, base_threshold: float = 0.03) -> float:
         """

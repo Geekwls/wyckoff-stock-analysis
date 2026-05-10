@@ -12,6 +12,11 @@ class WyckoffConfig(BaseModel):
     # 🔧 v1.3新增：动态阈值系统
     enable_adaptive_thresholds: bool = Field(True, description="启用动态阈值自适应系统")
     adaptive_thresholds_atr_period: int = Field(14, ge=5, le=50, description="动态阈值ATR计算周期")
+    
+    # 贝叶斯自适应阈值参数
+    prior_breakout_mu: float = Field(1.5, ge=1.0, le=5.0, description="突破量比先验均值")
+    prior_shrink_mu: float = Field(0.6, ge=0.1, le=1.0, description="缩量量比先验均值")
+    prior_sigma: float = Field(0.5, ge=0.1, le=2.0, description="量比先验标准差")
 
     # Spring检测参数
     spring_lookback: int = Field(120, ge=30, le=252)
