@@ -111,6 +111,18 @@ class AdaptiveThresholds:
             self.UPTHRUST_BREAKOUT_MAX = 5.0     # Upthrust最大突破幅度
             self.VSA_VOLUME_CUTOFF = 0.9         # VSA量能 cutoff
 
+        # 孟洪涛增强器专用阈值（不随波动率体制变化）
+        self.MENG_SPRING_BREAKDOWN_MIN = 1.0
+        self.MENG_SPRING_BREAKDOWN_MAX = 3.0
+        self.MENG_SPRING_RECOVERY_CLOSE_POS = 0.7
+        self.MENG_SPRING_VOL_RATIO = 1.0
+        self.MENG_VSA_BODY_RATIO = 0.3
+        self.MENG_VSA_VOL_RATIO = 0.6
+        self.MENG_VSA_CLOSE_POS = 0.5
+        self.MENG_STOPPING_VOL_RATIO = 1.5
+        self.MENG_STOPPING_BODY_RATIO = 0.3
+        self.MENG_STOPPING_SHADOW_RATIO = 0.3
+
     def get_thresholds_dict(self) -> Dict[str, Any]:
         """
         获取所有阈值字典

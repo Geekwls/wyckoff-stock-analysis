@@ -35,8 +35,16 @@ class MengPatternEnhancer(BaseDetector):
         super().__init__()
         self.data = data
         self.config = config
-        self.thresholds = getattr(config, 'thresholds', None) or getattr(self, 'thresholds', None)
         self._indicator_cache = indicator_cache
+
+        # 安全获取阈值配置
+        self.thresholds = getattr(config, 'thresholds', None)
+
+        # 如果thresholds为None，创建默认阈值以避免警告
+        if self.thresholds is None:
+            from .thresholds import AdaptiveThresholds
+            self.thresholds = AdaptiveThresholds(atr_pct=1.5)
+            logger.debug("使用默认AdaptiveThresholds (atr_pct=1.5)")
 
     def detect_spring_enhanced(self) -> Dict:
         if USE_VECTORIZED:
