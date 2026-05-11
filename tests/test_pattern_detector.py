@@ -41,7 +41,7 @@ class TestDetectTradingRange:
         assert 0.0 <= result["position"] <= 1.0
 
     def test_insufficient_data_returns_empty(self, default_config):
-        tiny = pd.DataFrame({"High": [1], "Low": [1], "Close": [1], "Volume": [1000]})
+        tiny = pd.DataFrame({"Open": [1], "High": [1], "Low": [1], "Close": [1], "Volume": [1000]})
         det = WyckoffPatternDetector(tiny, default_config, FakeCache())
         result = det.detect_trading_range()
         assert result == {}
@@ -62,7 +62,7 @@ class TestDetectSOS:
 
     def test_insufficient_data(self, default_config):
         tiny = pd.DataFrame({
-            "High": range(10), "Low": range(10),
+            "Open": range(10), "High": range(10), "Low": range(10),
             "Close": range(10), "Volume": [1000] * 10,
             "Volume_MA20": [1000] * 10,
         })

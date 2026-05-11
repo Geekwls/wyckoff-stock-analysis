@@ -32,7 +32,13 @@ class CauseEffectMixin:
             known_tr_low=trading_range.get('low'),
         )
 
-        if trading_range.get("is_consolidation"):
+        if trading_range.get("is_broken"):
+            # TR 已被突破失效，标记旧目标为待重新锚定
+            direction = trading_range.get("breakout_direction", "unknown")
+            basic_cause_effect["targets"] = {"status": "pending_recalculation",
+                "note": f"原TR({trading_range.get('low',0):.2f}-{trading_range.get('high',0):.2f})已被价格{direction}突破，旧目标已失效，需等待新TR形成或使用P&F重算"}
+            return self._analyze_cause_effect_broken(trading_range, phase, basic_cause_effect, tr_story, current_close)
+        elif trading_range.get("is_consolidation"):
             return self._analyze_cause_effect_in_range(trading_range, phase, basic_cause_effect, tr_story, current_close)
         else:
             current_price = self.data['Close'].iloc[-1]
@@ -79,6 +85,52 @@ class CauseEffectMixin:
             logger.warning(f"点数图计算失败，使用备用方法: {e}")
 
         return self._fallback_cause_effect(phase, range_high, range_low, range_duration, tr_story, accumulation_effort, basic_cause_effect, current_position, cause)
+
+    def _analyze_cause_effect_broken(self, trading_range: dict, phase: str, basic_cause_effect: dict, tr_story: dict, current_close: float) -> dict:
+        """TR 已被突破失效时的因果分析 — 不计算新目标，标记旧目标失效"""
+        direction = trading_range.get("breakout_direction", "unknown")
+        old_low = trading_range.get("low", 0)
+        old_high = trading_range.get("high", 0)
+        cause_pct = (old_high - old_low) / old_low * 100 if old_low > 0 else 0
+
+        trend_analysis = {
+            "current_trend": phase,
+            "current_price": current_close,
+            "old_tr_range": f"{old_low:.2f} - {old_high:.2f}",
+            "old_tr_width_pct": round(cause_pct, 2),
+            "breakout_direction": direction,
+            "cause_effect_status": "TR_BROKEN",
+            "interpretation": f"原TR({old_low:.2f}-{old_high:.2f})已被{direction}突破，"
+                             f"旧因果目标已失效。系统正在等待新TR形成以重新锚定目标。"
+                             f"威科夫理论要求：TR被突破后，原区间不再作为因果测算基准。"
+        }
+
+        enhanced = {
+            "accumulation_distribution_effort": {
+                "time_effort": trading_range.get("duration_days", 60),
+                "price_consolidation": round(cause_pct / 100, 4),
+                "cause_size": round(old_high - old_low, 2),
+                "effort_quality": "BROKEN",
+            },
+            "projected_effects": {
+                "method": "tr_broken",
+                "current_situation": f"原TR({old_low:.2f}-{old_high:.2f})已被{direction}突破，目标待重新锚定",
+                "effort_assessment": "原TR已失效",
+                "projected_direction": direction.upper(),
+                "target_projections": {
+                    "status": "pending_recalculation",
+                    "note": "威科夫理论：TR被突破后原有目标立即失效，需等待新TR形成或P&F重算",
+                    "old_tr_range": {"low": round(old_low, 2), "high": round(old_high, 2)},
+                    "current_price": round(current_close, 2),
+                },
+                "wyckoff_logic": f"原TR({old_low:.2f}-{old_high:.2f})幅度{cause_pct:.1f}%，"
+                                 f"已被价格{direction}突破至{current_close:.2f}，旧因果目标不再适用",
+                "theory": "威科夫因果法则：TR被突破后原目标立即失效，需在新TR中重新水平计数",
+            },
+            "tr_story": tr_story,
+            "trend_mode_cause_effect": trend_analysis,
+        }
+        return {"basic_analysis": basic_cause_effect, "enhanced_analysis": enhanced}
 
     def _try_pnf_cause_effect(self, phase, range_high, range_low, tr_story, accumulation_effort, basic_cause_effect, current_position):
         pnf_result = calculate_cause_effect_from_pnf(

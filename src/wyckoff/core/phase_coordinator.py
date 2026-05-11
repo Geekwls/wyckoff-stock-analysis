@@ -17,9 +17,18 @@ from ..schemas import (
 from ..config.settings import WyckoffConfig
 from .sequence_validator import SequenceValidator
 import logging
+import functools
 
 logger = logging.getLogger(__name__)
 
+
+
+@functools.lru_cache(maxsize=32)
+def _get_pydantic_fields(model_cls):
+    """缓存 Pydantic v1/v2 版本检查结果，避免在热路径上重复检测"""
+    if hasattr(model_cls, "model_fields"):
+        return frozenset(model_cls.model_fields.keys())
+    return frozenset(model_cls.__fields__.keys())
 
 class PhaseCoordinator:
     """
@@ -125,14 +134,8 @@ class PhaseCoordinator:
         # 6. 统一使用强类型模型封装
         # 安全地构造Pydantic模型：过滤掉dict中模型不存在的字段
         def _safe_model(model_cls, data: dict):
-            # 修复问题2：兼容 Pydantic v1 和 v2
-            if hasattr(model_cls, "model_fields"):
-                # Pydantic v2
-                valid_fields = model_cls.model_fields.keys()
-            else:
-                # Pydantic v1
-                valid_fields = model_cls.__fields__.keys()
-                
+            # 兼容 Pydantic v1 和 v2（带缓存，避免热路径重复检测）
+            valid_fields = _get_pydantic_fields(model_cls)
             filtered = {k: v for k, v in data.items() if k in valid_fields}
             return model_cls(**filtered)
 

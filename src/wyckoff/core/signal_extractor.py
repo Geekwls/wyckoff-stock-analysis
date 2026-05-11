@@ -201,21 +201,3 @@ class SignalExtractor:
         return PhaseAdapter.is_late_stage(phase_enum)
 
     @staticmethod
-    def get_execution_score(current_price: float, support: float, resistance: float, direction: str) -> float:
-        """
-        计算可执行性得分 (风盈比与距离)
-        """
-        if direction == "做多":
-            if current_price <= support or current_price >= resistance: return 10.0
-            dist_to_support = (current_price - support) / current_price
-            
-            # 越接近支撑位得分越高，理想距离在 1-5%
-            if dist_to_support < 0.05:
-                return round(100.0 * (1.0 - dist_to_support/0.05), 2)
-            return 20.0
-        else:
-            if current_price >= resistance or current_price <= support: return 10.0
-            dist_to_res = (resistance - current_price) / current_price
-            if dist_to_res < 0.05:
-                return round(100.0 * (1.0 - dist_to_res/0.05), 2)
-            return 20.0

@@ -10,7 +10,7 @@ def create_mock_data(trend="up"):
         'High': np.random.randn(100) + 102,
         'Low': np.random.randn(100) + 98,
         'Close': np.random.randn(100) + 100,
-        'Volume': np.random.randint(1000, 5000, 100)
+        'Volume': np.random.uniform(1000, 5000, 100).astype(float)
     }, index=dates)
     
     # 模拟均线

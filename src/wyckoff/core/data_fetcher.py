@@ -148,8 +148,8 @@ class WyckoffDataFetcher:
                     if name in row[1]: # code_name
                         return row[0] # code
                 bs.logout()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"A股名称搜索失败: {e}")
         return None
 
     def _is_a_stock(self, symbol: str) -> bool:

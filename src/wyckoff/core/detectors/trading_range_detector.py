@@ -113,6 +113,17 @@ class TradingRangeDetector(BaseDetector):
         current_price = self.data['Close'].iloc[-1]
         position = (current_price - low) / (high - low) if high > low else 0.5
 
+        # 检测 TR 是否已被价格突破而失效
+        # 威科夫理论：有效 TR 的前提是价格停留在区间内
+        # 当价格超出区间边界超过 ATR 动态阈值时，TR 视为被打破
+        breakout_margin = atr_pct * 2.0 if atr_pct else 0.03
+        above_range = current_price > high * (1 + breakout_margin)
+        below_range = current_price < low * (1 - breakout_margin)
+        is_broken = above_range or below_range
+        if is_broken:
+            is_consolidation = False
+        breakout_direction = "up" if above_range else ("down" if below_range else None)
+
         # 质量评分：支撑/阻力被测试次数 + 区间宽度合理性
         support_tests = int((self.data['Low'] <= low * 1.03).sum())
         resistance_tests = int((self.data['High'] >= high * 0.97).sum())
@@ -120,6 +131,8 @@ class TradingRangeDetector(BaseDetector):
 
         return {
             'is_consolidation': is_consolidation,
+            'is_broken': is_broken,
+            'breakout_direction': breakout_direction,
             'high': high,
             'low': low,
             'range_pct': range_pct,

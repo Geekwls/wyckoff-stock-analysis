@@ -103,10 +103,8 @@ class TestTheoryFix(unittest.TestCase):
             # 验证有修正发生（即使不是完全匹配的字符串）
             self.assertTrue(len(logs) > 0, "应该有阶段修正日志")
         else:
-            # 如果 Spring 没有被检测到，测试应该仍然通过
-            # 因为这可能是阈值配置问题，而不是逻辑错误
-            print(f"DEBUG: Spring not detected: {spring_res}")
-            self.assertTrue(True, "Spring 未被检测到，可能是阈值配置问题")
+            # Spring 未被检测到时，跳过断言但记录
+            self.skipTest(f"Spring 未被检测到: {spring_res}")
 
 if __name__ == '__main__':
     unittest.main()

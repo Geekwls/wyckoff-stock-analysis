@@ -26,7 +26,19 @@ build/
 *.egg-info/
 scratch/
 output.json
-SRC_API_REFERENCE.md
 docs/
 memory/
 vectorization_optimization_summary.md
+
+# Agent working directory
+.opencode/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+*.egg
+*.whl

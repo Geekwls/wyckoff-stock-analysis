@@ -31,21 +31,42 @@ class MengPatternEnhancer(BaseDetector):
     4. 动态时间窗口(基于ATR)
     """
 
-    def __init__(self, data: pd.DataFrame, config, indicator_cache=None):
+    def __init__(self, data: pd.DataFrame, config, thresholds=None, indicator_cache=None):
         super().__init__()
         self.data = data
         self.config = config
+        self.thresholds = thresholds
         self._indicator_cache = indicator_cache
 
-        # 安全获取阈值配置
-        self.thresholds = getattr(config, 'thresholds', None)
 
-        # 如果thresholds为None，创建默认阈值以避免警告
-        if self.thresholds is None:
-            from .thresholds import AdaptiveThresholds
-            self.thresholds = AdaptiveThresholds(atr_pct=1.5)
-            logger.debug("使用默认AdaptiveThresholds (atr_pct=1.5)")
+    def _build_spring_signal(self, idx, breakdown_price, support_level, close_price,
+                              recovery_days, vol_ratio, close_position, breakdown_pct) -> dict:
+        result = {
+            "date": idx,
+            "breakdown_price": float(breakdown_price),
+            "support_level": float(support_level),
+            "recovery_price": float(close_price),
+            "recovery_days": int(recovery_days),
+            "vol_ratio": round(float(vol_ratio), 2),
+            "close_position": round(float(close_position) * 100, 1),
+            "confidence": self._calculate_spring_confidence(breakdown_pct, recovery_days, vol_ratio, close_position)
+        }
+        return result
 
+    def _build_joc_signal(self, idx, close, creek_level, high, volume, vol_ma, body_ratio,
+                           upper_shadow_ratio, confidence) -> dict:
+        result = {
+            "date": idx,
+            "close": float(close),
+            "creek_level": float(creek_level),
+            "high": float(high),
+            "volume": float(volume),
+            "vol_ratio": round(float(volume / vol_ma), 2) if vol_ma > 0 else 0,
+            "body_ratio": round(float(body_ratio), 2),
+            "upper_shadow_ratio": round(float(upper_shadow_ratio), 2),
+            "confidence": round(float(confidence), 2)
+        }
+        return result
     def detect_spring_enhanced(self) -> Dict:
         if USE_VECTORIZED:
             try:
@@ -125,16 +146,10 @@ class MengPatternEnhancer(BaseDetector):
                     if close_position < 0.7:
                         continue
                         
-                    signal = {
-                        "date": df.index[j],
-                        "breakdown_price": float(breakdown_price),
-                        "support_level": float(support_level),
-                        "recovery_price": float(closes[j]),
-                        "recovery_days": int(recovery_days),
-                        "vol_ratio": round(float(vol_ratio), 2),
-                        "close_position": round(float(close_position) * 100, 1),
-                        "confidence": self._calculate_spring_confidence(breakdown_pct, recovery_days, vol_ratio, close_position)
-                    }
+                    signal = self._build_spring_signal(
+                        df.index[j], breakdown_price, support_level, closes[j],
+                        recovery_days, vol_ratio, close_position, breakdown_pct
+                    )
                     signals.append(signal)
                     break
                     

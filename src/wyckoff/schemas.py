@@ -33,7 +33,7 @@ class MultiTimeframeModel(BaseModel):
 class WyckoffEventModel(BaseModel):
     """威科夫事件基础模型"""
     detected: bool = Field(description="是否检测到")
-    date: Any = Field(default=None, description="事件日期")
+    date: Optional[Any] = None
     price: Optional[float] = Field(default=None, description="事件价格")
     volume: Optional[float] = Field(default=None, description="事件成交量")
     confidence: float = Field(default=0.0, description="置信度 (0-1)")
@@ -55,6 +55,8 @@ class BaseDetectionResult(BaseModel):
 class TradingRangeModel(BaseModel):
     """交易区间模型"""
     is_consolidation: bool = Field(description="是否为整理区间")
+    is_broken: Optional[bool] = Field(default=False, description="区间是否已被突破失效")
+    breakout_direction: Optional[str] = Field(default=None, description="突破方向")
     high: float = Field(description="区间高点")
     low: float = Field(description="区间低点")
     range_pct: float = Field(description="区间幅度百分比")
@@ -70,7 +72,7 @@ class ClimaxModel(BaseModel):
     detected: bool = Field(description="是否检测到")
     error: Optional[str] = Field(default=None, description="错误信息")
     type: Optional[str] = Field(default=None, description="高潮类型")
-    date: Any = Field(default=None, description="日期")
+    date: Optional[Any] = None
     price: Optional[float] = Field(default=None, description="价格")
     volume: Optional[float] = Field(default=None, description="成交量")
     volume_ratio: Optional[float] = Field(default=None, description="量比")
@@ -78,7 +80,7 @@ class ClimaxModel(BaseModel):
 
 class SpringSignalModel(BaseModel):
     """Spring信号详情"""
-    date: Any = Field(description="信号日期")
+    date: Optional[Any] = None
     breakdown_date: Any = Field(description="跌破日期")
     breakdown_price: float = Field(description="跌破价格")
     support_level: float = Field(description="支撑位")
@@ -100,7 +102,7 @@ class SpringModel(BaseModel):
 
 class UpthrustSignalModel(BaseModel):
     """Upthrust信号详情"""
-    date: Any = Field(description="信号日期")
+    date: Optional[Any] = None
     breakout_date: Any = Field(description="突破日期")
     breakout_price: float = Field(description="突破价格")
     resistance_level: float = Field(description="阻力位")
@@ -119,7 +121,7 @@ class UpthrustModel(BaseModel):
 
 class SosSignalModel(BaseModel):
     """SOS信号详情"""
-    date: Any = Field(description="信号日期")
+    date: Optional[Any] = None
     price: float = Field(description="价格")
     volume_ratio: float = Field(description="量比")
     price_change: float = Field(description="涨幅")
@@ -138,7 +140,7 @@ class SosModel(BaseModel):
 
 class SowSignalModel(BaseModel):
     """SOW信号详情"""
-    date: Any = Field(description="信号日期")
+    date: Optional[Any] = None
     price: float = Field(description="价格")
     volume_ratio: float = Field(description="量比")
     price_change: float = Field(description="跌幅")
@@ -155,7 +157,7 @@ class SowModel(BaseModel):
 
 class LpsSignalModel(BaseModel):
     """LPS信号详情"""
-    date: Any = Field(description="信号日期")
+    date: Optional[Any] = None
     price: float = Field(description="价格")
     volume_ratio: float = Field(description="量比")
     support_level: float = Field(description="支撑位")
@@ -173,7 +175,7 @@ class LpsModel(BaseModel):
 
 class LpsySignalModel(BaseModel):
     """LPSY信号详情"""
-    date: Any = Field(description="信号日期")
+    date: Optional[Any] = None
     price: float = Field(description="价格")
     volume_ratio: float = Field(description="量比")
     resistance_level: float = Field(description="阻力位")
@@ -193,7 +195,7 @@ class LpsyModel(BaseModel):
 class JocModel(BaseModel):
     """JOC (Jump Over Creek) 模型"""
     detected: bool = Field(description="是否检测到")
-    date: Any = Field(default=None, description="日期")
+    date: Optional[Any] = None
     creek_level: float = Field(default=0.0, description="小溪位")
     breakout_pct: float = Field(default=0.0, description="突破幅度")
     confidence: float = Field(default=0.0, description="置信度")
@@ -201,7 +203,7 @@ class JocModel(BaseModel):
 class FtiModel(BaseModel):
     """FTI (Fall Through Ice) 模型"""
     detected: bool = Field(description="是否检测到")
-    date: Any = Field(default=None, description="日期")
+    date: Optional[Any] = None
     ice_level: float = Field(default=0.0, description="冰层位")
     breakdown_pct: float = Field(default=0.0, description="跌破幅度")
     confidence: float = Field(default=0.0, description="置信度")
@@ -412,7 +414,7 @@ class CauseEffectAnalysisModel(BaseModel):
     basic_analysis: Optional[Dict[str, Any]] = Field(default=None, description="基础分析")
     cause_size: Optional[float] = Field(default=None, description="原因大小")
     breakout_point: Optional[float] = Field(default=None, description="突破点")
-    targets: Optional[Dict[str, float]] = Field(default=None, description="目标位")
+    targets: Optional[Any] = Field(default=None, description="目标位")
     current_position: Optional[float] = Field(default=None, description="当前位置")
 
 

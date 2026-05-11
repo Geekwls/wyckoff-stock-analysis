@@ -39,7 +39,7 @@ class WyckoffPatternDetector:
         self.phase_identifier = PhaseIdentifier(data, config, self.thresholds)
 
         # 初始化孟洪涛增强检测器
-        self.meng_enhancer = MengPatternEnhancer(data, config, indicator_cache=self._indicator_cache)
+        self.meng_enhancer = MengPatternEnhancer(data, config, self.thresholds, indicator_cache=self._indicator_cache)
 
         # 初始化阶段协调器（负责事件收集和阶段验证）
         self.phase_coordinator = PhaseCoordinator(self)
@@ -87,7 +87,7 @@ class WyckoffPatternDetector:
                 if price > 0:
                     return float(atr / price)
             return 0.03  # 默认3%
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return 0.03  # 默认3%
     
     def _get_dynamic_volume_threshold(self, base_threshold: float = 1.5) -> float:
@@ -191,13 +191,13 @@ class WyckoffPatternDetector:
         # 如果有证据分析，更新阶段描述
         if 'error' not in evidence_analysis:
             if evidence_analysis['strength'] == 'strong':
-                phase_result['confidence'] = max(phase_result.get('confidence', 0), 80)
+                phase_result['confidence'] = max(phase_result.get('confidence', 0), 0.80)
             elif evidence_analysis['strength'] == 'weak':
-                phase_result['confidence'] = max(phase_result.get('confidence', 0), 50)
+                phase_result['confidence'] = max(phase_result.get('confidence', 0), 0.50)
             elif evidence_analysis['strength'] == 'none':
                 # 如果没有核心证据，降低置信度
                 if 'Accumulation' in phase_result.get('phase', ''):
-                    phase_result['confidence'] = min(phase_result.get('confidence', 50), 30)
+                    phase_result['confidence'] = min(phase_result.get('confidence', 0.50), 0.30)
 
         return phase_result
 
@@ -289,10 +289,11 @@ class WyckoffPatternDetector:
             avg_range = high_low_range.rolling(20).mean()
             
             # 动态阈值：基于ATR适配
-            # 高波动资产需要更高的成交量确认
-            climax_vol_threshold = self._get_dynamic_volume_threshold(self.thresholds.VOLUME_CONFIRMATION['strong'])
-            climax_range_threshold = self._get_dynamic_volume_threshold(1.5)  # 保持 1.5 倍平均价差
-            fallback_vol_threshold = self._get_dynamic_volume_threshold(self.thresholds.VOLUME_CONFIRMATION['moderate'])
+            # 威科夫理论：SC必须伴随巨幅放量，通常为均量2倍以上
+            climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
+            climax_range_threshold = self._get_dynamic_volume_threshold(1.8)
+            # 降级阈值也至少1.8倍 — 1.2倍仅属正常波动，不足以定性为SC
+            fallback_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['moderate'], 1.8))
             
             # 高潮候选者：成交量 > 动态阈值倍均量 且 价差 > 动态阈值倍均价差
             candidates = recent_data[
@@ -382,49 +383,78 @@ class WyckoffPatternDetector:
             logger.exception(f"AR检测失败: 未知异常: {e}")
             raise PatternDetectionError("AR", f"未知异常: {e}") from e
 
+    def _find_downtrend_start(self, data: pd.DataFrame) -> Optional[int]:
+        """找到主跌段起点（价格跌破MA20的位置）"""
+        ma20 = data['Close'].rolling(window=20).mean()
+        downtrend_mask = data['Close'] < ma20
+        if not downtrend_mask.any():
+            return None
+        for i in range(len(data)):
+            if downtrend_mask.iloc[i]:
+                return i
+        return None
+
+    def _evaluate_ps_candidate(self, current, prev, next_day, vol_ma,
+                                 ps_vol_threshold, ps_vol_strong_threshold) -> Optional[Dict]:
+        """评估单个K线是否为PS候选"""
+        vol_ratio = current['Volume'] / vol_ma if vol_ma > 0 else 0
+        vol_heavy = vol_ratio > ps_vol_threshold
+        price_stabilized = (current['Close'] > prev['Close']) or (current['Close'] > current['Open'])
+        body = abs(current['Close'] - current['Open'])
+        lower_shadow = min(current['Open'], current['Close']) - current['Low']
+        shadow_resistance = lower_shadow > body * 0.5 if body > 0 else lower_shadow > 0
+        
+        if not (vol_heavy and price_stabilized and shadow_resistance):
+            return None
+        
+        confidence = 50
+        if vol_ratio > ps_vol_strong_threshold:
+            confidence += 15
+        if current['Close'] > current['Open']:
+            confidence += 10
+        if lower_shadow > body:
+            confidence += 10
+        if next_day is not None and next_day['Close'] > current['Close']:
+            confidence += 15
+        
+        return {
+            'vol_ratio': float(vol_ratio),
+            'lower_shadow_ratio': float(lower_shadow / (body + 0.001)),
+            'confidence': min(100, confidence)
+        }
+
+    def _verify_ps_with_sc(self, data: pd.DataFrame, best_ps: Dict) -> Tuple[bool, Optional[float]]:
+        """验证PS之后是否有SC（恐慌抛售）"""
+        ps_idx = best_ps['idx']
+        post_ps_data = data.iloc[ps_idx + 1:]
+        for i in range(len(post_ps_data)):
+            row = post_ps_data.iloc[i]
+            if row['Low'] < best_ps['low']:
+                vol_ma = row.get('Volume_MA20', data['Volume'].iloc[:ps_idx + i + 1].tail(20).mean())
+                if row['Volume'] > vol_ma * 1.5:
+                    return True, float(row['Low'])
+        return False, None
+
     def detect_preliminary_support(self, lookback_days: int = 90) -> Dict:
         """
         检测初次支撑（Preliminary Support, PS）
         
         威科夫理论定义：
-        - PS 是主跌段中的第一次抄底尝试
-        - 发生在 SC（恐慌抛售）之前
+        - PS 是主跌段中的第一次抄底尝试，发生在 SC（恐慌抛售）之前
         - 特征：成交量放大 + 价格止跌/反弹 + 下影线抵抗
-        - PS 失败后会引发恐慌抛售（SC）
-        
         时序关系：PS → SC → AR → ST
         """
         try:
-            # 获取足够历史数据
             data = self.data.tail(lookback_days)
             if len(data) < 20:
                 return {"detected": False, "reason": "Insufficient data"}
             
-            # 步骤1：识别主跌段
-            # 主跌段定义：价格持续下跌，低于20日均线
-            ma20 = data['Close'].rolling(window=20).mean()
-            downtrend_mask = data['Close'] < ma20
-            
-            if not downtrend_mask.any():
+            downtrend_start = self._find_downtrend_start(data)
+            if downtrend_start is None:
                 return {"detected": False, "reason": "No downtrend found"}
-            
-            # 找到主跌段的起点（价格跌破MA20的位置）
-            downtrend_start = None
-            for i in range(len(data)):
-                if downtrend_mask.iloc[i]:
-                    downtrend_start = i
-                    break
-            
-            if downtrend_start is None or downtrend_start >= len(data) - 5:
+            if downtrend_start >= len(data) - 5:
                 return {"detected": False, "reason": "Downtrend too short"}
             
-            # 步骤2：在主跌段中寻找PS
-            # PS特征：
-            # 1. 成交量放大（超过MA20的动态阈值倍）
-            # 2. 价格止跌或反弹（收盘价高于前一日）
-            # 3. 下影线较长（显示买盘抵抗）
-            
-            # 动态阈值：基于ATR适配
             ps_vol_threshold = self._get_dynamic_volume_threshold(1.2)
             ps_vol_strong_threshold = self._get_dynamic_volume_threshold(1.5)
             
@@ -435,73 +465,30 @@ class WyckoffPatternDetector:
                 current = downtrend_data.iloc[i]
                 prev = downtrend_data.iloc[i-1]
                 next_day = downtrend_data.iloc[i+1] if i + 1 < len(downtrend_data) else None
-                
-                # 获取成交量均线
                 vol_ma = current.get('Volume_MA20', data['Volume'].iloc[:downtrend_start + i].tail(20).mean())
                 
-                # 条件1：成交量放大（使用动态阈值）
-                vol_ratio = current['Volume'] / vol_ma if vol_ma > 0 else 0
-                vol_heavy = vol_ratio > ps_vol_threshold
-                
-                # 条件2：价格止跌或反弹
-                # 收盘价高于前一日收盘，或者当日收阳
-                price_stabilized = (current['Close'] > prev['Close']) or (current['Close'] > current['Open'])
-                
-                # 条件3：下影线抵抗
-                # 下影线长度 > 实体长度的0.5倍
-                body = abs(current['Close'] - current['Open'])
-                lower_shadow = min(current['Open'], current['Close']) - current['Low']
-                shadow_resistance = lower_shadow > body * 0.5 if body > 0 else lower_shadow > 0
-                
-                # 综合判断
-                if vol_heavy and price_stabilized and shadow_resistance:
-                    # 计算置信度
-                    confidence = 50
-                    if vol_ratio > ps_vol_strong_threshold:
-                        confidence += 15
-                    if current['Close'] > current['Open']:  # 收阳线
-                        confidence += 10
-                    if lower_shadow > body:  # 下影线长于实体
-                        confidence += 10
-                    if next_day is not None and next_day['Close'] > current['Close']:  # 次日继续上涨
-                        confidence += 15
-                    
-                    potential_ps.append({
+                candidate = self._evaluate_ps_candidate(
+                    current, prev, next_day, vol_ma,
+                    ps_vol_threshold, ps_vol_strong_threshold
+                )
+                if candidate:
+                    candidate.update({
                         'idx': downtrend_start + i,
                         'date': data.index[downtrend_start + i],
                         'price': float(current['Close']),
                         'low': float(current['Low']),
-                        'vol_ratio': float(vol_ratio),
-                        'lower_shadow_ratio': float(lower_shadow / (body + 0.001)),
-                        'confidence': min(100, confidence)
                     })
+                    potential_ps.append(candidate)
             
             if not potential_ps:
                 return {"detected": False, "reason": "No PS pattern found in downtrend"}
             
-            # 选择置信度最高的PS
             best_ps = max(potential_ps, key=lambda x: x['confidence'])
-            
-            # 验证：PS之后应该有SC（恐慌抛售）
-            # 检查PS之后是否出现价格创新低且成交量放大的情况
-            ps_idx = best_ps['idx']
-            post_ps_data = data.iloc[ps_idx + 1:]
-            
-            # 寻找可能的SC（在PS之后，价格创新低）
-            sc_found = False
-            sc_price = None
-            for i in range(len(post_ps_data)):
-                row = post_ps_data.iloc[i]
-                if row['Low'] < best_ps['low']:  # 价格创新低
-                    vol_ma = row.get('Volume_MA20', data['Volume'].iloc[:ps_idx + i + 1].tail(20).mean())
-                    if row['Volume'] > vol_ma * 1.5:  # 成交量放大
-                        sc_found = True
-                        sc_price = float(row['Low'])
-                        break
+            sc_found, sc_price = self._verify_ps_with_sc(data, best_ps)
             
             return {
                 "detected": True,
-                "ps_date": best_ps['date'].strftime("%Y-%m-%d"),
+                "ps_date": best_ps['date'].strftime("%Y-%m-%d") if hasattr(best_ps['date'], 'strftime') else str(best_ps['date']),
                 "ps_price": best_ps['price'],
                 "ps_low": best_ps['low'],
                 "vol_ratio": best_ps['vol_ratio'],
@@ -593,11 +580,15 @@ class WyckoffPatternDetector:
             sot_res = self.detect_stopping_of_transient()
             spring_res = self.detect_spring_menhongtao()
 
+            # 检测+必要字段双重验证，确保与报告层显示一致
+            def _check_detected(res: dict, required_fields: list) -> bool:
+                return bool(res.get("detected")) and all(k in res for k in required_fields)
+
             checks = [
-                {'id': 'PS', 'detected': ps_res.get("detected", False), 'weight': 1},
-                {'id': 'SC', 'detected': sc_res.get("detected", False), 'weight': 2},
-                {'id': 'AR', 'detected': ar_res.get("detected", False), 'weight': 2},
-                {'id': 'ST', 'detected': st_res.get("detected", False), 'weight': 1}
+                {'id': 'PS', 'detected': _check_detected(ps_res, ['rebound_pct']), 'weight': 1},
+                {'id': 'SC', 'detected': _check_detected(sc_res, ['date', 'price', 'volume_ratio']), 'weight': 2},
+                {'id': 'AR', 'detected': _check_detected(ar_res, ['date', 'price']), 'weight': 2},
+                {'id': 'ST', 'detected': _check_detected(st_res, ['date', 'price', 'volume_ratio']), 'weight': 1}
             ]
 
             evidence_count = sum(1 for c in checks if c['detected'])
@@ -606,7 +597,13 @@ class WyckoffPatternDetector:
             is_valid_sequence = False
             if ps_res.get('detected') and sc_res.get('detected') and ar_res.get('detected'):
                 # 兼容性处理：支持 Timestamp 或字符串
-                def to_dt(d): return pd.to_datetime(d) if d else None
+                def to_dt(d): 
+                    if not d: return None
+                    dt = pd.to_datetime(d)
+                    # Convert to naive timestamp for comparison
+                    if dt.tz is not None:
+                        dt = dt.tz_localize(None)
+                    return dt
                 
                 ps_date = to_dt(ps_res.get('ps_date'))
                 sc_date = to_dt(sc_res.get('date'))

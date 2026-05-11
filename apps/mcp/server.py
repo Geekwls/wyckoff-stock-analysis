@@ -19,7 +19,7 @@ sys.path.insert(0, project_root)
 
 # 从库层导入（仅使用公共 API）
 from src.wyckoff.facade import WyckoffAnalyzer, batch_scan
-from src.wyckoff.exceptions import *
+from src.wyckoff.exceptions import AnalysisError, DataFetchError, WyckoffError
 from src.wyckoff.schemas import ErrorResponseModel
 from src.wyckoff.core.enums import ErrorCode
 

@@ -12,6 +12,7 @@ from ..facade import WyckoffAnalyzer
 from ..config.settings import WyckoffConfig
 from ..exceptions import AnalysisError
 from ..core.recommendation_engine import RecommendationEngine
+from ..core.enums import MarketEnvironment
 from ..core.utils import PhaseAdapter
 
 logger = logging.getLogger(__name__)

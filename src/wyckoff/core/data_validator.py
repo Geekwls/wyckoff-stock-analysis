@@ -345,7 +345,7 @@ class DataValidator:
             df_clean = df_clean[df_clean['Volume'] >= 0]
 
         # 向前填充缺失值
-        df_clean = df_clean.fillna(method='ffill')
+        df_clean = df_clean.ffill()
 
         # 删除剩余的缺失值
         df_clean = df_clean.dropna()

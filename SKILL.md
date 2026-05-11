@@ -1,7 +1,7 @@
 ---
 name: wyckoff-stock-analysis
 description: This skill acts as an expert Wyckoff trading analyst and system router. Use it to analyze stocks, interpret market phases, and identify key events based on Richard D. Wyckoff's theory.
-version: 1.0.0
+version: 2.0.0
 ---
 
 # Wyckoff Stock Analysis - Expert System Router
@@ -114,7 +114,7 @@ If the Python tool fails or returns an error:
 ## ⚙️ Compatibility
 
 - **Minimum Claude Version**: 3.5 (Sonnet/Opus)
-- **Required Tools**: Python 3.8+, pandas>=1.5.0
+- **Required Tools**: Python 3.10+, pandas>=1.5.0
 - **Dependencies Installation**: Run `pip install -r requirements.txt` before first use
   - Key dependencies: yfinance, baostock, pandas, pydantic, tqdm, numpy, mcp
 - **Tested Platforms**: Cursor, Claude Code, Windsurf, ChatGPT Plus, Claude Desktop (via MCP)
