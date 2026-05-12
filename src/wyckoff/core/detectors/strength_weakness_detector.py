@@ -16,8 +16,8 @@ class StrengthWeaknessDetector(BaseDetector):
     - 在派发阶段，向上突破应归类为 UT (Upthrust) 或 UTAD (派发后的上冲回落)
     - 系统必须根据当前阶段动态调整信号分类
     """
-    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds):
-        super().__init__()
+    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds, indicator_cache=None):
+        super().__init__(indicator_cache=indicator_cache)
         self.data = data
         self.config = config
         self.thresholds = thresholds
@@ -25,15 +25,25 @@ class StrengthWeaknessDetector(BaseDetector):
         self._blocked_signals = set()
     
     def _ensure_columns(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
-        """确保所需的指标列存在，缺失时动态计算"""
+        """确保所需的指标列存在，缺失时从缓存获取或动态计算"""
         df = df.copy()
-        col_map = {
-            'Volume_MA20': lambda d: d['Volume'].rolling(20, min_periods=1).mean(),
-            'MA20': lambda d: d['Close'].rolling(20, min_periods=1).mean(),
-        }
         for col in columns:
-            if col not in df.columns and col in col_map:
-                df[col] = col_map[col](df)
+            if col in df.columns:
+                continue
+            
+            if self._indicator_cache:
+                try:
+                    df[col] = self._indicator_cache.get(col)
+                    continue
+                except Exception:
+                    pass
+            
+            # 降级逻辑
+            if col == 'Volume_MA20':
+                df[col] = df['Volume'].rolling(20, min_periods=1).mean()
+            elif col == 'MA20':
+                df[col] = df['Close'].rolling(20, min_periods=1).mean()
+                
         return df
 
     def update_analysis_context(self, phase: str):
@@ -107,8 +117,11 @@ class StrengthWeaknessDetector(BaseDetector):
         lows = df['Low'].values
         volumes = df['Volume'].values
         
-        # 计算 vol_ma (这里使用简单的 rolling mean 近似或者提取已计算好的)
-        if 'Volume_MA20' in df.columns:
+        # 获取 vol_ma
+        if self._indicator_cache:
+            vol_ma_series = self._indicator_cache.get('Volume_MA20')
+            vol_ma = vol_ma_series.reindex(df.index).values
+        elif 'Volume_MA20' in df.columns:
             vol_ma = df['Volume_MA20'].values
         else:
             vol_ma = df['Volume'].rolling(20, min_periods=1).mean().values
@@ -277,7 +290,10 @@ class StrengthWeaknessDetector(BaseDetector):
         lows = df['Low'].values
         volumes = df['Volume'].values
         
-        if 'Volume_MA20' in df.columns:
+        if self._indicator_cache:
+            vol_ma_series = self._indicator_cache.get('Volume_MA20')
+            vol_ma = vol_ma_series.reindex(df.index).values
+        elif 'Volume_MA20' in df.columns:
             vol_ma = df['Volume_MA20'].values
         else:
             vol_ma = df['Volume'].rolling(20, min_periods=1).mean().values

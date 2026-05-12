@@ -7,8 +7,8 @@ from ..utils import PhaseAdapter
 
 class PhaseIdentifier(BaseDetector):
     """负责识别威科夫阶段和评分"""
-    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds):
-        super().__init__()
+    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds, indicator_cache=None):
+        super().__init__(indicator_cache=indicator_cache)
         self.data = data
         self.config = config
         self.thresholds = thresholds
@@ -113,9 +113,21 @@ class PhaseIdentifier(BaseDetector):
     def _fallback_logic(self) -> Tuple[str, WyckoffPhase, float]:
         """基于均线排布的降级判定逻辑"""
         current = self.data['Close'].iloc[-1]
-        ma20 = self.data['MA20'].iloc[-1] if 'MA20' in self.data.columns else current
-        ma50 = self.data['MA50'].iloc[-1] if 'MA50' in self.data.columns else current
-        ma200 = self.data['MA200'].iloc[-1] if 'MA200' in self.data.columns else current
+        
+        def get_ma(period):
+            if self._indicator_cache:
+                try:
+                    return self._indicator_cache.get(f'MA{period}').iloc[-1]
+                except Exception:
+                    pass
+            col = f'MA{period}'
+            if col in self.data.columns:
+                return self.data[col].iloc[-1]
+            return self.data['Close'].rolling(window=period).mean().iloc[-1]
+
+        ma20 = get_ma(20)
+        ma50 = get_ma(50)
+        ma200 = get_ma(200)
         
         if current > ma20 > ma50 > ma200: 
             return "Markup Phase E (强势上涨)", WyckoffPhase.PHASE_E, 0.6

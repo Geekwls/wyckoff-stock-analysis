@@ -28,8 +28,8 @@ def _swing_levels(series: pd.Series, *, kind: str, window: int = 3) -> List[floa
 
 class TradingRangeDetector(BaseDetector):
     """负责检测交易区间（积累/分布）"""
-    def __init__(self, data: pd.DataFrame, config: WyckoffConfig):
-        super().__init__()
+    def __init__(self, data: pd.DataFrame, config: WyckoffConfig, indicator_cache=None):
+        super().__init__(indicator_cache=indicator_cache)
         self.data = data
         self.config = config
         self._phase_high = None
@@ -94,8 +94,18 @@ class TradingRangeDetector(BaseDetector):
         # 高波动股（ATR ~5%）→ 20% 阈值 → 宽松
         atr_multiple = 4.0
         atr_pct = None
-        if 'ATR' in self.data.columns and len(self.data) > 0:
+        
+        atr_val = None
+        if self._indicator_cache:
+            try:
+                atr_val = self._indicator_cache.get('ATR', period=14).iloc[-1]
+            except Exception:
+                pass
+        
+        if atr_val is None and 'ATR' in self.data.columns:
             atr_val = self.data['ATR'].iloc[-1]
+
+        if atr_val is not None:
             close_val = self.data['Close'].iloc[-1]
             if pd.notna(atr_val) and close_val > 0:
                 atr_pct = atr_val / close_val

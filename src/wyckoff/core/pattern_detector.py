@@ -33,10 +33,10 @@ class WyckoffPatternDetector:
         self._indicator_cache = IndicatorCache(data)
 
         # 初始化专门的检测器
-        self.range_detector = TradingRangeDetector(data, config)
+        self.range_detector = TradingRangeDetector(data, config, indicator_cache=self._indicator_cache)
         self.classic_detector = ClassicPatternDetector(data, config, self.thresholds, analysis_cache, indicator_cache=self._indicator_cache)
-        self.sw_detector = StrengthWeaknessDetector(data, config, self.thresholds)
-        self.phase_identifier = PhaseIdentifier(data, config, self.thresholds)
+        self.sw_detector = StrengthWeaknessDetector(data, config, self.thresholds, indicator_cache=self._indicator_cache)
+        self.phase_identifier = PhaseIdentifier(data, config, self.thresholds, indicator_cache=self._indicator_cache)
 
         # 初始化孟洪涛增强检测器
         self.meng_enhancer = MengPatternEnhancer(data, config, self.thresholds, indicator_cache=self._indicator_cache)

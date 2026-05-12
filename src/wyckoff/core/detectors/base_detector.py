@@ -1,5 +1,6 @@
 from abc import ABC
 from datetime import datetime
+from typing import Dict
 import pandas as pd
 import os
 
@@ -13,12 +14,13 @@ class BaseDetector(ABC):
     - 自动过滤过期信号（默认60天有效期）
     - 支持不同信号类型的自定义有效期
     """
-    def __init__(self):
+    def __init__(self, indicator_cache=None):
         self._current_phase = ""
         # 🔧 P1-1修复：存储Phase A事件检测结果，供LPS等信号验证前置结构
         self._phase_a_events = {}
         # 🔧 v1.2新增：信号有效期配置（天数）
         self._signal_decay_days = 60  # 默认信号有效期60天
+        self._indicator_cache = indicator_cache
         self._signal_decay_config = {
             'spring': 90,      # Spring信号有效期90天
             'upthrust': 90,    # Upthrust信号有效期90天
@@ -94,31 +96,51 @@ class BaseDetector(ABC):
         return days_ago > max_days
 
     def _get_signal_age_days(self, signal_date) -> int:
-        """
-        获取信号的年龄（天数）
-
-        Args:
-            signal_date: 信号日期
-
-        Returns:
-            信号距今的天数
-        """
-        if signal_date is None:
-            return 0
-
+        """获取信号距今的天数"""
+        if signal_date is None: return 0
         try:
-            if isinstance(signal_date, str):
-                ts = pd.to_datetime(signal_date)
-            else:
-                ts = pd.Timestamp(signal_date)
-            
-            if ts.tz is None:
-                ts = ts.tz_localize('UTC')
-            else:
-                ts = ts.tz_convert('UTC')
-        except Exception:
-            return 0
-
+            ts = pd.to_datetime(signal_date)
+            if ts.tz is None: ts = ts.tz_localize('UTC')
+            else: ts = ts.tz_convert('UTC')
+        except Exception: return 0
         now = pd.Timestamp.now(tz='UTC')
-        days_ago = (now - ts).days
-        return max(0, days_ago)
+        return max(0, (now - ts).days)
+
+    def _get_tech_indicators(self, window: int = 20):
+        """统一获取技术指标（Volume MA, Low Min, High Max）"""
+        if not self._indicator_cache:
+            if hasattr(self, 'data'):
+                from ..indicator_cache import IndicatorCache
+                self._indicator_cache = IndicatorCache(self.data)
+            else:
+                return None, None, None
+
+        vol_ma = self._indicator_cache.get(f'Volume_MA{window}', window=window)
+        low_min = self._indicator_cache.get(f'Low_Min{window}', window=window)
+        high_max = self._indicator_cache.get(f'High_Max{window}', window=window)
+
+        return vol_ma, low_min, high_max
+
+    def _get_volume_threshold(self, signal_type: str, default: float, bayesian_model=None) -> float:
+        """获取自适应或静态成交量阈值"""
+        if bayesian_model:
+            return bayesian_model.get_volume_threshold(signal_type, default=default)
+        return default
+
+    def _detect_trading_range(self, df: pd.DataFrame, window: int = 60) -> Dict:
+        """检测交易区间"""
+        if len(df) < window: return {"is_consolidation": False}
+        recent_df = df.tail(window)
+        high_max, low_min = recent_df['High'].max(), recent_df['Low'].min()
+        range_pct = (high_max - low_min) / max(low_min, 1e-9)
+        return {"is_consolidation": range_pct < 0.20, "high": high_max, "low": low_min, "range_pct": range_pct}
+
+    def _calculate_atr_series(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """计算ATR序列"""
+        if self._indicator_cache:
+            try:
+                return self._indicator_cache.get('ATR', period=period)
+            except Exception: pass
+        high, low, close = df['High'], df['Low'], df['Close'].shift(1)
+        tr = pd.concat([high - low, (high - close).abs(), (low - close).abs()], axis=1).max(axis=1)
+        return tr.rolling(window=period, min_periods=1).mean()

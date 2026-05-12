@@ -69,20 +69,17 @@ class CacheKey:
 
     @staticmethod
     def generate(namespace: str, *parts) -> str:
-        """生成缓存键"""
-        # 使用SHA256哈希确保键的唯一性和一致性
+        """生成缓存键 (优化版：使用 MD5 替代 SHA256)"""
         key_str = ":".join([namespace] + [str(p) for p in parts])
-        # 使用完整哈希避免碰撞风险
-        hashed = hashlib.sha256(key_str.encode()).hexdigest()
-        # 🔧 修复问题1：在 key 前部保留 namespace 名称，以便 MemoryCache 能通过前缀失效缓存
-        # 使用 '_' 作为分隔符，避免 Windows 文件名中的 ':' 冲突
+        # MD5 比 SHA256 快 2-3 倍，对于缓存键足够安全且冲突率极低
+        hashed = hashlib.md5(key_str.encode()).hexdigest()
         return f"{namespace}_{hashed}"
 
     @staticmethod
     def generate_version_key(symbol: str, period: str, data_timestamp: float) -> str:
-        """生成版本键（基于数据时间戳）"""
+        """生成版本键"""
         version_str = f"{symbol}:{period}:{int(data_timestamp)}"
-        hashed = hashlib.sha256(version_str.encode()).hexdigest()
+        hashed = hashlib.md5(version_str.encode()).hexdigest()
         return f"version_{hashed}"
 
 
@@ -110,11 +107,11 @@ class MemoryCache:
 
             # 检查是否过期
             if entry.is_expired():
-                del self.cache[key]
+                self.cache.pop(key, None)
                 self.stats["misses"] += 1
                 return None
 
-            # LRU：移到末尾
+            # LRU：移到末尾 (OrderedDict 特有方法，常规 dict 需要先 pop 再 set)
             self.cache.move_to_end(key)
             entry.touch()
             self.stats["hits"] += 1

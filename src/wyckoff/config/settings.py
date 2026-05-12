@@ -1,95 +1,6 @@
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from typing import Dict, Optional
 
-class WyckoffConfig(BaseModel):
-    """威科夫分析配置（带验证）"""
-    confidence_threshold: float = Field(0.85, ge=0.0, le=1.0)
-    min_data_length: int = Field(60, ge=20, le=1000)
-    atr_period: int = Field(14, ge=5, le=50)
-    atr_multiplier: float = Field(1.5, ge=0.5, le=5.0)
-    volume_ma_period: int = Field(20, ge=5, le=100)
-
-    # 🔧 v1.3新增：动态阈值系统
-    enable_adaptive_thresholds: bool = Field(True, description="启用动态阈值自适应系统")
-    adaptive_thresholds_atr_period: int = Field(14, ge=5, le=50, description="动态阈值ATR计算周期")
-    
-    # 贝叶斯自适应阈值参数
-    prior_breakout_mu: float = Field(1.5, ge=1.0, le=5.0, description="突破量比先验均值")
-    prior_shrink_mu: float = Field(0.6, ge=0.1, le=1.0, description="缩量量比先验均值")
-    prior_sigma: float = Field(0.5, ge=0.1, le=2.0, description="量比先验标准差")
-    amplitude_breakout_percentile: float = Field(85.0, ge=50.0, le=99.0, description="贝叶斯推断：突破日振幅截取分位数")
-    amplitude_shrink_percentile: float = Field(15.0, ge=1.0, le=50.0, description="贝叶斯推断：缩量日振幅截取分位数")
-
-    # Spring检测参数
-    spring_lookback: int = Field(120, ge=30, le=252)
-    spring_max_recovery_days: int = Field(3, ge=1, le=10)
-    spring_range_threshold: float = Field(0.30, ge=0.1, le=0.5)
-
-    climax_range_multiplier: float = Field(1.5, ge=1.0, le=5.0)
-
-    # 突破搜索窗口 (Spring/Upthrust 搜索最后 M 根 K线)
-    breakout_search_window: int = Field(5, ge=1, le=20)
-    
-    @field_validator('min_data_length')
-    @classmethod
-    def validate_data_length(cls, v):
-        if v < 20:
-            raise ValueError('数据长度至少20天')
-        return v
-
-    @field_validator('atr_period')
-    @classmethod
-    def validate_atr_period(cls, v):
-        if v < 5 or v > 50:
-            raise ValueError('ATR周期必须在5-50之间')
-        return v
-
-    @field_validator('spring_lookback')
-    @classmethod
-    def validate_spring_lookback(cls, v):
-        if v < 30:
-            raise ValueError('Spring回溯窗口至少30天')
-        return v
-
-    @field_validator('spring_range_threshold')
-    @classmethod
-    def validate_spring_range(cls, v):
-        if not 0.05 <= v <= 0.5:
-            raise ValueError('Spring范围阈值必须在0.05-0.5之间')
-        return v
-
-    @model_validator(mode='after')
-    def validate_config_dependencies(self):
-        """
-        验证配置项之间的依赖关系
-
-        确保配置值之间的一致性和合理性
-        """
-        # ATR周期应该小于最小数据长度（否则无法计算）
-        if self.atr_period >= self.min_data_length:
-            raise ValueError(
-                f'ATR周期 ({self.atr_period}) 必须小于最小数据长度 ({self.min_data_length})'
-            )
-
-        # Spring回溯窗口应该大于最小数据长度的一半
-        if self.spring_lookback < self.min_data_length / 2:
-            raise ValueError(
-                f'Spring回溯窗口 ({self.spring_lookback}) 应该至少是最小数据长度的一半 ({self.min_data_length / 2:.0f})'
-            )
-
-        # 成交量MA周期应该小于最小数据长度
-        if self.volume_ma_period >= self.min_data_length:
-            raise ValueError(
-                f'成交量MA周期 ({self.volume_ma_period}) 必须小于最小数据长度 ({self.min_data_length})'
-            )
-
-        return self
-    
-    model_config = ConfigDict(
-        env_prefix="WYCKOFF_",
-        populate_by_name=True
-    )
-
 class ScoringConfig(BaseModel):
     """评分表显式配置"""
     vol_strong_weight: int = Field(3, description="成交量强力确认权重")
@@ -211,91 +122,32 @@ class WyckoffThresholds(BaseModel):
     POSITION_SIZING: PositionSizingConfig = Field(default_factory=PositionSizingConfig)
     
     def get_volatility_threshold(self, threshold_type: str, volatility_class: str) -> float:
-        """
-        获取波动率阈值
-        
-        Args:
-            threshold_type: 阈值类型（如 'spring_breakdown', 'sos_price_change'）
-            volatility_class: 波动率分类（'low', 'medium', 'high'）
-            
-        Returns:
-            对应的阈值
-        """
+        """获取波动率阈值"""
         thresholds = self.VOLATILITY_THRESHOLDS.get(threshold_type, {})
         return thresholds.get(volatility_class, 0.035)
     
     def get_dynamic_volume_threshold(self, atr_pct: float, base_threshold: float = 1.5) -> float:
-        """
-        基于ATR百分比动态计算成交量阈值
-
-        高波动资产（如加密货币）需要更高的成交量确认
-        低波动资产（如蓝筹股）可以使用较低的成交量确认
-
-        Args:
-            atr_pct: ATR占价格的百分比（如0.03表示3%）
-            base_threshold: 基础阈值
-
-        Returns:
-            动态成交量阈值（范围：0.5-5.0）
-
-        Raises:
-            ValueError: 如果输入参数无效
-        """
-        # 输入验证
+        """基于ATR百分比动态计算成交量阈值"""
         if atr_pct <= 0 or base_threshold <= 0:
             raise ValueError(f'ATR百分比和基础阈值必须为正数 (atr_pct={atr_pct}, base_threshold={base_threshold})')
-
-        if atr_pct > 0.5:  # 50%以上的波动率通常是错误数据
+        if atr_pct > 0.5:
             raise ValueError(f'ATR百分比异常高 (atr_pct={atr_pct})，请检查数据')
-
-        # ATR百分比分级
-        # 低波动：<1.5% (蓝筹股、债券ETF)
-        # 中波动：1.5%-3% (普通股票)
-        # 高波动：3%-5% (小盘股、科技股)
-        # 极高波动：>5% (加密货币、期权)
-
         if atr_pct < 0.015:
-            # 低波动：降低阈值
             result = base_threshold * 0.8
         elif atr_pct < 0.03:
-            # 中波动：标准阈值
             result = base_threshold
         elif atr_pct < 0.05:
-            # 高波动：提高阈值
             result = base_threshold * 1.2
         else:
-            # 极高波动：大幅提高阈值
             result = base_threshold * 1.5
-
-        # 确保结果在合理范围内
         return max(0.5, min(result, 5.0))
     
     def get_dynamic_price_threshold(self, atr_pct: float, base_threshold: float = 0.03) -> float:
-        """
-        基于ATR百分比动态计算价格变化阈值
-
-        Args:
-            atr_pct: ATR占价格的百分比
-            base_threshold: 基础阈值
-
-        Returns:
-            动态价格变化阈值（范围：0.005-0.2）
-
-        Raises:
-            ValueError: 如果输入参数无效
-        """
-        # 输入验证
+        """基于ATR百分比动态计算价格变化阈值"""
         if atr_pct <= 0 or base_threshold <= 0:
             raise ValueError(f'ATR百分比和基础阈值必须为正数 (atr_pct={atr_pct}, base_threshold={base_threshold})')
-
-        if atr_pct > 0.5:  # 50%以上的波动率通常是错误数据
+        if atr_pct > 0.5:
             raise ValueError(f'ATR百分比异常高 (atr_pct={atr_pct})，请检查数据')
-
-        # 使用ATR的倍数作为阈值
-        # 低波动：1倍ATR
-        # 中波动：1.5倍ATR
-        # 高波动：2倍ATR
-
         if atr_pct < 0.015:
             result = max(atr_pct * 1.0, base_threshold * 0.8)
         elif atr_pct < 0.03:
@@ -304,20 +156,10 @@ class WyckoffThresholds(BaseModel):
             result = max(atr_pct * 2.0, base_threshold * 1.2)
         else:
             result = max(atr_pct * 2.5, base_threshold * 1.5)
-
-        # 确保结果在合理范围内（0.5%-20%）
         return max(0.005, min(result, 0.2))
     
     def classify_volatility(self, atr_pct: float) -> str:
-        """
-        根据ATR百分比分类波动率
-        
-        Args:
-            atr_pct: ATR占价格的百分比
-            
-        Returns:
-            波动率分类：'low', 'medium', 'high', 'extreme'
-        """
+        """根据ATR百分比分类波动率"""
         if atr_pct < 0.015:
             return 'low'
         elif atr_pct < 0.03:
@@ -326,3 +168,81 @@ class WyckoffThresholds(BaseModel):
             return 'high'
         else:
             return 'extreme'
+
+class WyckoffConfig(BaseModel):
+    """威科夫分析配置（带验证）"""
+    confidence_threshold: float = Field(0.85, ge=0.0, le=1.0)
+    min_data_length: int = Field(60, ge=20, le=1000)
+    atr_period: int = Field(14, ge=5, le=50)
+    atr_multiplier: float = Field(1.5, ge=0.5, le=5.0)
+    volume_ma_period: int = Field(20, ge=5, le=100)
+
+    # 🔧 v1.3新增：动态阈值系统
+    enable_adaptive_thresholds: bool = Field(True, description="启用动态阈值自适应系统")
+    adaptive_thresholds_atr_period: int = Field(14, ge=5, le=50, description="动态阈值ATR计算周期")
+    
+    # 贝叶斯自适应阈值参数
+    prior_breakout_mu: float = Field(1.5, ge=1.0, le=5.0, description="突破量比先验均值")
+    prior_shrink_mu: float = Field(0.6, ge=0.1, le=1.0, description="缩量量比先验均值")
+    prior_sigma: float = Field(0.5, ge=0.1, le=2.0, description="量比先验标准差")
+    amplitude_breakout_percentile: float = Field(85.0, ge=50.0, le=99.0, description="贝叶斯推断：突破日振幅截取分位数")
+    amplitude_shrink_percentile: float = Field(15.0, ge=1.0, le=50.0, description="贝叶斯推断：缩量日振幅截取分位数")
+
+    # Spring检测参数
+    spring_lookback: int = Field(120, ge=30, le=252)
+    spring_max_recovery_days: int = Field(3, ge=1, le=10)
+    spring_range_threshold: float = Field(0.30, ge=0.1, le=0.5)
+
+    climax_range_multiplier: float = Field(1.5, ge=1.0, le=5.0)
+
+    # 突破搜索窗口 (Spring/Upthrust 搜索最后 M 根 K线)
+    breakout_search_window: int = Field(5, ge=1, le=20)
+    
+    # ── 阈值与成本配置 ──────────────────────────────────────
+    thresholds: WyckoffThresholds = Field(default_factory=WyckoffThresholds)
+
+    @field_validator('min_data_length')
+    @classmethod
+    def validate_data_length(cls, v):
+        if v < 20:
+            raise ValueError('数据长度至少20天')
+        return v
+
+    @field_validator('atr_period')
+    @classmethod
+    def validate_atr_period(cls, v):
+        if v < 5 or v > 50:
+            raise ValueError('ATR周期必须在5-50之间')
+        return v
+
+    @field_validator('spring_lookback')
+    @classmethod
+    def validate_spring_lookback(cls, v):
+        if v < 30:
+            raise ValueError('Spring回溯窗口至少30天')
+        return v
+
+    @field_validator('spring_range_threshold')
+    @classmethod
+    def validate_spring_range(cls, v):
+        if not 0.05 <= v <= 0.5:
+            raise ValueError('Spring范围阈值必须在0.05-0.5之间')
+        return v
+
+    @model_validator(mode='after')
+    def validate_config_dependencies(self):
+        if self.atr_period >= self.min_data_length:
+            raise ValueError(f'ATR周期 ({self.atr_period}) 必须小于最小数据长度 ({self.min_data_length})')
+        if self.spring_lookback < self.min_data_length / 2:
+            raise ValueError(f'Spring回溯窗口 ({self.spring_lookback}) 应该至少是最小数据长度的一半 ({self.min_data_length / 2:.0f})')
+        if self.volume_ma_period >= self.min_data_length:
+            raise ValueError(f'成交量MA周期 ({self.volume_ma_period}) 必须小于最小数据长度 ({self.min_data_length})')
+        return self
+    
+    model_config = ConfigDict(
+        env_prefix="WYCKOFF_",
+        populate_by_name=True
+    )
+
+# 触发模型重建
+WyckoffConfig.model_rebuild()
