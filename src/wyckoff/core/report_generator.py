@@ -72,11 +72,23 @@ class WyckoffReportGenerator:
         mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
         conflict = self._analyze_conflict(phase_result.get('phase'), mtf)
 
+        # 🔧 终极逻辑自检 (Final Sanity Check): 解决“诊断与处方打架”问题
+        is_distribution = 'Distribution' in phase_result.get('phase', '')
+        
         # 组装报告
         report = self.header_builder.build(phase_result, trading_range)
         report += self.evidence_builder.build(phase_result)
         report += self.pattern_builder.build(trading_range, spring, upthrust, sos, sow, lps, lpsy, phase_result.get('phase'))
         report += self.signal_builder.build(joc, fti, vsa, boring_res, dead_corner)
+        
+        # 在生成结论前，如果处于派发阶段，强制修正做多信号为无效
+        if is_distribution:
+            # 强制屏蔽做多信号的影响
+            joc['detected'] = False
+            lps['detected'] = False
+            spring['detected'] = False
+            logger.warning(f"Detection contradiction: Distribution phase detected. Bullish signals (JOC/LPS/Spring) suppressed for {self.symbol}.")
+
         report += self.conclusion_builder.build(
             phase_result, trading_range, cause_effect, conflict, quality_data,
             joc, spring, sos, lps, fti, upthrust, sow, lpsy, mtf,

@@ -25,47 +25,88 @@ class SignalSection(BaseSectionBuilder):
 """
 
         # Advanced Signals (JOC, FTI, VSA)
-        has_advanced = joc.get('detected') or fti.get('detected') or any(
+        # 安全地检查FTI和JOC
+        joc_detected = False
+        if joc is not None:
+            if hasattr(joc, 'detected'):
+                joc_detected = joc.detected
+            elif isinstance(joc, dict):
+                joc_detected = joc.get('detected', False)
+
+        fti_detected = False
+        if fti is not None:
+            if hasattr(fti, 'detected'):
+                fti_detected = fti.detected
+            elif isinstance(fti, dict):
+                fti_detected = fti.get('detected', False)
+
+        has_advanced = joc_detected or fti_detected or any(
             vsa.get(k, {}).get('detected') for k in ('no_supply', 'no_demand', 'stopping_vol')
         )
         if has_advanced:
             report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【新威科夫信号（孟洪涛）】\n"
 
-        if joc.get('detected'):
-            joc_date = joc['date'].strftime('%Y-%m-%d') if hasattr(joc['date'], 'strftime') else str(joc['date'])
-            test_info = ""
-            if joc.get('test_detected') and joc.get('test_date') is not None:
-                td = joc['test_date'].strftime('%Y-%m-%d') if hasattr(joc['test_date'], 'strftime') else str(joc['test_date'])
-                test_info = f"\n   回测确认: {td}（缩量{joc.get('test_vol_ratio', 0):.2f}x） ✓"
+        # 安全地获取JOC信息
+        if joc is not None:
+            if hasattr(joc, 'detected'):
+                joc_detected = joc.detected
             else:
-                test_info = "\n   回测确认: 等待回测（Test of JOC）中"
-            
-            confidence = joc.get('confidence', 0) * 100 if isinstance(joc.get('confidence'), (int, float)) else 75
-            report += f"""
+                joc_detected = joc.get('detected', False) if isinstance(joc, dict) else False
+
+            if joc_detected:
+                # 从模型对象或dict中获取数据
+                if hasattr(joc, 'date'):
+                    joc_data = joc
+                else:
+                    joc_data = joc
+
+                joc_date = joc_data['date'].strftime('%Y-%m-%d') if hasattr(joc_data['date'], 'strftime') else str(joc_data['date'])
+                test_info = ""
+                if joc_data.get('test_detected') and joc_data.get('test_date') is not None:
+                    td = joc_data['test_date'].strftime('%Y-%m-%d') if hasattr(joc_data['test_date'], 'strftime') else str(joc_data['test_date'])
+                    test_info = f"\n   回测确认: {td}（缩量{joc_data.get('test_vol_ratio', 0):.2f}x） ✓"
+                else:
+                    test_info = "\n   回测确认: 等待回测（Test of JOC）中"
+
+                confidence = joc_data.get('confidence', 0) * 100 if isinstance(joc_data.get('confidence'), (int, float)) else 75
+                report += f"""
 🚀 检测到JOC（跃过小溪 / Jump Across the Creek）:
    日期: {joc_date}
-   小溪阻力位: {joc['creek_level']:.2f}
-   突破收盘: {joc['close_price']:.2f} (+{joc['breakout_pct']:.1f}%)
-   成交量: {joc['volume_ratio']:.1f}x 均量{test_info}
+   小溪阻力位: {joc_data['creek_level']:.2f}
+   突破收盘: {joc_data['close_price']:.2f} (+{joc_data['breakout_pct']:.1f}%)
+   成交量: {joc_data['volume_ratio']:.1f}x 均量{test_info}
    置信度: {confidence:.0f}%
    趋势跟踪买入信号（等待缩量回测 JOC 位入场）
 """
 
-        if fti.get('detected'):
-            fti_date = fti['date'].strftime('%Y-%m-%d') if hasattr(fti['date'], 'strftime') else str(fti['date'])
-            test_info = ""
-            if fti.get('test_detected') and fti.get('test_date') is not None:
-                td = fti['test_date'].strftime('%Y-%m-%d') if hasattr(fti['test_date'], 'strftime') else str(fti['test_date'])
-                test_info = f"\n   回测确认: {td}（无需求反弹 {fti.get('test_vol_ratio', 0):.2f}x） ✓ 最佳做空点"
+        # 安全地获取FTI信息
+        if fti is not None:
+            if hasattr(fti, 'detected'):
+                fti_detected = fti.detected
             else:
-                test_info = "\n   回测确认: 等待无需求反弹（Test of Ice）中"
-            report += f"""
+                fti_detected = fti.get('detected', False) if isinstance(fti, dict) else False
+
+            if fti_detected:
+                # 从模型对象或dict中获取数据
+                if hasattr(fti, 'date'):
+                    fti_data = fti
+                else:
+                    fti_data = fti
+
+                fti_date = fti_data['date'].strftime('%Y-%m-%d') if hasattr(fti_data['date'], 'strftime') else str(fti_data['date'])
+                test_info = ""
+                if fti_data.get('test_detected') and fti_data.get('test_date') is not None:
+                    td = fti_data['test_date'].strftime('%Y-%m-%d') if hasattr(fti_data['test_date'], 'strftime') else str(fti_data['test_date'])
+                    test_info = f"\n   回测确认: {td}（无需求反弹 {fti_data.get('test_vol_ratio', 0):.2f}x） ✓ 最佳做空点"
+                else:
+                    test_info = "\n   回测确认: 等待无需求反弹（Test of Ice）中"
+                report += f"""
 🔻 检测到FTI（跌破冰层 / Fall Through the Ice）:
    日期: {fti_date}
-   冰层支撑位: {fti['ice_level']:.2f}
-   跌破收盘: {fti['close_price']:.2f} ({fti['breakdown_pct']:.1f}%)
-   成交量: {fti['volume_ratio']:.1f}x 均量{test_info}
-   置信度: {fti['confidence']*100:.0f}%
+   冰层支撑位: {fti_data['ice_level']:.2f}
+   跌破收盘: {fti_data['close_price']:.2f} ({fti_data['breakdown_pct']:.1f}%)
+   成交量: {fti_data['volume_ratio']:.1f}x 均量{test_info}
+   置信度: {fti_data['confidence']*100:.0f}%
    做空警示信号（等待缩量回测冰层位入场）
 """
 

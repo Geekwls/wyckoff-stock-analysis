@@ -66,7 +66,7 @@ class BaoStockStrategy(DataSourceStrategy):
         rs = bs.query_history_k_data_plus(
             code, fields,
             start_date=start_date, end_date=end_date,
-            frequency=bs_freq, adjustflag="3"
+            frequency=bs_freq, adjustflag="2"
         )
 
         data_list = []

@@ -36,11 +36,47 @@ class ConclusionSection(BaseSectionBuilder):
         
         post_breakout = self._check_post_breakout_state(trading_range, joc, current_price)
         
-        if quality_score < 4 or phase_conf < 0.5 or conflict.get('has_conflict'):
+        # 🔧 修复矛盾三：基于高时间框架优先原则的仲裁逻辑
+        is_weekly_bullish = conflict.get('weekly_trend') == 'bullish'
+        # 安全地检查fti是否为模型对象或dict
+        fti_detected = False
+        if fti is not None:
+            if hasattr(fti, 'detected'):
+                fti_detected = fti.detected
+            elif isinstance(fti, dict):
+                fti_detected = fti.get('detected', False)
+        is_daily_bearish = 'Distribution' in phase_str or 'Markdown' in phase_str or fti_detected
+        
+        if conflict.get('has_conflict') and is_weekly_bullish and is_daily_bearish:
+            # 🔧 修复：严格派发逻辑 - 绝不在派发阶段建议做多
+            if 'Distribution' in phase_str or '派发' in phase_str:
+                report += f"""
+⏸️ 严格观望（派发阶段确认）:
+   当前状态: 日线确认{phase_str}，表明主力正在出货。
+   尽管周/月线大趋势看多，但派发阶段的定义是主力资金流出。
+
+   ⛔ 禁止操作:
+   - 绝对禁止在此位置做多（避免接主力筹码）
+   - 谨慎做空（除非AR/ST结构完整）
+
+   ✅ 推荐策略:
+   - 严格观望，等待派发结束确认
+   - 关注关键支撑: {trading_range.get('low', 0):.2f}元
+   - 等待明确的LPS（最后支撑点）或新的Spring信号
+   - 确认派发结束后再考虑入场
+"""
+            else:
+                # 非派发阶段的跨周期冲突处理
+                report += f"""
+⏸️ 战略观望（等待趋势一致）:
+   当前状态: 日线出现{phase_str}信号，但周/月线大趋势仍然看多。
+   建议: 等待日线止跌迹象或跨周期趋势一致后再做决策。
+"""
+        elif quality_score < 4 or phase_conf < 0.5:
             report += f"⏸️ 观望等待（信号质量不足）:\n   当前评分: {quality_score}/{max_score} | 置信度: {phase_conf*100:.0f}%\n   结论: 信号强度或可靠性低于执行阈值，建议继续观察。\n"
             if post_breakout: report += f"\n{post_breakout}"
         else:
-            # 详细结论逻辑 (简化版，实际应用中可根据需要扩充)
+            # 详细结论逻辑
             is_distribution = 'Distribution' in phase_str or '派发' in phase_str
             if post_breakout: report += post_breakout
             

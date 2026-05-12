@@ -52,15 +52,24 @@ class TrendDetector(BaseDetector):
 
         joc_candidates = df[breakout_mask].sort_index(ascending=False)
         fresh_joc_found = False
+        current_price = self.data['Close'].iloc[-1]
+        
         for joc_idx_temp in joc_candidates.index:
+            # 增加：时间衰减检查
             if self._is_signal_stale(joc_idx_temp, 'joc'): continue
+            
+            # 增加：价格证伪检查
+            if self._is_signal_falsified('joc', creek_level, current_price):
+                logger.info(f"JOC signal at {joc_idx_temp} falsified by current price {current_price}")
+                continue
+                
             joc_idx = joc_idx_temp
             joc_row = df.loc[joc_idx]
             fresh_joc_found = True
             break
 
         if not fresh_joc_found:
-            return {'detected': False, 'reason': 'no_fresh_joc_signal_all_stale'}
+            return {'detected': False, 'reason': 'no_fresh_valid_joc_signal'}
 
         v_ma_val = vol_ma.loc[joc_idx]
         volume_ratio = joc_row['Volume'] / v_ma_val if v_ma_val > 0 else 0
@@ -153,8 +162,27 @@ class TrendDetector(BaseDetector):
         if not breakdown_mask.any():
             return {'detected': False, 'reason': 'no_fti_breakdown_found'}
 
-        fti_idx = df[breakdown_mask].index[-1]
-        fti_row = df.loc[fti_idx]
+        fti_candidates = df[breakdown_mask].sort_index(ascending=False)
+        fresh_fti_found = False
+        current_price = self.data['Close'].iloc[-1]
+
+        for fti_idx_temp in fti_candidates.index:
+            # 增加：时间衰减检查
+            if self._is_signal_stale(fti_idx_temp, 'fti'): continue
+            
+            # 增加：价格证伪检查 (解决用户提到的 26元 FTI 在 59元 时依然生效的问题)
+            if self._is_signal_falsified('fti', ice_level, current_price):
+                logger.info(f"FTI signal at {fti_idx_temp} (level {ice_level}) falsified by current price {current_price}")
+                continue
+                
+            fti_idx = fti_idx_temp
+            fti_row = df.loc[fti_idx]
+            fresh_fti_found = True
+            break
+
+        if not fresh_fti_found:
+            return {'detected': False, 'reason': 'no_fresh_valid_fti_signal'}
+
         v_ma_val = vol_ma.loc[fti_idx]
         volume_ratio, breakdown_pct = fti_row['Volume'] / v_ma_val if v_ma_val > 0 else 0, (fti_row['Close'] - ice_level) / ice_level
 

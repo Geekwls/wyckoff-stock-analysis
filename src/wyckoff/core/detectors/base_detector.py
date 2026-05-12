@@ -106,6 +106,27 @@ class BaseDetector(ABC):
         now = pd.Timestamp.now(tz='UTC')
         return max(0, (now - ts).days)
 
+    def _is_signal_falsified(self, signal_type: str, signal_price: float, current_price: float) -> bool:
+        """
+        根据当前价格判断信号是否已被“证伪”
+        
+        理论依据：
+        - 如果是 FTI (看跌)，但价格已大幅上涨并站稳冰层上方 -> 信号被证伪 (可能是震仓)
+        - 如果是 JOC (看涨)，但价格已大幅下跌并站稳小溪下方 -> 信号被证伪 (可能是诱多)
+        """
+        if not signal_price or not current_price:
+            return False
+            
+        if signal_type in ['fti', 'sow', 'upthrust']:
+            # 看跌信号证伪：价格站稳阻力位上方 5% 以上
+            return current_price > signal_price * 1.05
+        
+        if signal_type in ['joc', 'sos', 'spring']:
+            # 看涨信号证伪：价格跌破支撑位下方 5% 以下
+            return current_price < signal_price * 0.95
+            
+        return False
+
     def _get_tech_indicators(self, window: int = 20):
         """统一获取技术指标（Volume MA, Low Min, High Max）"""
         if not self._indicator_cache:

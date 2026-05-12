@@ -51,18 +51,24 @@ class ReversalDetector(BaseDetector):
         df = self.data.tail(40).copy()
         vol_ma, low_min, high_max = self._get_tech_indicators(20)
         
-        # 抛售高潮 (Selling Climax)
+        # 获取 60 日最高/最低作为趋势背景参考
+        high_60 = self.data['High'].rolling(60).max().reindex(df.index)
+        low_60 = self.data['Low'].rolling(60).min().reindex(df.index)
+        
+        # 抛售高潮 (Selling Climax): 必须发生在下跌趋势背景下 (相对于60日高点跌幅 > 8%)
         sc_mask = (
             (df['Close'] < df['Open']) & 
             (df['Volume'] > vol_ma.reindex(df.index) * self.thresholds.VOLUME_CONFIRMATION['strong']) & 
-            (df['Low'] == low_min.reindex(df.index))
+            (df['Low'] == low_min.reindex(df.index)) &
+            (df['Low'] < high_60 * 0.92)  # 趋势过滤
         )
         
-        # 买入高潮 (Buying Climax)
+        # 买入高潮 (Buying Climax): 必须发生上涨趋势背景下 (相对于60日低点涨幅 > 15%)
         bc_mask = (
             (df['Close'] > df['Open']) & 
             (df['Volume'] > vol_ma.reindex(df.index) * self.thresholds.VOLUME_CONFIRMATION['strong']) & 
-            (df['High'] == high_max.reindex(df.index))
+            (df['High'] == high_max.reindex(df.index)) &
+            (df['High'] > low_60 * 1.15)  # 趋势过滤
         )
         
         if sc_mask.any():
