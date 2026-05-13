@@ -1,6 +1,8 @@
 import pandas as pd
 import logging
+import json
 from typing import Dict, Any
+from datetime import datetime
 from .reports.section_builders.header_section import HeaderSection
 from .reports.section_builders.evidence_section import EvidenceSection
 from .reports.section_builders.pattern_section import PatternSection
@@ -120,11 +122,104 @@ class WyckoffReportGenerator:
         
         return report
 
+    def generate_json(self) -> str:
+        """生成 JSON 格式报告"""
+        if self.data is None:
+            self.analyzer.fetch_data()
+            self.data = self.analyzer.data
+            self.pattern_detector = self.analyzer.pattern_detector
+
+        # 获取各检测器的结果
+        phase_result = self.pattern_detector.identify_phase()
+        trading_range = self.pattern_detector.detect_trading_range()
+
+        # 模式检测
+        spring = self.pattern_detector.detect_spring_menhongtao()
+        upthrust = self.pattern_detector.detect_upthrust()
+        sos = self.pattern_detector.detect_sos()
+        sow = self.pattern_detector.detect_sow()
+        lps = self.pattern_detector.detect_lps()
+        lpsy = self.pattern_detector.detect_lpsy()
+
+        # 高级信号
+        joc = self.pattern_detector.detect_joc_menhongtao()
+        fti = self.pattern_detector.detect_fti()
+        vsa = self.pattern_detector.detect_vsa_menhongtao()
+        boring_res = self.pattern_detector.detect_boring_zone()
+        dead_corner = self.pattern_detector.detect_dead_corner_breakout()
+
+        # 外部分析
+        cause_effect = getattr(self.analyzer, 'calculate_cause_effect', lambda: {})()
+        market_env_res = getattr(self.analyzer, '_analyze_market_environment', lambda: {})()
+        market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
+
+        # 信号质量
+        patterns = self.pattern_detector._collect_all_events()
+        patterns.update({'phase': phase_result.get('phase'), 'boring_zone': boring_res, 'dead_corner_breakout': dead_corner})
+        quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
+
+        # 跨周期分析
+        from .multi_timeframe_analyzer import MultiTimeframeAnalyzer
+        mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
+        conflict = self._analyze_conflict(phase_result.get('phase'), mtf)
+
+        # 获取事件仲裁结果和突破分析
+        arbitration_result = None
+        breakout_analysis = None
+        try:
+            if hasattr(self.pattern_detector, 'phase_coordinator'):
+                events = self.pattern_detector.phase_coordinator.collect_all_events()
+                arbitration_result = events.get('arbitration_result')
+                breakout_analysis = events.get('breakout_analysis')
+        except Exception as e:
+            logger.debug(f"Failed to get arbitration/breakout analysis: {e}")
+
+        # 构建JSON结果
+        result = {
+            'symbol': self.symbol,
+            'timestamp': datetime.now().isoformat(),
+            'summary': {
+                'phase': phase_result.get('phase', 'unknown'),
+                'confidence': phase_result.get('confidence', 0),
+                'current_price': float(self.data['Close'].iloc[-1]) if self.data is not None else None,
+                '52w_high': float(self.data['High'].tail(252).max()) if len(self.data) >= 252 else None,
+                '52w_low': float(self.data['Low'].tail(252).min()) if len(self.data) >= 252 else None,
+            },
+            'trading_range': trading_range if isinstance(trading_range, dict) else {},
+            'patterns': {
+                'spring': spring,
+                'upthrust': upthrust,
+                'sos': sos,
+                'sow': sow,
+                'lps': lps,
+                'lpsy': lpsy,
+                'joc': joc,
+                'fti': fti,
+            },
+            'advanced_signals': {
+                'vsa': vsa,
+                'boring_zone': boring_res,
+                'dead_corner': dead_corner,
+            },
+            'cause_effect': cause_effect,
+            'market_environment': {
+                'environment': str(market_env),
+                'details': market_env_res,
+            },
+            'signal_quality': quality_data,
+            'multi_timeframe': mtf,
+            'conflict_analysis': conflict,
+            'arbitration_result': arbitration_result,
+            'breakout_analysis': breakout_analysis,
+        }
+
+        return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+
     def _analyze_conflict(self, phase, mtf) -> dict:
         weekly_trend = mtf.get('weekly_trend', 'unknown')
         monthly_trend = mtf.get('monthly_trend', 'unknown')
         trend_agreement = mtf.get('trend_agreement', False)
-        
+
         # 简单的冲突检测逻辑
         has_conflict = not trend_agreement and weekly_trend != 'unknown'
         return {

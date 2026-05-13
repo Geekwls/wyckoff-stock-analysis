@@ -429,7 +429,13 @@ class ConclusionSection(BaseSectionBuilder):
 
             if breakout_analysis:
                 quality = breakout_analysis.get('quality', 'unknown')
-                report += f"突破质量：{quality.upper()}（{breakout_analysis.get('quality_score', {}).get('score', 0)}/100）\n\n"
+                quality_score = breakout_analysis.get('quality_score', 0)
+                # 🔧 修复：quality_score可能是int或dict
+                if isinstance(quality_score, dict):
+                    score_val = quality_score.get('score', 0)
+                else:
+                    score_val = quality_score
+                report += f"突破质量：{quality.upper()}（{score_val}/100）\n\n"
 
             report += "向下突破确认原区间逻辑或进入下跌趋势：\n\n"
             report += "1. **当前状态：确认派发或进入Markdown**\n"
@@ -499,7 +505,12 @@ class ConclusionSection(BaseSectionBuilder):
 
         elif direction == 'down':
             report += f"突破方向: 向下突破\n"
-            report += f"突破质量: {quality.upper()}（评分：{quality_score.get('score', 0)}/100）\n\n"
+            # 🔧 修复：quality_score可能是int或dict
+            if isinstance(quality_score, dict):
+                score_val = quality_score.get('score', 0)
+            else:
+                score_val = quality_score
+            report += f"突破质量: {quality.upper()}（评分：{score_val}/100）\n\n"
 
             vol_analysis = breakout_analysis.get('volume_analysis', {})
             if vol_analysis:

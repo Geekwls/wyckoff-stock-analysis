@@ -81,25 +81,6 @@ python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 
 ---
 
-## 🔄 更新日志
-
-### v2.0.0 (2026-05-09) - 重大版本更新
-
-**🎯 理论符合度提升**: 4.5/5 → 4.9/5
-**📈 信号准确率提升**: ~60% → ~80%
-
-
-## 📚 文档导航
-
-| 文档 | 说明 |
-|------|------|
-| 📖 [README.md](README.md) | 项目概述（本文件） |
-| 🧠 [SKILL.md](SKILL.md) | AI Agent 系统指令（威科夫方法论） |
-| 📘 [HOW_TO_USE.md](HOW_TO_USE.md) | 详细使用指南（CLI / Python 库 / MCP 配置） |
-| 📗 [references/](references/) | 威科夫理论文档和实战指南 |
-
----
-
 ## 📁 项目结构
 
 > **⚠️ 注意**：以下为简化导航，仅展示核心文件和目录。
