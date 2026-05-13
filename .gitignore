@@ -1,44 +1,65 @@
-# Wyckoff Analysis Skill - Git Ignore
-
-# Security: Ignore internal cache and state files
-stock_cache.json
-src/wyckoff/stock_cache.json
-.cache/
-
-# Python environment
+```
+# Python cache
 __pycache__/
-*.py[cod]
-*$py.class
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+*.pyc
+*.pyo
+*.pyd
 
-# Project specific
-.pytest_cache/
+# Build and distribution artifacts
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.ENV/
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Coverage reports
 .coverage
 htmlcov/
-dist/
-build/
-*.egg-info/
-scratch/
-output.json
-docs/
-memory/
-vectorization_optimization_summary.md
+coverage/
 
-# Agent working directory
-.opencode/
-
-# IDE
-.idea/
+# IDE files
 .vscode/
+.idea/
 *.swp
 *.swo
 
-# Build artifacts
-*.egg
-*.whl
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+```
