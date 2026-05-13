@@ -103,7 +103,7 @@ class RecommendationEngine:
 
     def calculate_weighted_score(self, data: Any, pattern_results: Dict[str, Any], market_env: MarketEnvironment) -> SignalQualityModel:
         """
-        计算高级加权评分 (包含时间衰减与冲突惩罚)
+        计算高级加权评分 (v2.1校准：修正Phase E冲突惩罚，提升基础分)
         """
         events = pattern_results.get('events_detected', {}) or pattern_results
         if not events:
@@ -113,9 +113,6 @@ class RecommendationEngine:
         reasons = []
         weights = self.thresholds.QUALITY_WEIGHTS
         
-        # 🔧 问题四修复：主要信号权重分配（增加ST和AR）
-        # ST（Secondary Test）和AR（Automatic Reaction）是威科夫Phase A的关键信号
-        # 不应被忽略，特别是在派发/吸筹初期
         important_signals = [
             ('joc', 40),
             ('spring', 35),
@@ -125,69 +122,60 @@ class RecommendationEngine:
             ('sow', 25),
             ('lpsy', 15),
             ('fti', 40),
-            ('secondary_test', 20),  # 🔧 新增：ST是Phase A关键确认信号
-            ('automatic_reaction', 15)  # 🔧 新增：AR定义TR边界
+            ('secondary_test', 20),
+            ('automatic_reaction', 15)
         ]
 
         bullish_count = 0
         bearish_count = 0
+        has_major_signal = False  # 是否至少有1个主要交易信号
+        detected_keys = []
 
         for key, max_weight in important_signals:
             info = events.get(key)
 
-            # 🔧 新增：如果不在顶层events中，尝试从_raw_events获取
             if not info and '_raw_events' in events:
                 raw_events = events.get('_raw_events', {})
                 info = raw_events.get(key)
 
             if not info or not self._get_attr(info, 'detected'): continue
 
-            # 🔧 新增：检查看空信号是否已失效（被价格吸收）
+            detected_keys.append(key)
+            if key in ('spring', 'sos', 'sow', 'joc', 'fti', 'upthrust'):
+                has_major_signal = True
+
             if key in ['sow', 'lpsy', 'upthrust']:
                 if self._is_bearish_signal_absorbed(key, info, data):
-                    # 信号已被吸收，不计入冲突评分
-                    signal_price = self._get_attr(info, 'price', 0)
-                    current_price = data['Close'].iloc[-1] if hasattr(data, 'Close') else 0
-                    logger.info(f"Signal {key} at {signal_price:.2f} absorbed by current price {current_price:.2f}, skipping conflict counting")
                     reasons.append(f"过时信号{key.upper()}已失效不计入冲突")
-                    continue  # Skip this signal in conflict detection
+                    continue
 
-            # 判断方向
             if key in ['joc', 'spring', 'sos', 'lps', 'automatic_reaction']:
                 bullish_count += 1
             elif key in ['fti', 'upthrust', 'sow', 'lpsy', 'secondary_test']:
-                # 🔧 修复：ST的方向判断需要根据上下文
-                # 派发期的ST确认需求耗尽（看空），吸筹期的ST确认供应耗尽（看多）
-                # 这里简化处理：ST归为中性，根据阶段判断
                 phase_str = pattern_results.get('phase', 'Unknown')
                 if 'Distribution' in phase_str or '派发' in phase_str:
-                    bearish_count += 1  # 派发期的ST确认看空
+                    bearish_count += 1
                 elif 'Accumulation' in phase_str or '吸筹' in phase_str:
-                    bullish_count += 1  # 吸筹期的ST确认看多
+                    bullish_count += 1
 
-            # 质量因子 (0.5 - 1.2)
-            quality_factor = 0.8
+            quality_factor = 1.0
 
-            # 1. 成交量因子
-            # 🔧 问题四修复：ST和AR使用特殊的volume_ratio处理
             if key == 'secondary_test':
-                # ST的volume_ratio是相对climax的，不是相对MA的
                 st_vol_ratio = self._get_attr(info, 'st_vol_ratio', None)
                 supply_exhausted = self._get_attr(info, 'supply_exhausted', False)
                 if supply_exhausted:
-                    quality_factor += 0.3  # ST确认供应耗尽，加分
+                    quality_factor += 0.3
                     reasons.append(f"ST确认需求耗尽（量比{st_vol_ratio:.1%}）")
                 elif st_vol_ratio and st_vol_ratio < 0.6:
-                    quality_factor += 0.1  # ST接近确认，小幅加分
+                    quality_factor += 0.1
                     reasons.append(f"ST接近确认（量比{st_vol_ratio:.1%}）")
             elif key == 'automatic_reaction':
-                # AR没有volume_ratio，用rebound_pct/decline_pct判断
                 rebound_pct = self._get_attr(info, 'rebound_pct', None)
                 decline_pct = self._get_attr(info, 'decline_pct', None)
-                if rebound_pct and rebound_pct > 0.03:  # 反弹超过3%
+                if rebound_pct and rebound_pct > 0.03:
                     quality_factor += 0.15
                     reasons.append(f"AR自然反弹强劲（{rebound_pct*100:.1f}%）")
-                elif decline_pct and decline_pct < -0.03:  # 回落超过3%
+                elif decline_pct and decline_pct < -0.03:
                     quality_factor += 0.15
                     reasons.append(f"AR自然回落充分（{decline_pct*100:.1f}%）")
             else:
@@ -196,11 +184,9 @@ class RecommendationEngine:
                     quality_factor += weights['volume_ratio']
                     reasons.append(f"{key.upper()} 成交量强力确认")
 
-            # 2. 置信度因子
             conf = self._get_attr(info, 'confidence', 0.5)
             quality_factor += (conf - 0.5) * weights['confidence']
 
-            # 3. 时间衰减 (Time Decay)
             sig_date = self._get_attr(info, 'date')
             if sig_date:
                 if isinstance(sig_date, str):
@@ -209,14 +195,11 @@ class RecommendationEngine:
                         pass
 
                 if isinstance(sig_date, datetime):
-                    # 处理时区问题
                     from datetime import timezone
                     now = datetime.now(timezone.utc) if sig_date.tzinfo else datetime.now()
                     try:
                         days_ago = (now - sig_date).days
-                    except Exception as e:
-                        # 如果时区不兼容，转换为UTC
-                        logger.debug(f"Timezone conversion fallback for {sig_date}: {e}")
+                    except Exception:
                         if sig_date.tzinfo:
                             sig_date = sig_date.replace(tzinfo=None)
                         now = datetime.now()
@@ -251,6 +234,26 @@ class RecommendationEngine:
             base_score += 5
             reasons.append("Spring有部分前置结构，质量中等 (+5分)")
 
+        # 多次ST递减量缩加分 (Phase B积累确认)
+        st_res = events.get('secondary_test')
+        if st_res and self._get_attr(st_res, 'detected'):
+            test_count = self._get_attr(st_res, 'test_count', 1)
+            st_trend = self._get_attr(st_res, 'st_sequence_trend', 'stable')
+            if test_count >= 3 and st_trend == 'declining':
+                base_score += 10
+                reasons.append(f"多次ST({test_count}次)量递减：供应被持续吸收 (+10分)")
+            elif test_count >= 2:
+                base_score += 3
+                reasons.append(f"多次ST({test_count}次)确认区间 (+3分)")
+
+        # PS→SC序列确认加分 (Phase A完整结构)
+        ps_res = events.get('preliminary_support') or (events.get('_raw_events', {}).get('preliminary_support'))
+        if ps_res and self._get_attr(ps_res, 'detected'):
+            sc_after = self._get_attr(ps_res, 'sc_confirmed_after', False)
+            if sc_after:
+                base_score += 8
+                reasons.append("PS→SC链条确认：初次支撑后有效恐慌抛售，Phase A结构完整 (+8分)")
+
         # 序列矛盾扣分
         seq_conflicts = seq_val.get('conflicts', [])
         for conflict in seq_conflicts:
@@ -280,34 +283,29 @@ class RecommendationEngine:
             base_score += 25
             reasons.append("🎯 发现“死角突破”信号！从枯燥区放量跃起，极具爆发力")
 
-        # 🔧 问题四修复：冲突惩罚优化
-        # 原逻辑：只要有多空信号就扣30分，过于严厉
-        # 新逻辑：区分"严重冲突"和"阶段过渡信号"
+        # --- 冲突惩罚 (v2.1校准) ---
         if bullish_count > 0 and bearish_count > 0:
             phase_str = pattern_results.get('phase', 'Unknown')
 
-            # 检查是否是阶段过渡期的合理信号（如吸筹→上涨）
-            # 🔧 修复：Phase A本身就应该有混合信号（AR+ST），不应惩罚
-            is_phase_transition = (
-                ('Phase A' in phase_str or 'Phase B' in phase_str) or  # Phase A/B必然有混合信号
-                ('Accumulation' in phase_str and bullish_count > bearish_count) or
-                ('Distribution' in phase_str and bearish_count > bullish_count)
-            )
+            # Phase E/Markup中SOW是正常回调，不应惩罚
+            is_phase_e = ('Phase E' in phase_str or 'Markup' in phase_str or 'Markdown' in phase_str)
+            dominant_ratio = max(bullish_count, bearish_count) / max(1, min(bullish_count, bearish_count))
 
-            if is_phase_transition:
-                # 阶段过渡期的信号冲突是合理的，轻微扣分
+            if is_phase_e:
+                reasons.append(f"Phase E/M趋势推进中，混合信号属于正常回调 (+0分)")
+            elif dominant_ratio >= 2:
+                base_score -= 5
+                reasons.append(f"主力方向明确(比例{dominant_ratio:.0f}:1)，混合信号轻微扣分 (-5分)")
+            elif ('Phase A' in phase_str or 'Phase B' in phase_str or
+                  ('Accumulation' in phase_str and bullish_count > bearish_count) or
+                  ('Distribution' in phase_str and bearish_count > bullish_count)):
                 base_score -= 10
                 reasons.append(f"阶段过渡期信号混合 (轻微扣分 -10分，符合威科夫理论)")
             else:
-                # 严重的多空信号冲突，大幅扣分
                 base_score -= self.thresholds.CONFLICT_PENALTY
                 reasons.append(f"检测到多空信号冲突 (惩罚 -{self.thresholds.CONFLICT_PENALTY}分)")
 
-        # 市场环境加成（双向对称：多头/空头都有加分和扣分）
-        # 🔧 问题四修复：环境扣分优化
-        # 原逻辑：非Strong Bull做多扣10分，非Strong Bear做空扣10分
-        # 问题：中性环境（Bull、Bear、Neutral）也被扣分
-        # 新逻辑：只在极端环境不匹配时扣分
+        # --- 市场环境加成 (v2.1校准：仅极端不匹配扣分) ---
         phase_str = pattern_results.get('phase', 'Unknown')
         current_side = PhaseAdapter.get_market_side(phase_str)
         is_market_strong_bullish = market_env == MarketEnvironment.STRONG_BULL
@@ -320,28 +318,38 @@ class RecommendationEngine:
             base_score += 15
             reasons.append("顺应大盘强势多头环境 (+15分)")
         elif is_market_bullish and current_side == MarketSide.BULLISH:
-            base_score += 5  # 🔧 修复：普通多头环境也加分，但不多
-            reasons.append("顺应大盘多头环境 (+5分)")
+            base_score += 8
+            reasons.append("顺应大盘多头环境 (+8分)")
         elif is_market_strong_bearish and current_side == MarketSide.BULLISH:
-            base_score -= 15  # 🔧 修复：只在极端环境不匹配时大幅扣分
-            reasons.append("大盘强势空头环境不利于做多 (-15分)")
+            base_score -= 10
+            reasons.append("大盘强势空头环境不利于做多 (-10分)")
 
         # 空头方向
         if is_market_strong_bearish and current_side == MarketSide.BEARISH:
             base_score += 15
             reasons.append("顺应大盘强势空头环境 (+15分)")
         elif is_market_bearish and current_side == MarketSide.BEARISH:
-            base_score += 5  # 🔧 修复：普通空头环境也加分
-            reasons.append("顺应大盘空头环境 (+5分)")
+            base_score += 8
+            reasons.append("顺应大盘空头环境 (+8分)")
         elif is_market_strong_bullish and current_side == MarketSide.BEARISH:
-            base_score -= 15  # 🔧 修复：只在极端环境不匹配时大幅扣分
-            reasons.append("大盘强势多头环境不利于做空 (-15分)")
+            base_score -= 10
+            reasons.append("大盘强势多头环境不利于做空 (-10分)")
 
-        # 🔧 问题四修复：信号质量过低时的解释说明
+        # --- v2.1校准：保底分 ---
         final_score = int(max(0, min(base_score, 100)))
 
-        if final_score < 10 and seq_rating in ['A', 'B']:
-            # 序列完整但评分极低，说明缺少主要交易信号
+        # 保底：至少有一个主要信号(Spring/SOS/SOW/JOC/FTI/Upthrust) + 有AR+ST结构 = 不低于15分
+        if final_score < 15 and has_major_signal and len(detected_keys) >= 3:
+            final_score = 15
+            reasons.append("检测到主要Wyckoff信号及完整前置结构 (校准保底 15分)")
+
+        # 保底：有Spring/JOC/SOS且有完整序列 → 不低于25
+        has_primary_entry = any(k in detected_keys for k in ['spring', 'joc', 'sos', 'sow', 'fti', 'upthrust'])
+        if final_score < 25 and has_primary_entry and seq_rating in ['A', 'B']:
+            final_score = 25
+            reasons.append("主要入场信号+完整序列结构 (校准保底 25分)")
+
+        if final_score < 10 and seq_rating in ['A', 'B'] and not has_primary_entry:
             missing_signals = []
             phase_str = pattern_results.get('phase', 'Unknown')
 
@@ -357,9 +365,8 @@ class RecommendationEngine:
                     missing_signals.append('LPSY最后支撑')
 
             if missing_signals:
-                reasons.append(f"⚠️ 虽有完整{seq_rating}级序列结构，但缺少核心交易信号：{', '.join(missing_signals)}。当前处于{phase_str}，信号尚未成熟，建议等待关键确认出现。")
+                reasons.append(f"虽有完整{seq_rating}级序列结构，但缺少核心交易信号：{', '.join(missing_signals)}。当前处于{phase_str}，信号尚未成熟，建议等待关键确认出现。")
 
-        # 针对枯燥区 85 分以上的特殊提升
         if self._get_attr(boring, 'score', 0) >= 85 and final_score < 85:
             final_score = 85
             reasons.append("触发高能预警阈值，综合评分上调至 85 (死角突破临界)")
@@ -367,7 +374,7 @@ class RecommendationEngine:
         return SignalQualityModel(
             score=final_score,
             max_score=100,
-            confidence="极高" if final_score >= 85 else "高" if final_score >= 70 else "中" if final_score >= 40 else "低",
+            confidence="极高" if final_score >= 80 else "高" if final_score >= 55 else "中" if final_score >= 25 else "低",
             reasons=reasons
         )
 
@@ -388,30 +395,134 @@ class RecommendationEngine:
 
     def generate_trading_plan(self, data: Any, pattern_results: Dict[str, Any], targets: Dict[str, Any]) -> TradingPlanModel:
         """
-        生成具体交易计划 (Enhanced with execution score)
+        生成具体交易计划 (威科夫结构导向止损 + Phase风险导向仓位)
+
+        止损原则 (Wyckoff 操盘法):
+          - 做多保守止损 = Spring低点下方, 激进止损 = 最近摆动低点下方
+          - 做空保守止损 = Upthrust高点上方, 激进止损 = 最近摆动高点上方
+
+        仓位原则 (Wyckoff 操盘法):
+          - Phase A-B: 25-35% 常规仓位 (早期高风险)
+          - Phase D:   75-100% 常规仓位 (最优入场区)
+          - Phase E:   50-75% 常规仓位 (趋势已确立但部分走完)
+          - Re-accumulation/Re-distribution: 50-75% (较短区间的较小因果)
         """
         current_price = data['Close'].iloc[-1]
         joc = pattern_results.get('joc', {})
         spring = pattern_results.get('spring', {})
+        upthrust = pattern_results.get('upthrust', {})
         fti = pattern_results.get('fti', {})
-        
-        # 基础方向判断
-        if joc.get('detected'):
-            direction, zone = "做多", f"{joc['creek_level']:.2f} 附近 (JOC突破)"
-            stop = StopLossModel(conservative=round(joc['creek_level']*0.97, 2), aggressive=round(joc['creek_level']*0.95, 2))
-        elif spring.get('detected'):
-            direction, zone = "做多", f"{current_price:.2f} 附近 (Spring震仓)"
-            stop = StopLossModel(conservative=round(current_price*0.96, 2), aggressive=round(current_price*0.93, 2))
-        elif fti.get('detected'):
-            direction, zone = "做空", f"{fti['ice_level']:.2f} 附近 (FTI跌破)"
-            stop = StopLossModel(conservative=round(fti['ice_level']*1.03, 2), aggressive=round(fti['ice_level']*1.05, 2))
-        else:
-            direction, zone = "观望", "等待形态确认"
-            stop = StopLossModel(conservative=0, aggressive=0)
+        sow = pattern_results.get('sow', {})
+        sos = pattern_results.get('sos', {})
+        tr = pattern_results.get('trading_range', {})
 
-        # 仓位建议
+        def _safe_get(obj, key, default=None):
+            if obj is None: return default
+            if isinstance(obj, dict): return obj.get(key, default)
+            return getattr(obj, key, default) if hasattr(obj, key) else default
+
+        def _get_swing_low(window: int = 20) -> float:
+            return float(data['Low'].tail(window).min())
+
+        def _get_swing_high(window: int = 20) -> float:
+            return float(data['High'].tail(window).max())
+
+        def _get_spring_low(sp_dict: dict) -> float:
+            latest = sp_dict.get('latest_spring', sp_dict.get('signals', [{}])[-1]) if sp_dict.get('signals') else {}
+            return _safe_get(latest, 'breakdown_price') or _safe_get(latest, 'price', 0)
+
+        def _get_upthrust_high(ut_dict: dict) -> float:
+            latest = ut_dict.get('latest_upthrust', ut_dict.get('upthrusts', [{}])[-1]) if ut_dict.get('upthrusts') else {}
+            return _safe_get(latest, 'breakout_price') or _safe_get(latest, 'price', 0)
+
+        direction = "观望"
+        zone = "等待形态确认"
+        stop = StopLossModel(conservative=0.0, aggressive=0.0)
+        phase_str = pattern_results.get('phase', 'Unknown')
+
+        # ── 方向判断 (结构导向止损) ──
+        if joc.get('detected'):
+            direction = "做多"
+            zone = f"{joc.get('creek_level', current_price):.2f} 附近 (JOC突破)"
+            creek = joc.get('creek_level', current_price)
+            atr_val = float(data['ATR'].iloc[-1]) if 'ATR' in data.columns else creek * 0.03
+            stop = StopLossModel(
+                conservative=round(creek * 0.97, 2),
+                aggressive=round(creek * 0.95, 2),
+                atr_dynamic_stop=round(creek - atr_val * 2, 2),
+            )
+        elif spring.get('detected'):
+            direction = "做多"
+            spring_low = _get_spring_low(spring)
+            swing_low = _get_swing_low(20)
+            zone = f"{current_price:.2f} 附近 (Spring震仓)"
+            stop = StopLossModel(
+                conservative=round(spring_low * 0.98, 2) if spring_low > 0 else round(current_price * 0.96, 2),
+                aggressive=round(swing_low * 0.99, 2),
+                atr_dynamic_stop=round(spring_low * 0.975, 2) if spring_low > 0 else round(current_price * 0.94, 2),
+            )
+        elif sos.get('detected') and not joc.get('detected') and not spring.get('detected'):
+            direction = "做多"
+            sos_price = _safe_get(sos, 'price', current_price)
+            tr_low = _safe_get(tr, 'low', sos_price * 0.95) if tr else sos_price * 0.95
+            zone = f"{sos_price:.2f} 附近 (SOS突破)"
+            stop = StopLossModel(
+                conservative=round(tr_low * 0.97, 2) if tr_low else round(sos_price * 0.93, 2),
+                aggressive=round(tr_low * 0.99, 2) if tr_low else round(sos_price * 0.95, 2),
+            )
+        elif fti.get('detected'):
+            direction = "做空"
+            ice = fti.get('ice_level', current_price)
+            zone = f"{ice:.2f} 附近 (FTI跌破)"
+            atr_val = float(data['ATR'].iloc[-1]) if 'ATR' in data.columns else ice * 0.03
+            stop = StopLossModel(
+                conservative=round(ice * 1.03, 2),
+                aggressive=round(ice * 1.05, 2),
+                atr_dynamic_stop=round(ice + atr_val * 2, 2),
+            )
+        elif upthrust.get('detected'):
+            direction = "做空"
+            ut_high = _get_upthrust_high(upthrust)
+            swing_high = _get_swing_high(20)
+            zone = f"{current_price:.2f} 附近 (Upthrust诱多)"
+            stop = StopLossModel(
+                conservative=round(ut_high * 1.02, 2) if ut_high > 0 else round(current_price * 1.04, 2),
+                aggressive=round(swing_high * 1.01, 2),
+                atr_dynamic_stop=round(ut_high * 1.025, 2) if ut_high > 0 else round(current_price * 1.06, 2),
+            )
+        elif sow.get('detected') and not fti.get('detected') and not upthrust.get('detected'):
+            direction = "做空"
+            sow_price = _safe_get(sow, 'price', current_price)
+            tr_high = _safe_get(tr, 'high', sow_price * 1.05) if tr else sow_price * 1.05
+            zone = f"{sow_price:.2f} 附近 (SOW跌破)"
+            stop = StopLossModel(
+                conservative=round(tr_high * 1.03, 2) if tr_high else round(sow_price * 1.07, 2),
+                aggressive=round(tr_high * 1.01, 2) if tr_high else round(sow_price * 1.05, 2),
+            )
+
+        # ── 仓位建议 (Phase+风险导向) ──
+        def _phase_position_sizing(phase_str: str, normal_position_pct: float = 10.0) -> tuple:
+            is_reaccum = 'Reaccumulation' in phase_str or '再积累' in phase_str
+            is_redistr = 'Redistribution' in phase_str or '再派发' in phase_str
+            if 'Phase A' in phase_str or 'Phase B' in phase_str:
+                factor = 0.30   # 25-35%: 早期高风险
+            elif 'Phase D' in phase_str:
+                factor = 0.875  # 75-100%: 最优入场区
+            elif 'Phase E' in phase_str:
+                factor = 0.625  # 50-75%: 趋势已确立
+            elif is_reaccum or is_redistr:
+                factor = 0.625
+            else:
+                factor = 0.50
+            return (
+                f"{normal_position_pct * factor:.0f}% (Phase导向)",
+                f"{normal_position_pct * min(factor + 0.15, 1.0):.0f}% (Phase导向)",
+                f"{normal_position_pct * min(factor + 0.30, 1.0):.0f}% (Phase导向)",
+            )
+
+        cons, mod, aggr = _phase_position_sizing(phase_str)
         pos_sizing = PositionSizingModel(
-            conservative="5% (信号弱)", moderate="10% (信号正常)", aggressive="20% (信号强)"
+            conservative=cons, moderate=mod, aggressive=aggr
         )
 
         return TradingPlanModel(
@@ -420,7 +531,7 @@ class RecommendationEngine:
             stop_loss=stop,
             targets=TargetsModel(target_1=targets.get('target_1', 0), target_2=targets.get('target_2', 0)),
             position_sizing=pos_sizing,
-            holding_period="1-3个月 (波段)"
+            holding_period="1-3个月 (波段)" if 'Phase A' in phase_str or 'Phase B' in phase_str else "2-6周 (中线)" if 'Phase E' in phase_str else "1-3个月 (波段)",
         )
 
     def generate_risk_advice(self, quality: SignalQualityModel, plan: TradingPlanModel,
@@ -554,3 +665,118 @@ class RecommendationEngine:
             if dist_to_res < 0.05:
                 return round(100.0 * (1.0 - dist_to_res/0.05), 2)
             return 20.0
+
+    @staticmethod
+    def generate_phase_e_exit_strategy(data: Any, pattern_results: Dict[str, Any], targets: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        生成Phase E退出策略 (Wyckoff 操盘法)
+
+        Wyckoff理论退出条件:
+        1. 达到因果目标位 (基于P&F或波动率收缩)
+        2. 量价背离 (Effort vs Result)
+        3. Phase转换信号 (PSY/PS出现)
+        4. 止损触发
+        """
+        current_price = data['Close'].iloc[-1]
+        vol_ma20 = data['Volume_MA20'].iloc[-1] if 'Volume_MA20' in data.columns else data['Volume'].rolling(20).mean().iloc[-1]
+        recent_vol = data['Volume'].iloc[-1]
+        recent_close = data['Close'].iloc[-1]
+        prev_close = data['Close'].iloc[-2]
+        atr = data['ATR'].iloc[-1] if 'ATR' in data.columns else (data['High'] - data['Low']).rolling(14).mean().iloc[-1]
+
+        exit_signals = []
+        trailing_stop = 0.0
+
+        # 1. 目标位检查
+        target_2 = targets.get('target_2', targets.get('likely_target', 0))
+        target_1 = targets.get('target_1', targets.get('minimum_target', 0))
+        direction = pattern_results.get('direction', '观望')
+
+        if direction == '做多':
+            if target_2 > 0 and current_price >= target_2:
+                exit_signals.append(f"已触及第二目标位 {target_2:.2f}，建议全部止盈")
+            elif target_1 > 0 and current_price >= target_1:
+                exit_signals.append(f"已触及第一目标位 {target_1:.2f}，建议部分止盈(50%)")
+
+            # Trailing stop: 最近摆动低点或 ATR 动态
+            swing_low_10 = float(data['Low'].tail(10).min())
+            atr_stop = current_price - atr * 3
+            trailing_stop = max(swing_low_10, atr_stop)
+        elif direction == '做空':
+            if target_2 > 0 and current_price <= target_2:
+                exit_signals.append(f"已触及第二目标位 {target_2:.2f}，建议全部止盈")
+            elif target_1 > 0 and current_price <= target_1:
+                exit_signals.append(f"已触及第一目标位 {target_1:.2f}，建议部分止盈(50%)")
+
+            swing_high_10 = float(data['High'].tail(10).max())
+            atr_stop = current_price + atr * 3
+            trailing_stop = min(swing_high_10, atr_stop)
+
+        # 2. 量价背离检查
+        vol_ratio = recent_vol / vol_ma20 if vol_ma20 > 0 else 1.0
+        price_change = (recent_close - prev_close) / prev_close
+
+        if direction == '做多':
+            # 缩量新高 = 需求枯竭
+            if vol_ratio < 0.6 and price_change > 0:
+                exit_signals.append(f"缩量创新高(量比{vol_ratio:.2f})：需求枯竭警告，建议减仓")
+            # 高量滞涨 = 派发
+            if vol_ratio > 1.5 and abs(price_change) < 0.005:
+                exit_signals.append(f"高量滞涨(量比{vol_ratio:.2f})：供应进入，警惕Phase A派发信号")
+        elif direction == '做空':
+            if vol_ratio < 0.6 and price_change < 0:
+                exit_signals.append(f"缩量创新低(量比{vol_ratio:.2f})：供应枯竭警告，建议减仓")
+            if vol_ratio > 1.5 and abs(price_change) < 0.005:
+                exit_signals.append(f"高量滞跌(量比{vol_ratio:.2f})：需求进入，警惕Phase A吸筹信号")
+
+        # 3. SOT (Shortening of Thrust) 检测
+        sot_detected, sot_desc = RecommendationEngine._detect_sot(data, direction)
+        if sot_detected:
+            exit_signals.append(sot_desc)
+
+        return {
+            'exit_signals': exit_signals,
+            'trailing_stop': round(trailing_stop, 2),
+            'current_price': round(current_price, 2),
+            'atr': round(atr, 2),
+            'action': '部分止盈' if len(exit_signals) <= 1 else ('全部止盈' if len(exit_signals) >= 2 else '持仓观察'),
+            'summary': '; '.join(exit_signals) if exit_signals else '无明确退出信号，继续按计划持有',
+        }
+
+    @staticmethod
+    def _detect_sot(data: Any, direction: str) -> tuple:
+        """
+        SOT (Shortening of Thrust / 推力缩短) 检测
+
+        Wyckoff Phase B→C 和 Phase E 的关键信号:
+        - 上涨趋势中：当前浪比前浪幅度缩小但量能不减 = 需求衰竭
+        - 下跌趋势中：当前浪比前浪幅度缩小但量能不减 = 供应衰竭
+
+        Returns:
+            (detected: bool, description: str)
+        """
+        df = data.tail(40)
+        if len(df) < 20:
+            return False, ""
+
+        half = len(df) // 2
+        wave1 = df.iloc[:half]
+        wave2 = df.iloc[half:]
+
+        wave1_range = wave1['High'].max() - wave1['Low'].min()
+        wave2_range = wave2['High'].max() - wave2['Low'].min()
+        wave1_vol = wave1['Volume'].mean()
+        wave2_vol = wave2['Volume'].mean()
+
+        safe_range1 = wave1_range if wave1_range > 0 else 1e-9
+        thrust_shrinkage = wave2_range / safe_range1
+        vol_change = wave2_vol / wave1_vol if wave1_vol > 0 else 1.0
+
+        if direction == '做多':
+            if thrust_shrinkage < 0.7 and vol_change > 0.9:
+                return True, f"SOT检测：上涨浪幅度缩小至{thrust_shrinkage*100:.0f}%但量能维持(量比{vol_change:.2f})→需求衰竭，建议减仓"
+        elif direction == '做空':
+            if thrust_shrinkage < 0.7 and vol_change > 0.9:
+                return True, f"SOT检测：下跌浪幅度缩小至{thrust_shrinkage*100:.0f}%但量能维持(量比{vol_change:.2f})→供应衰竭，建议减仓"
+
+        return False, ""

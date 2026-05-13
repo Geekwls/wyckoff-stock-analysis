@@ -18,6 +18,9 @@ class EffortResultMixin:
             market_returns['medium'] = market_context.get('medium_market_return', 0.0)
             market_returns['long'] = market_context.get('long_market_return', 0.0)
 
+        # P1 修复：获取当前Phase上下文
+        current_phase = self._get_current_phase_context()
+
         timeframes = {
             'short': {'days': 5, 'name': '短期(5日)'},
             'medium': {'days': 20, 'name': '中期(20日)'},
@@ -47,29 +50,38 @@ class EffortResultMixin:
                         if relative_strength > 2:
                             interpretation = "STRONG_OUTPERFORMANCE"
                             meaning = f"强势跑赢大盘：个股{price_result_pct:.1f}% vs 大盘{market_return:.1f}%，相对强度{relative_strength:.1f}%，主力控盘能力强"
+                            # P1: Phase上下文
+                            meaning += self._phase_context_tail(current_phase, interpretation)
                         elif relative_strength < -2:
                             interpretation = "WEAK_UNDERPERFORMANCE"
                             meaning = f"弱势跑输大盘：个股{price_result_pct:.1f}% vs 大盘{market_return:.1f}%，相对强度{relative_strength:.1f}%，需谨慎"
+                            meaning += self._phase_context_tail(current_phase, interpretation)
                         else:
                             interpretation = "CONFIRMATION"
                             meaning = f"努力与结果一致，确认当前趋势（相对强度{relative_strength:.1f}%，与大盘同步）"
+                            meaning += self._phase_context_tail(current_phase, interpretation)
                     else:
                         if relative_strength > 3:
                             interpretation = "DIVERGENCE_WITH_STRENGTH"
                             meaning = f"量价背离但跑赢大盘：个股{price_result_pct:.1f}% vs 大盘{market_return:.1f}%，可能存在独立行情"
+                            meaning += self._phase_context_tail(current_phase, interpretation)
                         elif relative_strength < -3:
                             interpretation = "DOUBLE_WEAKNESS"
                             meaning = f"量价背离且跑输大盘：个股{price_result_pct:.1f}% vs 大盘{market_return:.1f}%，双重警示信号"
+                            meaning += self._phase_context_tail(current_phase, interpretation)
                         else:
                             interpretation = "DIVERGENCE"
                             meaning = "努力与结果背离，警示信号"
+                            meaning += self._phase_context_tail(current_phase, interpretation)
                 else:
                     if effort_magnitude > 0.8:
                         interpretation = "EFFORT_WITHOUT_RESULT"
                         meaning = f"大努力无结果，可能是拐点信号（相对强度{relative_strength:.1f}%）"
+                        meaning += self._phase_context_tail(current_phase, interpretation)
                     else:
                         interpretation = "WEAK_CONFIRMATION"
                         meaning = f"努力与结果基本一致，但强度较弱（相对强度{relative_strength:.1f}%）"
+                        meaning += self._phase_context_tail(current_phase, interpretation)
             else:
                 if result_magnitude > 3.0:
                     interpretation = "RESULT_WITHOUT_EFFORT"
@@ -79,9 +91,11 @@ class EffortResultMixin:
                         meaning = f"无量下跌且跑输大盘{relative_strength:.1f}%，弱势特征明显"
                     else:
                         meaning = "价格变动缺乏成交量支持，需谨慎"
+                    meaning += self._phase_context_tail(current_phase, interpretation)
                 else:
                     interpretation = "NORMAL"
                     meaning = f"正常的量价关系（相对强度{relative_strength:.1f}%）"
+                    meaning += self._phase_context_tail(current_phase, interpretation)
 
             effort_result_analysis[tf_key] = {
                 "timeframe": tf_info['name'],
@@ -92,7 +106,8 @@ class EffortResultMixin:
                 "effort_magnitude": round(effort_magnitude, 3),
                 "result_magnitude": round(result_magnitude, 2),
                 "interpretation": interpretation,
-                "meaning": meaning
+                "meaning": meaning,
+                "phase_context": current_phase,
             }
 
         interpretations = [tf['interpretation'] for tf in effort_result_analysis.values()]
@@ -232,3 +247,61 @@ class EffortResultMixin:
                 "short_alert": "解除" if ut_invalid else "维持观察",
             }
         return out
+
+    def _get_current_phase_context(self) -> str:
+        """获取当前Phase上下文用于增强努力vs结果分析"""
+        try:
+            if self.pattern_detector:
+                phase_result = self.pattern_detector.identify_phase()
+                if isinstance(phase_result, dict):
+                    return phase_result.get('phase', 'Unknown')
+                return str(phase_result) if phase_result else 'Unknown'
+        except Exception:
+            pass
+        return 'Unknown'
+
+    def _phase_context_tail(self, phase: str, interpretation: str) -> str:
+        """
+        根据Phase上下文追加条件解释
+
+        Wyckoff理论要求：同一量价行为在不同阶段意义完全不同。
+        - Phase A: 高量低价 = 吸筹(正面), 高量高价 = 派发(负面)
+        - Phase B: 高量窄幅 = 积累/派发进展中
+        - Phase C: 量价背离 = 震仓信号
+        - Phase D: 高量突破 = 趋势确认
+        - Phase E: 缩量新高 = 需求枯竭, 缩量新低 = 供应枯竭
+        """
+        if 'Phase A' in phase:
+            if interpretation in ('RESULT_WITHOUT_EFFORT', 'NORMAL'):
+                return ' | [Phase A] 趋势停止阶段，缩量属于正常供应/需求吸收过程'
+            elif interpretation == 'EFFORT_WITHOUT_RESULT':
+                return ' | [Phase A] 大努力无结果确认停止行为(Stop Volume)，关键拐点信号'
+            elif interpretation == 'DIVERGENCE':
+                return ' | [Phase A] 背离确认趋势衰竭，等待AR/ST确认'
+        elif 'Phase B' in phase:
+            if interpretation == 'WEAK_CONFIRMATION':
+                return ' | [Phase B] 积累/派发推进中，弱势量价关系属正常区间波动'
+            elif interpretation == 'EFFORT_WITHOUT_RESULT':
+                return ' | [Phase B] 大努力无结果可能预示区间失效或即将出现Spring/Upthrust'
+        elif 'Phase C' in phase:
+            if interpretation in ('DIVERGENCE', 'EFFORT_WITHOUT_RESULT'):
+                return ' | [Phase C] 背离信号可能确认Spring/Upthrust震仓有效'
+            elif interpretation == 'CONFIRMATION':
+                return ' | [Phase C] 努力结果一致有利于震仓后趋势反转'
+        elif 'Phase D' in phase:
+            if interpretation == 'CONFIRMATION':
+                return ' | [Phase D] 高量突破是趋势启动的理想确认信号'
+            elif interpretation == 'RESULT_WITHOUT_EFFORT':
+                return ' | [Phase D] 缩量突破需警惕假突破(LPSY/UT)'
+        elif 'Phase E' in phase:
+            if interpretation == 'RESULT_WITHOUT_EFFORT':
+                return ' | [Phase E] 缩量推进需警惕趋势末端的需求/供应枯竭'
+            elif interpretation == 'CONFIRMATION':
+                return ' | [Phase E] 高量同向推进，趋势健康持续'
+        elif 'Markup' in phase:
+            if interpretation == 'RESULT_WITHOUT_EFFORT' and '跌' not in phase:
+                return ' | [Markup] 无量上涨，警惕需求衰竭，注意止盈'
+        elif 'Markdown' in phase:
+            if interpretation == 'RESULT_WITHOUT_EFFORT':
+                return ' | [Markdown] 无量下跌，供应趋于枯竭，关注筑底信号'
+        return ''

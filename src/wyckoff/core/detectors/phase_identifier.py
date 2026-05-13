@@ -447,23 +447,25 @@ class PhaseIdentifier(BaseDetector):
 
     def _calculate_structural_integrity(self, events: Dict, phase: WyckoffPhase) -> float:
         """
-        计算结构完整性因子 (解决 Phase A 证据缺失问题)
+        计算结构完整性因子 (Phase A 四大支柱：PS → SC/BC → AR → ST)
         """
-        # 核心 Phase A 支柱：PS/PSY, SC/BC, AR, ST
         climax = events.get('climax')
         ar = events.get('automatic_reaction')
         st = events.get('secondary_test')
-        
-        # 这里的 ps 需要从 detector 中获取，目前版本假设存在
-        ps_detected = 'ps' in events or 'psy' in events
-        
+
+        # PS/PSY 初次支撑/供给检测
+        ps_event = events.get('preliminary_support')
+        ps_detected = False
+        if ps_event:
+            ps_detected = self._safe_check_detected(ps_event)
+
         count = 0
         if climax and (isinstance(climax, dict) and climax.get('detected') or getattr(climax, 'detected', False)): count += 1
         if ar and (isinstance(ar, dict) and ar.get('detected') or getattr(ar, 'detected', False)): count += 1
         if st and (isinstance(st, dict) and st.get('detected') or getattr(st, 'detected', False)): count += 1
         if ps_detected: count += 1
-        
-        # 如果 4 个支柱只剩 1-2 个，置信度严重打折
+
+        # 如果 4 个支柱只剩 1-2 个，置信度打折
         if count <= 1: return 0.4
         if count == 2: return 0.6
         if count == 3: return 0.85

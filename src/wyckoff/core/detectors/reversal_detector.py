@@ -146,36 +146,65 @@ class ReversalDetector(BaseDetector):
 
         climax_price = climax_res['price']
         climax_vol = climax_res.get('volume', 0)
+        is_sc = climax_res['type'] == 'selling_climax'
 
-        if climax_res['type'] == 'selling_climax':
-            test_mask = (df_after['Low'] <= climax_price * (1 + self.thresholds.JOC_TEST_BAND)) & \
-                        (df_after['Volume'] < climax_vol * self.thresholds.VOLUME_CONFIRMATION['weak'])
-            if test_mask.any():
-                idx = df_after[test_mask].index[-1]
-                st_vol = df_after.loc[idx, 'Volume']
-                vol_ratio = st_vol / climax_vol if climax_vol > 0 else 1.0
-                confirmed = vol_ratio < 0.4
-                return {
-                    'detected': True, 'type': 'secondary_test', 'date': idx,
-                    'price': df_after.loc[idx, 'Low'], 'volume': float(st_vol),
-                    'climax_volume': float(climax_vol), 'st_vol_ratio': round(vol_ratio, 3),
-                    'supply_exhausted': confirmed, 'confidence': 0.8 if confirmed else 0.4
-                }
-        else:
-            test_mask = (df_after['High'] >= climax_price * (1 - self.thresholds.JOC_TEST_BAND)) & \
-                        (df_after['Volume'] < climax_vol * self.thresholds.VOLUME_CONFIRMATION['weak'])
-            if test_mask.any():
-                idx = df_after[test_mask].index[-1]
-                st_vol = df_after.loc[idx, 'Volume']
-                vol_ratio = st_vol / climax_vol if climax_vol > 0 else 1.0
-                confirmed = vol_ratio < 0.4
-                return {
-                    'detected': True, 'type': 'secondary_test', 'date': idx,
-                    'price': df_after.loc[idx, 'High'], 'volume': float(st_vol),
-                    'climax_volume': float(climax_vol), 'st_vol_ratio': round(vol_ratio, 3),
-                    'supply_exhausted': confirmed, 'confidence': 0.8 if confirmed else 0.4
-                }
-        return {'detected': False}
+        # 收集所有符合条件的ST (支持多次二次测试)
+        all_tests = []
+
+        for i in range(len(df_after)):
+            row = df_after.iloc[i]
+            if is_sc:
+                price_test = row['Low'] <= climax_price * (1 + self.thresholds.JOC_TEST_BAND)
+            else:
+                price_test = row['High'] >= climax_price * (1 - self.thresholds.JOC_TEST_BAND)
+
+            vol_test = row['Volume'] < climax_vol * self.thresholds.VOLUME_CONFIRMATION['weak']
+
+            if price_test and vol_test:
+                vol_ratio = row['Volume'] / climax_vol if climax_vol > 0 else 1.0
+                all_tests.append({
+                    'date': df_after.index[i],
+                    'price': float(row['Low'] if is_sc else row['High']),
+                    'volume': float(row['Volume']),
+                    'vol_ratio': round(vol_ratio, 3),
+                    'test_number': len(all_tests) + 1,
+                })
+
+        if not all_tests:
+            return {
+                'detected': False,
+                'all_secondary_tests': [],
+                'test_count': 0,
+            }
+
+        # 最后一笔ST
+        last_test = all_tests[-1]
+        vol_ratio = last_test['vol_ratio']
+        confirmed = vol_ratio < 0.4
+
+        # 检查ST序列是否递减量缩 (Wyckoff: 每次ST量应递减)
+        st_sequence_trend = 'stable'
+        if len(all_tests) >= 2:
+            vol_trend = all_tests[-1]['vol_ratio'] / max(all_tests[0]['vol_ratio'], 1e-9)
+            if vol_trend < 0.5:
+                st_sequence_trend = 'declining'
+            elif vol_trend > 1.2:
+                st_sequence_trend = 'increasing'
+
+        return {
+            'detected': True,
+            'type': 'secondary_test',
+            'date': last_test['date'],
+            'price': last_test['price'],
+            'volume': last_test['volume'],
+            'climax_volume': float(climax_vol),
+            'st_vol_ratio': round(vol_ratio, 3),
+            'supply_exhausted': confirmed,
+            'confidence': 0.8 if confirmed else 0.4,
+            'all_secondary_tests': all_tests,
+            'test_count': len(all_tests),
+            'st_sequence_trend': st_sequence_trend,
+        }
 
     # --- Spring & Upthrust ---
     def detect_spring(self, lookback: int = None) -> Dict:
@@ -247,6 +276,18 @@ class ReversalDetector(BaseDetector):
             score += 3
         return score
 
+    def _count_recovery_days(self, recent: pd.DataFrame, breakdown_idx: int, support: float) -> int:
+        """
+        计算从跌破到收回支持位实际所需天数
+        Wyckoff理论: 1-3天内收回 = 有效Spring
+        """
+        recovery_days = 0
+        for j in range(breakdown_idx + 1, min(breakdown_idx + 10, len(recent))):
+            recovery_days += 1
+            if recent.iloc[j]['Close'] > support:
+                return recovery_days
+        return recovery_days
+
     def _detect_spring_vectorized(self, recent: pd.DataFrame, support: float) -> List[Dict]:
         n = len(recent)
         lows, closes, highs, opens, volumes = recent['Low'].values, recent['Close'].values, recent['High'].values, recent['Open'].values, recent['Volume'].values
@@ -273,12 +314,13 @@ class ReversalDetector(BaseDetector):
             breakdown_pct = breakdown_pcts[i]
             recovery_vol_r, nxt_close_pos = float(vol_ratios[i]), float(close_positions[i])
             recovery_pct = (closes[nxt_idx] - support) / support * 100 if support > 0 else 0
+            actual_recovery_days = self._count_recovery_days(recent, i, support)
             total_score = min(recovery_vol_r * 15, 30) + min(nxt_close_pos * 25, 20) + min(follow_score * 3, 30) + min(recovery_pct, 10) + 10
             total_score = min(total_score, 100)
             springs.append({
                 'date': recent.index[nxt_idx], 'breakdown_date': recent.index[cur_idx],
                 'breakdown_price': round(float(lows[cur_idx]), 2), 'support_level': round(support, 2),
-                'recovery_price': round(float(closes[nxt_idx]), 2), 'recovery_days': 1,
+                'recovery_price': round(float(closes[nxt_idx]), 2), 'recovery_days': actual_recovery_days,
                 'volume_ratio': round(recovery_vol_r, 2), 'close_position': round(nxt_close_pos * 100, 1),
                 'follow_up_score': follow_score, 'total_score': total_score,
                 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
@@ -302,11 +344,12 @@ class ReversalDetector(BaseDetector):
             if nxt_close_pos < 0.7: continue
             follow_score = self._calculate_spring_follow_score(nxt, d2)
             recovery_pct = (nxt['Close'] - support) / support * 100 if support > 0 else 0
+            actual_recovery_days = self._count_recovery_days(recent, i, support)
             total_score = min(recovery_vol_r * 15, 30) + min(nxt_close_pos * 25, 20) + min(follow_score * 3, 30) + min(recovery_pct, 10) + 10
             springs.append({
                 'date': nxt.name, 'breakdown_date': cur.name, 'breakdown_price': round(float(cur['Low']), 2),
                 'support_level': round(support, 2), 'recovery_price': round(float(nxt['Close']), 2),
-                'recovery_days': 1, 'volume_ratio': round(recovery_vol_r, 2),
+                'recovery_days': actual_recovery_days, 'volume_ratio': round(recovery_vol_r, 2),
                 'close_position': round(nxt_close_pos * 100, 1), 'follow_up_score': follow_score,
                 'total_score': min(total_score, 100), 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
             })

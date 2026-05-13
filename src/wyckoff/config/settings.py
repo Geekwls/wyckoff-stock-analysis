@@ -96,7 +96,7 @@ class WyckoffThresholds(BaseModel):
         description="信号质量分项权重"
     )
     TIME_DECAY_HALF_LIFE: int = Field(20, description="信号强度随时间衰减的半衰期（天）")
-    CONFLICT_PENALTY: float = Field(30.0, description="多空冲突时的扣分")
+    CONFLICT_PENALTY: float = Field(15.0, description="多空冲突时的扣分 (v2.1校准)")
     
     # ── 孟洪涛增强器阈值 (MENG_ENHANCER) ────────────────────
     MENG_SPRING_BREAKDOWN_MIN: float = Field(1.0, description="Spring跌破最小百分比")

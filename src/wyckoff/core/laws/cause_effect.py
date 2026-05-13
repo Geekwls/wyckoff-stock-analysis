@@ -369,23 +369,37 @@ class CauseEffectMixin:
             volatility_contraction = 1 - (atr_end / atr_start) if atr_start > 0 else 0
             contraction_factor = max(0.5, 1 + volatility_contraction * 2)
             potential = cause_size * contraction_factor * (duration / 30)
-            breakout_point = trading_range_high
-            targets = {
-                "target_1": round(breakout_point + potential * 0.618, 2),
-                "target_2": round(breakout_point + potential, 2),
-                "target_3": round(breakout_point + potential * 1.618, 2)
-            }
+
+            # P1 修复：派发/下跌阶段计算向下目标
+            is_downside = 'Distribution' in phase or 'Markdown' in phase
+            if is_downside:
+                breakdown_point = trading_range_low
+                targets = {
+                    "target_1": round(breakdown_point - potential * 0.618, 2),
+                    "target_2": round(breakdown_point - potential, 2),
+                    "target_3": round(breakdown_point - potential * 1.618, 2)
+                }
+                description = f"派发/下跌因果：基于波动率收缩{volatility_contraction*100:.1f}%和{duration}天派发"
+            else:
+                breakout_point = trading_range_high
+                targets = {
+                    "target_1": round(breakout_point + potential * 0.618, 2),
+                    "target_2": round(breakout_point + potential, 2),
+                    "target_3": round(breakout_point + potential * 1.618, 2)
+                }
+                description = f"基于波动率收缩{volatility_contraction*100:.1f}%和{duration}天积累"
             return {
                 "method": "volatility_contraction",
                 "cause_size": cause_size,
                 "volatility_contraction": round(volatility_contraction * 100, 1),
                 "contraction_factor": round(contraction_factor, 2),
-                "breakout_point": breakout_point,
+                "breakout_point": breakout_point if not is_downside else breakdown_point,
+                "breakout_direction": "down" if is_downside else "up",
                 "targets": targets,
                 "current_position": (self.data['Close'].iloc[-1] - trading_range_low) / cause_size if cause_size > 0 else 0,
                 "consolidation_duration_days": duration,
-                "description": f"基于波动率收缩{volatility_contraction*100:.1f}%和{duration}天积累",
-                "theory": "改进估算：基于波动率收缩和时间积累"
+                "description": description,
+                "theory": "威科夫因果法则：水平计数决定垂直目标" if not is_downside else "威科夫因果法则：派发期向下目标需破位激活"
             }
         except Exception as e:
             raise LawAnalysisError("因果分析", str(e)) from e

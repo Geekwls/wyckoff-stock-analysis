@@ -71,13 +71,16 @@ class PhaseCoordinator:
         ar_res = self.detector.detect_automatic_reaction(climax_res)
         st_res = self.detector.detect_secondary_test(climax_res, ar_res)
 
+        ps_res = self.detector.detect_preliminary_support()
+
         spring_res = self.detector.detect_spring()
         upthrust_res = self.detector.detect_upthrust()
 
         boring_zone_res = self.detector.detect_boring_zone()
 
-        # 🔧 P1-1修复步骤1：收集完Phase A事件后，立即存储到detector中供后续验证使用
+        # P1 修复：存储完整Phase A事件(PS→SC/BC→AR→ST)到detector
         phase_a_events = {
+            'ps': ps_res,
             'climax': climax_res,
             'ar': ar_res,
             'st': st_res
@@ -89,7 +92,7 @@ class PhaseCoordinator:
 
         # 2. 初步阶段识别
         preliminary_phase = self._preliminary_phase_identification(
-            climax_res, ar_res, st_res, spring_res, upthrust_res
+            climax_res, ar_res, st_res, spring_res, upthrust_res, ps_res
         )
 
         # 🔧 P0-2修复步骤2：初步阶段识别后立即屏蔽矛盾信号（从源头杜绝信号污染）
@@ -121,6 +124,7 @@ class PhaseCoordinator:
 
         # 5. 运行事件序列验证（在原始dict上，模型封装前）
         raw_events = {
+            "preliminary_support": ps_res,
             "climax": climax_res,
             "automatic_reaction": ar_res,
             "secondary_test": st_res,
@@ -232,13 +236,16 @@ class PhaseCoordinator:
         ar_res: Dict,
         st_res: Dict,
         spring_res: Dict,
-        upthrust_res: Dict
+        upthrust_res: Dict,
+        ps_res: Optional[Dict] = None,
     ) -> str:
         """
         初步阶段识别：基于已收集的事件进行初步判断
 
-        优化：增加对 AR 和 ST 的协同校验，避免仅凭 BC/SC 就定性。
+        优化：增加 PS/SC 确认链条和 AR/ST 协同校验。
+        Phase A 完整链条: PS → SC/BC → AR → ST
         """
+        is_ps = ps_res.get('detected') if ps_res else False
         is_sc = climax_res.get('detected') and climax_res.get('type') == 'selling_climax'
         is_bc = climax_res.get('detected') and climax_res.get('type') == 'buying_climax'
         is_ar = ar_res.get('detected')
@@ -250,6 +257,10 @@ class PhaseCoordinator:
 
         # 吸筹初步迹象：SC + AR/ST
         if is_sc and (is_ar or is_st):
+            return 'Accumulation Phase A'
+
+        # PS (初次支撑) 确认吸筹结构启动
+        if is_ps and is_sc:
             return 'Accumulation Phase A'
 
         # 强信号覆盖
