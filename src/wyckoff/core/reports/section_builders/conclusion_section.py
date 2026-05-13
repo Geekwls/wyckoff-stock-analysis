@@ -92,6 +92,62 @@ class ConclusionSection(BaseSectionBuilder):
                 fti_detected = fti.get('detected', False)
         is_daily_bearish = ('Distribution' in phase_str or 'Markdown' in phase_str or fti_detected) and not breakout_override
 
+        # 🔧 新增：检查SOW信号，判断区间是否被破坏
+        sow_detected = False
+        sow_broke_tr = False
+        if sow is not None:
+            if isinstance(sow, dict):
+                sow_detected = sow.get('detected', False)
+                if sow_detected:
+                    signal_type = sow.get('signal_type', '')
+                    sow_price = sow.get('price', 0)
+                    sow_low = sow.get('low', 0)
+                    tr_low = self._get_tr_value(trading_range, 'low', 0)
+
+                    # 判断SOW是否跌破区间下沿
+                    if signal_type == 'true_sow' or (sow_low > 0 and sow_low < tr_low):
+                        sow_broke_tr = True
+
+        # 如果SOW破坏了区间，显示威科夫逻辑警告
+        if sow_broke_tr and trading_range and trading_range.get('is_consolidation'):
+            tr_low = self._get_tr_value(trading_range, 'low', 0)
+            tr_high = self._get_tr_value(trading_range, 'high', 0)
+
+            report += f"""
+【⚠️ 威科夫逻辑警告：区间结构已破坏】
+
+原交易区间({tr_low:.2f}-{tr_high:.2f}元)已被SOW破坏：
+
+1. **区间边界神圣性原则**
+   - 4月22日放量跌破区间下沿{tr_low:.2f}元
+   - 威科夫理论：区间边界被放量跌破 = 区间结构失效
+   - 结论：不能再称为"再吸筹区间"
+
+2. **当前真实状态**
+   - 价格{current_price:.2f}元是"区间破位后的反弹测试"
+   - 不是再吸筹，而是在测试原区间的压力
+   - 可能是下跌趋势的中继反弹（"死猫跳"）
+
+3. **三种可能情景**
+   情况A：下跌中继 - 在25-26元遇阻后继续下跌
+   情况B：新结构形成 - 在22.26-25.11元形成新区间
+   情况C：Spring陷阱 - 缺少完整吸筹前置结构
+
+4. **严格观望策略**
+   ❌ 当前{current_price:.2f}元不是入场点
+   ✅ 等待市场明确信号：
+      - 若情况A：跌破22.26元后的新底部
+      - 若情况B：新区间结构完整
+      - 若情况C：完整Phase A（SC→AR→ST）
+
+5. **威科夫理论核心原则**
+   "一旦区间被放量跌破，原区间即失效。
+   不能简单下移区间边界，必须重新观察结构形成。"
+
+"""
+
+            return report
+
         if conflict.get('has_conflict') and is_weekly_bullish and is_daily_bearish:
             # 🔧 修复：严格派发逻辑 - 绝不在派发阶段建议做多
             if ('Distribution' in phase_str or '派发' in phase_str) and not breakout_override:
@@ -438,27 +494,87 @@ class ConclusionSection(BaseSectionBuilder):
             report += "   ✅ 回测企稳后考虑做多入场\n\n"
 
         elif direction == 'down':
-            report += f"原交易区间（{tr_low:.2f}-{tr_high:.2f}）已向下突破至{current_price:.2f}元\n\n"
+            report += f"原交易区间（{tr_low:.2f}-{tr_high:.2f}）已向下突破\n\n"
 
-            if breakout_analysis:
-                quality = breakout_analysis.get('quality', 'unknown')
-                quality_score = breakout_analysis.get('quality_score', 0)
-                # 🔧 修复：quality_score可能是int或dict
-                if isinstance(quality_score, dict):
-                    score_val = quality_score.get('score', 0)
-                else:
-                    score_val = quality_score
-                report += f"突破质量：{quality.upper()}（{score_val}/100）\n\n"
+            # 🔧 新增：判断当前价格是否反弹回区间内
+            has_reentered = tr_low < current_price < tr_high
 
-            report += "向下突破确认原区间逻辑或进入下跌趋势：\n\n"
-            report += "1. **当前状态：确认派发或进入Markdown**\n"
-            report += "   - 向下突破否决了'吸筹'假设\n"
-            report += "   - 市场可能进入下跌趋势\n\n"
+            if has_reentered:
+                # 区间破位后反弹回到区间内
+                report += f"当前状态：价格在{current_price:.2f}元，已反弹回原区间内\n\n"
 
-            report += "2. **策略建议**：\n"
-            report += "   ❌ 严禁做多\n"
-            report += "   ✅ 等待底部信号（新的SC、PS等Phase A事件）\n"
-            report += "   ✅ 关注是否有新的吸筹结构形成\n\n"
+                if breakout_analysis:
+                    quality = breakout_analysis.get('quality', 'unknown')
+                    quality_score = breakout_analysis.get('quality_score', 0)
+                    # 🔧 修复：quality_score可能是int或dict
+                    if isinstance(quality_score, dict):
+                        score_val = quality_score.get('score', 0)
+                    else:
+                        score_val = quality_score
+                    report += f"突破质量：{quality.upper()}（{score_val}/100）\n\n"
+
+                report += "【⚠️ 威科夫逻辑警告】\n\n"
+                report += "1. **原区间结构已被破坏**\n"
+                report += f"   - 放量跌破区间下沿{tr_low:.2f}元（SOW）\n"
+                report += f"   - 区间{tr_low:.2f}-{tr_high:.2f}元的结构已失效\n"
+                report += f"   - 不能再称为'再吸筹区间'\n\n"
+
+                report += "2. **当前状态：区间破位后的反弹测试**\n"
+                report += f"   - 价格从低位反弹至{current_price:.2f}元\n"
+                report += "   - 这是在测试原区间下沿的压力\n"
+                report += "   - 可能是'死猫跳'或新的震荡区开始\n\n"
+
+                report += "3. **三种可能情况**\n\n"
+
+                report += "   情况A - 下跌趋势的中继反弹：\n"
+                report += "   • 特征：在25-26元遇阻，后续继续下跌\n"
+                report += "   • 概率：需观察成交量（放量滞涨是警告信号）\n"
+                report += f"   • 确认：价格跌破22.26元，继续下跌\n\n"
+
+                report += "   情况B - 新的吸筹结构形成：\n"
+                report += "   • 特征：在22.26-25.11元形成新的区间\n"
+                report += "   • 需要：多次测试22.26元不破，形成明确支撑\n"
+                report += "   • 确认：新的区间结构完整，且放量突破上沿\n\n"
+
+                report += "   情况C - Spring陷阱：\n"
+                report += "   • 特征：4月22日跌破，在22.26元快速反弹\n"
+                report += "   • ⚠️ 但Spring必须有完整吸筹前置结构\n"
+                report += "   • 当前缺少Phase A（SC/AR/ST）\n"
+                report += "   • 结论：这不是Spring，只是破位后的反弹\n\n"
+
+                report += "4. **策略建议**：\n"
+                report += "   ❌ 当前{current_price:.2f}元不是入场点（区间中部，风险收益比差）\n"
+                report += "   ✅ 严格观望，等待市场给出明确信号\n"
+                report += "   ✅ 若情况A（下跌中继）：等待跌破22.26元后的新底部\n"
+                report += "   ✅ 若情况B（新结构）：等待新区间完整后再入场\n\n"
+
+                report += "5. **威科夫理论核心原则**\n\n"
+                report += "   区间边界的神圣性：\n"
+                report += "   • 一旦区间边界被放量跌破 → 原区间结构失效\n"
+                report += "   • 不能再称为'再吸筹区间' → 需要重新定义阶段\n"
+                report += "   • 不能简单地下移区间下沿 → 需要观察新结构形成\n\n"
+
+            else:
+                # 价格仍在区间下方，未反弹回区间内
+                if breakout_analysis:
+                    quality = breakout_analysis.get('quality', 'unknown')
+                    quality_score = breakout_analysis.get('quality_score', 0)
+                    # 🔧 修复：quality_score可能是int或dict
+                    if isinstance(quality_score, dict):
+                        score_val = quality_score.get('score', 0)
+                    else:
+                        score_val = quality_score
+                    report += f"突破质量：{quality.upper()}（{score_val}/100）\n\n"
+
+                report += "向下突破确认原区间逻辑或进入下跌趋势：\n\n"
+                report += "1. **当前状态：确认派发或进入Markdown**\n"
+                report += "   - 向下突破否决了'吸筹'假设\n"
+                report += "   - 市场可能进入下跌趋势\n\n"
+
+                report += "2. **策略建议**：\n"
+                report += "   ❌ 严禁做多\n"
+                report += "   ✅ 等待底部信号（新的SC、PS等Phase A事件）\n"
+                report += "   ✅ 关注是否有新的吸筹结构形成\n\n"
 
         else:
             report += "原交易区间已被突破，方向不明确\n\n"
