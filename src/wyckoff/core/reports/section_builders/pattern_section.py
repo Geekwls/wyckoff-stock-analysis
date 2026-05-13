@@ -126,36 +126,76 @@ class PatternSection(BaseSectionBuilder):
 """
 
     def _fmt_sow(self, sow) -> str:
-        # 安全地获取latest数据
-        if hasattr(sow, 'latest'):
-            latest = sow.latest
-        elif isinstance(sow, dict) and 'latest' in sow:
-            latest = sow['latest']
-        else:
-            latest = sow
+        # 🔧 修复：SOW检测返回的是单个信号对象，包含signal_type字段
+        if isinstance(sow, dict):
+            signal_type = sow.get('signal_type', 'unknown')
+            interpretation = sow.get('interpretation', '')
 
-        # 安全地获取属性
-        if hasattr(latest, 'get'):
-            date = latest.get('date', 'N/A')
-            price = latest.get('price', 0)
-            price_change = latest.get('price_change', 0)
-        else:
-            date = getattr(latest, 'date', 'N/A')
-            price = getattr(latest, 'price', 0)
-            price_change = getattr(latest, 'price_change', 0)
-
-        return f"""
+            if signal_type == 'true_sow':
+                return f"""
 [YES] 检测到SOW（Sign of Weakness）:
+   日期: {sow.get('date')}
+   价格: {sow.get('price', 0):.2f}
+   跌幅: {sow.get('price_change', 0)*100:.1f}%
+   说明: {interpretation}
+"""
+            elif signal_type == 'within_range_weakness':
+                return f"""
+[?] 检测到区间内弱势（非正式SOW）:
+   日期: {sow.get('date')}
+   价格: {sow.get('price', 0):.2f}
+   跌幅: {sow.get('price_change', 0)*100:.1f}%
+   说明: {interpretation}
+"""
+            else:
+                # 兼容旧格式或其他类型
+                date = sow.get('date', 'N/A')
+                price = sow.get('price', 0)
+                price_change = sow.get('price_change', 0)
+                return f"""
+[?] 检测到弱势信号:
    日期: {date}
    价格: {price:.2f}
    跌幅: {price_change*100:.1f}%
+   说明: {interpretation}
+"""
+        else:
+            # 兼容非dict格式
+            return f"""
+[?] 检测到弱势信号（格式异常）
 """
 
     def _fmt_lps(self, lps) -> str:
-        return f"""
+        # 🔧 修复：LPS返回结构中price字段在latest里
+        latest = lps.get('latest', {}) if isinstance(lps, dict) else lps
+        price = latest.get('price', 0) if isinstance(latest, dict) else 0
+        signal_type = latest.get('signal_type', 'unknown') if isinstance(latest, dict) else 'unknown'
+        note = latest.get('note', '') if isinstance(latest, dict) else ''
+
+        # 只有正式LPS才显示为"建议做多入场点"
+        if signal_type == 'lps':
+            return f"""
 [YES] 检测到LPS（Last Point of Support）:
-   价格: {lps.get('price', 0):.2f}
+   价格: {price:.2f}
    建议做多入场点
+"""
+        elif signal_type == 'support_test':
+            return f"""
+[?] 检测到支撑测试（非正式LPS）:
+   价格: {price:.2f}
+   {note}
+"""
+        elif signal_type == 'pullback':
+            return f"""
+[i] 检测到上涨趋势缩量回踩:
+   价格: {price:.2f}
+   {note}
+"""
+        else:
+            return f"""
+[?] 检测到类似LPS信号:
+   价格: {price:.2f}
+   类型: {signal_type}
 """
 
     def _fmt_lpsy(self, lpsy) -> str:

@@ -214,6 +214,16 @@ class WyckoffPatternDetector:
         """
         return self.phase_coordinator.collect_all_events()
 
+    def detect_sow(self, trading_range: Dict = None) -> Dict:
+        """
+        检测 SOW (Sign of Weakness)
+
+        🔧 新增：传递交易区间参数用于验证是否跌破区间下沿
+        """
+        if trading_range is None:
+            trading_range = self.detect_trading_range()
+        return self.sw_detector.detect_sow(trading_range=trading_range)
+
     def detect_lps(self, sos_result: Dict = None, spring_res: Dict = None) -> Dict:
         """检测 LPS (Last Point of Support)"""
         return self.sw_detector.detect_lps(spring_res=spring_res)

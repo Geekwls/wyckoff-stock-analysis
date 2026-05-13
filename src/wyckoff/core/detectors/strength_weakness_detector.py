@@ -263,33 +263,45 @@ class StrengthWeaknessDetector(BaseDetector):
             }
         return {'detected': False}
 
-    def detect_sow(self, window: int = 40) -> Dict:
+    def detect_sow(self, window: int = 40, trading_range: Dict = None) -> Dict:
+        """
+        检测 SOW (Sign of Weakness)
+
+        🔧 新增：根据威科夫理论，真正的SOW必须：
+        1. 跌破交易区间下沿（或关键支撑位）
+        2. 后续无力收回（维持在下沿下方）
+        3. 在派发或再吸筹阶段的弱势表现
+
+        Args:
+            window: 检测窗口
+            trading_range: 当前交易区间（用于验证是否跌破区间下沿）
+        """
         if USE_VECTORIZED:
             try:
-                return self._detect_sow_vectorized(window)
+                return self._detect_sow_vectorized(window, trading_range)
             except Exception as e:
                 logger.warning(f"Vectorized SOW failed: {e}. Falling back to iterative method.")
-                return self._detect_sow_iterative(window)
-        return self._detect_sow_iterative(window)
+                return self._detect_sow_iterative(window, trading_range)
+        return self._detect_sow_iterative(window, trading_range)
 
-    def _detect_sow_vectorized(self, window: int = 40) -> Dict:
+    def _detect_sow_vectorized(self, window: int = 40, trading_range: Dict = None) -> Dict:
         if self._is_signal_blocked('sow'):
             return {'detected': False, 'reason': 'signal_blocked_by_phase', 'note': '当前阶段为吸筹期，向下突破应归类为Spring，SOW信号已被屏蔽'}
-            
+
         if self.data is None or len(self.data) < window:
             return {'detected': False}
-            
+
         df = self.data.tail(window).copy()
-        
+
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
         price_change_threshold = self.thresholds.SOW_PRICE_CHANGE_DEFAULT
-        
+
         closes = df['Close'].values
         opens = df['Open'].values
         highs = df['High'].values
         lows = df['Low'].values
         volumes = df['Volume'].values
-        
+
         if self._indicator_cache:
             vol_ma_series = self._indicator_cache.get('Volume_MA20')
             vol_ma = vol_ma_series.reindex(df.index).values
@@ -303,15 +315,15 @@ class StrengthWeaknessDetector(BaseDetector):
         prev_closes[0] = closes[0]
         safe_prev_closes = np.where(np.abs(prev_closes) > 1e-9, prev_closes, 1.0)
         price_pct_change = (closes - prev_closes) / safe_prev_closes
-            
+
         denominators = highs - lows
         safe_denominators = np.where(denominators == 0, 1.0, denominators)
         close_position = (closes - lows) / safe_denominators
-        
+
         lower_shadow = lows - np.where(opens < closes, opens, closes)
         body = np.abs(closes - opens)
         lower_shadow_ratio = np.abs(lower_shadow) / (body + 0.001)
-        
+
         sow_mask = (
             (closes < opens) &
             (volumes > vol_ma * vol_ratio_threshold) &
@@ -319,26 +331,61 @@ class StrengthWeaknessDetector(BaseDetector):
             (close_position <= 0.30) &
             (lower_shadow_ratio < 0.50)
         )
-        
+
         sow_indices = np.where(sow_mask)[0]
-        
+
         if len(sow_indices) > 0:
             idx_pos = sow_indices[-1]
             idx = df.index[idx_pos]
+            sow_price = float(closes[idx_pos])
+            sow_low = float(lows[idx_pos])
+
+            # 🔧 新增：验证是否跌破交易区间下沿
+            tr_low = trading_range.get('low') if trading_range else None
             breakdown_level = df['Low'].rolling(20).min().iloc[-1]
+
+            # 判断SOW类型
+            if tr_low is not None:
+                if sow_low < tr_low:
+                    # 跌破区间下沿 → 真正的SOW
+                    signal_type = 'true_sow'
+                    interpretation = f'跌破交易区间下沿{tr_low:.2f}元，供应占主导'
+                else:
+                    # 未跌破区间下沿 → 区间内弱势
+                    signal_type = 'within_range_weakness'
+                    interpretation = f'区间内弱势表现（未跌破{tr_low:.2f}元），可能是震仓或正常回调'
+            else:
+                signal_type = 'potential_sow'
+                interpretation = '放量下跌，但缺少交易区间信息验证'
+
             return {
-                'detected': True, 
-                'type': 'sow', 
-                'date': idx, 
-                'price': float(closes[idx_pos]), 
-                'volume_ratio': round(float(volumes[idx_pos] / vol_ma[idx_pos]) if vol_ma[idx_pos] > 0 else 1.0, 2), 
-                'price_change': round(float(price_pct_change[idx_pos]), 4), 
-                'breakdown_level': float(breakdown_level)
+                'detected': True,
+                'type': 'sow',
+                'signal_type': signal_type,
+                'date': idx,
+                'price': sow_price,
+                'low': sow_low,
+                'volume_ratio': round(float(volumes[idx_pos] / vol_ma[idx_pos]) if vol_ma[idx_pos] > 0 else 1.0, 2),
+                'price_change': round(float(price_pct_change[idx_pos]), 4),
+                'breakdown_level': float(breakdown_level),
+                'tr_low': tr_low,
+                'interpretation': interpretation
             }
         return {'detected': False}
 
-    def _detect_sow_iterative(self, window: int = 40) -> Dict:
-        """检测标准 SOW"""
+    def _detect_sow_iterative(self, window: int = 40, trading_range: Dict = None) -> Dict:
+        """
+        检测标准 SOW（Sign of Weakness）
+
+        🔧 新增：根据威科夫理论，真正的SOW必须：
+        1. 跌破交易区间下沿（或关键支撑位）
+        2. 后续无力收回（维持在下沿下方）
+        3. 在派发或再吸筹阶段的弱势表现
+
+        Args:
+            window: 检测窗口
+            trading_range: 当前交易区间（用于验证是否跌破区间下沿）
+        """
         # 🔧 P0-2修复：检查信号是否被屏蔽
         if self._is_signal_blocked('sow'):
             return {
@@ -352,7 +399,7 @@ class StrengthWeaknessDetector(BaseDetector):
         df = self.data.tail(window).copy()
         vol_ma = df['Volume'].rolling(20).mean()
         price_pct_change = df['Close'].pct_change()
-        
+
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
         price_change_threshold = self.thresholds.SOW_PRICE_CHANGE_DEFAULT
 
@@ -370,14 +417,39 @@ class StrengthWeaknessDetector(BaseDetector):
         )
         if sow_mask.any():
             idx = df[sow_mask].index[-1]
+            sow_price = df.loc[idx, 'Close']
+            sow_low = df.loc[idx, 'Low']
+
+            # 🔧 新增：获取交易区间下沿
+            tr_low = trading_range.get('low') if trading_range else None
+            breakdown_level = df['Low'].rolling(20).min().iloc[-1]
+
+            # 🔧 新增：判断SOW类型
+            if tr_low is not None:
+                if sow_low < tr_low:
+                    # 跌破区间下沿 → 真正的SOW
+                    signal_type = 'true_sow'
+                    interpretation = f'跌破交易区间下沿{tr_low:.2f}元，供应占主导'
+                else:
+                    # 未跌破区间下沿 → 区间内弱势
+                    signal_type = 'within_range_weakness'
+                    interpretation = f'区间内弱势表现（未跌破{tr_low:.2f}元），可能是震仓或正常回调'
+            else:
+                signal_type = 'potential_sow'
+                interpretation = '放量下跌，但缺少交易区间信息验证'
+
             return {
-                'detected': True, 
-                'type': 'sow', 
-                'date': idx, 
-                'price': df.loc[idx, 'Close'], 
-                'volume_ratio': round(df.loc[idx, 'Volume']/vol_ma.loc[idx], 2), 
-                'price_change': round(price_pct_change.loc[idx], 4), 
-                'breakdown_level': df['Low'].rolling(20).min().iloc[-1]
+                'detected': True,
+                'type': 'sow',
+                'signal_type': signal_type,
+                'date': idx,
+                'price': sow_price,
+                'low': sow_low,
+                'volume_ratio': round(df.loc[idx, 'Volume']/vol_ma.loc[idx], 2),
+                'price_change': round(price_pct_change.loc[idx], 4),
+                'breakdown_level': breakdown_level,
+                'tr_low': tr_low,
+                'interpretation': interpretation
             }
         return {'detected': False}
 

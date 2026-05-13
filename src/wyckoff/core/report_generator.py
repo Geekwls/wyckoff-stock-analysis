@@ -43,12 +43,13 @@ class WyckoffReportGenerator:
         # 获取各检测器的结果
         phase_result = self.pattern_detector.identify_phase()
         trading_range = self.pattern_detector.detect_trading_range()
-        
+
         # 模式检测
         spring = self.pattern_detector.detect_spring_menhongtao()
         upthrust = self.pattern_detector.detect_upthrust()
         sos = self.pattern_detector.detect_sos()
-        sow = self.pattern_detector.detect_sow()
+        # 🔧 修复：传递trading_range参数给SOW检测
+        sow = self.pattern_detector.detect_sow(trading_range=trading_range)
         lps = self.pattern_detector.detect_lps()
         lpsy = self.pattern_detector.detect_lpsy()
         
@@ -137,7 +138,8 @@ class WyckoffReportGenerator:
         spring = self.pattern_detector.detect_spring_menhongtao()
         upthrust = self.pattern_detector.detect_upthrust()
         sos = self.pattern_detector.detect_sos()
-        sow = self.pattern_detector.detect_sow()
+        # 🔧 修复：传递trading_range参数给SOW检测
+        sow = self.pattern_detector.detect_sow(trading_range=trading_range)
         lps = self.pattern_detector.detect_lps()
         lpsy = self.pattern_detector.detect_lpsy()
 

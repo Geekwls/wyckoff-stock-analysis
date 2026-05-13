@@ -22,7 +22,11 @@ class ConclusionSection(BaseSectionBuilder):
         retest_zone = None
         if trading_range and trading_range.get('is_broken'):
             breakout_level = self._get_tr_value(trading_range, 'high', current_price * 0.9)
-            lps_price = lps.get('price', 0) if lps else 0
+            # 🔧 修复：LPS返回结构中price字段在latest里
+            lps_price = 0
+            if lps:
+                latest = lps.get('latest', {}) if isinstance(lps, dict) else lps
+                lps_price = latest.get('price', 0) if isinstance(latest, dict) else 0
             retest_zone = self._calculate_healthy_retest_zone(current_price, breakout_level, lps_price)
 
         # === 事件仲裁结果 ===
@@ -174,8 +178,17 @@ class ConclusionSection(BaseSectionBuilder):
                 target2 = cause_effect.get('targets', {}).get('target_2', current_price * 1.15)
                 report += f"🚀 趋势跟踪买入（JOC 突破确认）:\n   参考入场区间: {joc_entry:.2f} ~ {joc_entry * 1.02:.2f}\n   止损: {joc_entry * 0.96:.2f} | 目标2: {target2:.2f}\n"
             elif lps.get('detected') and not is_distribution:
-                lp = lps.get('price', current_price)
-                report += f"[YES] 做多机会（LPS 最后支撑）:\n   入场价格: {lp:.2f} | 止损: {lp * 0.95:.2f}\n"
+                # 🔧 修复：LPS返回结构中price字段在latest里，且需要检查signal_type
+                latest = lps.get('latest', {}) if isinstance(lps, dict) else lps
+                signal_type = latest.get('signal_type', 'unknown') if isinstance(latest, dict) else 'unknown'
+                lp = latest.get('price', current_price) if isinstance(latest, dict) else current_price
+
+                # 只有正式LPS（signal_type='lps'）才显示为"做多机会"
+                if signal_type == 'lps':
+                    report += f"[YES] 做多机会（LPS 最后支撑）:\n   入场价格: {lp:.2f} | 止损: {lp * 0.95:.2f}\n"
+                elif signal_type == 'support_test':
+                    report += f"[?] 观察支撑测试:\n   价格: {lp:.2f}（非正式LPS，需等待确认）\n"
+                # 其他signal_type（pullback等）不显示在核心结论中
             elif fti.get('detected') and fti.get('test_detected'):
                 report += f"🔻 做空/减仓警示（FTI 跌破确认）\n"
             elif trading_range.get('is_consolidation'):
