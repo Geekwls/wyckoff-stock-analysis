@@ -1,4 +1,3 @@
-```
 # Python cache
 __pycache__/
 *.pyc
@@ -16,32 +15,35 @@ venv/
 env/
 .ENV/
 
-# Logs
+# Logs and temporary files
 *.log
+.cache/
+scratch/
+output.json
+src/wyckoff/stock_cache.json
 
 # Environment files
 .env
 .env.local
 *.env.*
 
-# Coverage reports
-.coverage
-htmlcov/
-coverage/
-
-# IDE files
+# IDE and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS files
 .DS_Store
 Thumbs.db
+.gemini/
 
 # Testing
 .pytest_cache/
 .mypy_cache/
+
+# Coverage reports
+.coverage
+htmlcov/
+coverage/
 
 # Compressed files
 *.zip
@@ -61,5 +63,4 @@ Thumbs.db
 *.deb
 *.Z
 *.lz
-*.lzo
-```
+*.lzo
