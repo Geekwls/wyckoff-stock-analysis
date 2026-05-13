@@ -508,7 +508,7 @@ class EventArbitrator:
         if isinstance(date_val, str):
             try:
                 return pd.to_datetime(date_val).to_pydatetime()
-            except:
+            except Exception:
                 return None
 
         return None

@@ -199,5 +199,3 @@ class SignalExtractor:
     def is_late_stage(phase_enum: WyckoffPhase) -> bool:
         """判断是否为后期阶段 (C/D)"""
         return PhaseAdapter.is_late_stage(phase_enum)
-
-    @staticmethod

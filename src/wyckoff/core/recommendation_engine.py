@@ -416,6 +416,9 @@ class RecommendationEngine:
         sos = pattern_results.get('sos', {})
         tr = pattern_results.get('trading_range', {})
 
+        # 提前提取 ATR 供所有分支使用
+        atr_val = float(data['ATR'].iloc[-1]) if 'ATR' in data.columns else current_price * 0.03
+
         def _safe_get(obj, key, default=None):
             if obj is None: return default
             if isinstance(obj, dict): return obj.get(key, default)
@@ -445,7 +448,6 @@ class RecommendationEngine:
             direction = "做多"
             zone = f"{joc.get('creek_level', current_price):.2f} 附近 (JOC突破)"
             creek = joc.get('creek_level', current_price)
-            atr_val = float(data['ATR'].iloc[-1]) if 'ATR' in data.columns else creek * 0.03
             stop = StopLossModel(
                 conservative=round(creek * 0.97, 2),
                 aggressive=round(creek * 0.95, 2),
@@ -469,12 +471,12 @@ class RecommendationEngine:
             stop = StopLossModel(
                 conservative=round(tr_low * 0.97, 2) if tr_low else round(sos_price * 0.93, 2),
                 aggressive=round(tr_low * 0.99, 2) if tr_low else round(sos_price * 0.95, 2),
+                atr_dynamic_stop=round(tr_low * 0.97 - atr_val, 2) if tr_low else round(sos_price * 0.93 - atr_val, 2),
             )
         elif fti.get('detected'):
             direction = "做空"
             ice = fti.get('ice_level', current_price)
             zone = f"{ice:.2f} 附近 (FTI跌破)"
-            atr_val = float(data['ATR'].iloc[-1]) if 'ATR' in data.columns else ice * 0.03
             stop = StopLossModel(
                 conservative=round(ice * 1.03, 2),
                 aggressive=round(ice * 1.05, 2),
@@ -488,7 +490,7 @@ class RecommendationEngine:
             stop = StopLossModel(
                 conservative=round(ut_high * 1.02, 2) if ut_high > 0 else round(current_price * 1.04, 2),
                 aggressive=round(swing_high * 1.01, 2),
-                atr_dynamic_stop=round(ut_high * 1.025, 2) if ut_high > 0 else round(current_price * 1.06, 2),
+                atr_dynamic_stop=round(ut_high + atr_val * 2, 2) if ut_high > 0 else round(current_price + atr_val * 2, 2),
             )
         elif sow.get('detected') and not fti.get('detected') and not upthrust.get('detected'):
             direction = "做空"
@@ -498,6 +500,7 @@ class RecommendationEngine:
             stop = StopLossModel(
                 conservative=round(tr_high * 1.03, 2) if tr_high else round(sow_price * 1.07, 2),
                 aggressive=round(tr_high * 1.01, 2) if tr_high else round(sow_price * 1.05, 2),
+                atr_dynamic_stop=round(tr_high * 1.03 + atr_val, 2) if tr_high else round(sow_price * 1.07 + atr_val, 2),
             )
 
         # ── 仓位建议 (Phase+风险导向) ──
@@ -525,13 +528,25 @@ class RecommendationEngine:
             conservative=cons, moderate=mod, aggressive=aggr
         )
 
+        is_phase_ab = 'Phase A' in phase_str or 'Phase B' in phase_str
+        is_phase_e = 'Phase E' in phase_str
+        is_markup_markdown = 'Markup' in phase_str or 'Markdown' in phase_str
+        if is_phase_ab:
+            holding_period = "1-3个月 (波段)"
+        elif is_phase_e:
+            holding_period = "2-6周 (中线)"
+        elif is_markup_markdown:
+            holding_period = "2-8周 (中线)"
+        else:
+            holding_period = "1-2个月 (波段)"
+
         return TradingPlanModel(
             direction=direction,
             entry_zone=zone,
             stop_loss=stop,
             targets=TargetsModel(target_1=targets.get('target_1', 0), target_2=targets.get('target_2', 0)),
             position_sizing=pos_sizing,
-            holding_period="1-3个月 (波段)" if 'Phase A' in phase_str or 'Phase B' in phase_str else "2-6周 (中线)" if 'Phase E' in phase_str else "1-3个月 (波段)",
+            holding_period=holding_period,
         )
 
     def generate_risk_advice(self, quality: SignalQualityModel, plan: TradingPlanModel,

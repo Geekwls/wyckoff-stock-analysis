@@ -162,6 +162,7 @@ class PhaseCoordinator:
             'fti': fti_res,
             'secondary_test': st_res,
             'automatic_reaction': ar_res,
+            'preliminary_support': ps_res,
         }
         # 5.6. 分析突破质量（在tr_res和trading_range创建后调用）
         trading_range_model = _safe_model(TradingRangeModel, tr_res)
@@ -273,13 +274,13 @@ class PhaseCoordinator:
         return 'Unknown'
 
 
-    def _replace_phase_type(self, phase: str, new_type: str) -> str:
+    def _replace_phase_type(self, phase: Optional[str], new_type: str) -> str:
         """替换阶段类型（保持 Phase X 部分）"""
-        if 'Phase' in phase:
-            parts = phase.split()
-            phase_letter = parts[-1]
-            return f"{new_type} Phase {phase_letter}"
-        return f"{new_type} Unknown"
+        if not phase or 'Phase' not in phase:
+            return f"{new_type} Unknown"
+        parts = phase.split()
+        phase_letter = parts[-1]
+        return f"{new_type} Phase {phase_letter}"
 
     def transition_phase_with_criteria(self, current_phase: str, events: Dict) -> Tuple[str, float]:
         """

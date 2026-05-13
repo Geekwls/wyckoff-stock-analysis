@@ -581,7 +581,7 @@ class WyckoffPatternDetector:
             dt = pd.to_datetime(date_val)
             # 转换为tz-naive
             return dt.tz_localize(None) if hasattr(dt, 'tzinfo') and dt.tzinfo is not None else dt
-        except:
+        except Exception:
             return None
 
     def analyze_phase_a_evidence(self) -> Dict:

@@ -298,10 +298,29 @@ class EffortResultMixin:
                 return ' | [Phase E] 缩量推进需警惕趋势末端的需求/供应枯竭'
             elif interpretation == 'CONFIRMATION':
                 return ' | [Phase E] 高量同向推进，趋势健康持续'
+        elif 'Distribution' in phase or '派发' in phase:
+            if interpretation in ('CONFIRMATION', 'WEAK_CONFIRMATION'):
+                return ' | [Distribution] 量价确认派发趋势，供应主导市场'
+            elif interpretation in ('DIVERGENCE', 'EFFORT_WITHOUT_RESULT'):
+                return ' | [Distribution] 背离确认派发衰竭，可能出现 LPSY 或 Spring'
+            elif interpretation == 'RESULT_WITHOUT_EFFORT':
+                return ' | [Distribution] 缩量下跌需求枯竭，派发末端信号'
+            elif interpretation == 'STRONG_OUTPERFORMANCE':
+                return ' | [Distribution] 相对强势但处于派发期，可能为诱多反弹，警惕 UT'
         elif 'Markup' in phase:
-            if interpretation == 'RESULT_WITHOUT_EFFORT' and '跌' not in phase:
+            if interpretation == 'RESULT_WITHOUT_EFFORT':
                 return ' | [Markup] 无量上涨，警惕需求衰竭，注意止盈'
+            elif interpretation == 'CONFIRMATION':
+                return ' | [Markup] 价量配合的健康上涨趋势'
+            elif interpretation == 'DIVERGENCE':
+                return ' | [Markup] 量价背离可能预示 Markup 末端，关注 Phase A 派发信号'
         elif 'Markdown' in phase:
             if interpretation == 'RESULT_WITHOUT_EFFORT':
                 return ' | [Markdown] 无量下跌，供应趋于枯竭，关注筑底信号'
+            elif interpretation == 'CONFIRMATION':
+                return ' | [Markdown] 价量配合的下跌趋势持续'
+            elif interpretation == 'DIVERGENCE':
+                return ' | [Markdown] 量价背离预示卖盘枯竭，可能出现 Spring 或 PS'
+            elif interpretation in ('WEAK_UNDERPERFORMANCE', 'DOUBLE_WEAKNESS'):
+                return ' | [Markdown] 弱势放量下跌，市场恐慌情绪加剧，等待 SC 出现'
         return ''
