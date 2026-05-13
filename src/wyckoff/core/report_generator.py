@@ -72,27 +72,50 @@ class WyckoffReportGenerator:
         mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
         conflict = self._analyze_conflict(phase_result.get('phase'), mtf)
 
-        # 🔧 终极逻辑自检 (Final Sanity Check): 解决“诊断与处方打架”问题
+        # 🔧 终极逻辑自检 (Final Sanity Check): 解决"诊断与处方打架"问题
         is_distribution = 'Distribution' in phase_result.get('phase', '')
-        
-        # 组装报告
-        report = self.header_builder.build(phase_result, trading_range)
-        report += self.evidence_builder.build(phase_result)
-        report += self.pattern_builder.build(trading_range, spring, upthrust, sos, sow, lps, lpsy, phase_result.get('phase'))
-        report += self.signal_builder.build(joc, fti, vsa, boring_res, dead_corner)
-        
-        # 在生成结论前，如果处于派发阶段，强制修正做多信号为无效
-        if is_distribution:
+
+        # 获取事件仲裁结果和突破分析（在组装报告前）
+        arbitration_result = None
+        breakout_analysis = None
+        try:
+            if hasattr(self.pattern_detector, 'phase_coordinator'):
+                events = self.pattern_detector.phase_coordinator.collect_all_events()
+                arbitration_result = events.get('arbitration_result')
+                breakout_analysis = events.get('breakout_analysis')
+        except Exception as e:
+            logger.debug(f"Failed to get arbitration/breakout analysis: {e}")
+
+        # 🔧 修复：检查突破覆盖规则 - 如果有向上突破，覆盖派发判断
+        should_suppress_bullish = is_distribution
+        if is_distribution and breakout_analysis:
+            is_broken = trading_range.get('is_broken', False) if isinstance(trading_range, dict) else getattr(trading_range, 'is_broken', False)
+            direction = breakout_analysis.get('direction', '')
+            is_upthrust = breakout_analysis.get('is_upthrust', False)
+
+            # 向上突破 + 非Upthrust = 真实突破，应该否决派发判断
+            if is_broken and direction == 'up' and not is_upthrust:
+                should_suppress_bullish = False
+                logger.info(f"Breakout override: Upward breakout detected, NOT suppressing bullish signals despite Distribution phase for {self.symbol}")
+
+        # 在生成结论前，如果处于派发阶段且无突破覆盖，强制修正做多信号为无效
+        if should_suppress_bullish:
             # 强制屏蔽做多信号的影响
             joc['detected'] = False
             lps['detected'] = False
             spring['detected'] = False
             logger.warning(f"Detection contradiction: Distribution phase detected. Bullish signals (JOC/LPS/Spring) suppressed for {self.symbol}.")
 
+        # 组装报告
+        report = self.header_builder.build(phase_result, trading_range)
+        report += self.evidence_builder.build(phase_result)
+        report += self.pattern_builder.build(trading_range, spring, upthrust, sos, sow, lps, lpsy, phase_result.get('phase'))
+        report += self.signal_builder.build(joc, fti, vsa, boring_res, dead_corner)
+
         report += self.conclusion_builder.build(
             phase_result, trading_range, cause_effect, conflict, quality_data,
             joc, spring, sos, lps, fti, upthrust, sow, lpsy, mtf,
-            boring_res, dead_corner, market_env
+            boring_res, dead_corner, market_env, arbitration_result, breakout_analysis
         )
         
         return report

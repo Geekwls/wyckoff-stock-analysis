@@ -47,6 +47,60 @@ class RecommendationEngine:
         # 其他情况，使用getattr
         return getattr(obj, key, default)
 
+    @staticmethod
+    def _is_bearish_signal_absorbed(signal_type: str, signal_info: Any, data: Any) -> bool:
+        """
+        检查看空信号是否已被价格吸收（失效）
+
+        威科夫理论：如果价格突破看空信号的价格位一定幅度（如15%），
+        且保持在该水平上方，则说明该看空信号已被需求吸收，不再有效。
+
+        Args:
+            signal_type: 信号类型 ('sow', 'lpsy', 'upthrust')
+            signal_info: 信号信息
+            data: 价格数据
+
+        Returns:
+            True表示信号已被吸收，不应计入冲突评分
+        """
+        try:
+            # 获取信号价格
+            signal_price = RecommendationEngine._get_attr(signal_info, 'price', 0)
+            if signal_price <= 0:
+                return False
+
+            # 获取当前价格
+            if not hasattr(data, 'Close'):
+                return False
+            current_price = data['Close'].iloc[-1]
+
+            # 计算价格上涨幅度
+            price_gain_pct = (current_price / signal_price) - 1
+
+            # 🔧 修复：降低阈值，15%上涨即认为信号已被吸收
+            if price_gain_pct > 0.15:  # 上涨超过15%
+                # 进一步检查：是否真正突破（不仅仅是短暂上冲）
+                # 检查最近N天的收盘价，大部分维持在信号价格上方即可
+                lookback = min(20, len(data))
+                recent_closes = data['Close'].iloc[-lookback:]
+
+                # 🔧 修复：改为80%的天数在信号价格上方即可（更宽松）
+                days_above = (recent_closes > signal_price * 1.02).sum()  # 102%信号价格以上
+                pct_above = days_above / len(recent_closes)
+
+                if pct_above >= 0.80:  # 80%的天数在上方
+                    logger.info(
+                        f"Bearish signal {signal_type} at {signal_price:.2f} ABSORBED: "
+                        f"current {current_price:.2f} (+{price_gain_pct*100:.1f}%), "
+                        f"{days_above}/{lookback} days above, {pct_above*100:.0f}%"
+                    )
+                    return True
+
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking if signal absorbed: {e}")
+            return False
+
     def calculate_weighted_score(self, data: Any, pattern_results: Dict[str, Any], market_env: MarketEnvironment) -> SignalQualityModel:
         """
         计算高级加权评分 (包含时间衰减与冲突惩罚)
@@ -80,7 +134,23 @@ class RecommendationEngine:
 
         for key, max_weight in important_signals:
             info = events.get(key)
+
+            # 🔧 新增：如果不在顶层events中，尝试从_raw_events获取
+            if not info and '_raw_events' in events:
+                raw_events = events.get('_raw_events', {})
+                info = raw_events.get(key)
+
             if not info or not self._get_attr(info, 'detected'): continue
+
+            # 🔧 新增：检查看空信号是否已失效（被价格吸收）
+            if key in ['sow', 'lpsy', 'upthrust']:
+                if self._is_bearish_signal_absorbed(key, info, data):
+                    # 信号已被吸收，不计入冲突评分
+                    signal_price = self._get_attr(info, 'price', 0)
+                    current_price = data['Close'].iloc[-1] if hasattr(data, 'Close') else 0
+                    logger.info(f"Signal {key} at {signal_price:.2f} absorbed by current price {current_price:.2f}, skipping conflict counting")
+                    reasons.append(f"过时信号{key.upper()}已失效不计入冲突")
+                    continue  # Skip this signal in conflict detection
 
             # 判断方向
             if key in ['joc', 'spring', 'sos', 'lps', 'automatic_reaction']:
@@ -217,7 +287,9 @@ class RecommendationEngine:
             phase_str = pattern_results.get('phase', 'Unknown')
 
             # 检查是否是阶段过渡期的合理信号（如吸筹→上涨）
+            # 🔧 修复：Phase A本身就应该有混合信号（AR+ST），不应惩罚
             is_phase_transition = (
+                ('Phase A' in phase_str or 'Phase B' in phase_str) or  # Phase A/B必然有混合信号
                 ('Accumulation' in phase_str and bullish_count > bearish_count) or
                 ('Distribution' in phase_str and bearish_count > bullish_count)
             )

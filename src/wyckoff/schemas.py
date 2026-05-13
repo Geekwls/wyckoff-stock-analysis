@@ -219,6 +219,28 @@ class SequenceValidationModel(BaseModel):
     conflicts: List[str] = Field(default_factory=list, description="检测到的逻辑矛盾")
 
 
+class ArbitrationSignal(BaseModel):
+    """参与仲裁的信号"""
+    signal_type: str = Field(description="信号类型: spring/lpsy/sos/sow等")
+    date: Optional[Any] = Field(description="信号日期")
+    direction: str = Field(description="信号方向: bullish/bearish")
+    confidence: float = Field(description="信号置信度")
+    strength: Optional[float] = Field(default=None, description="信号强度")
+    raw_data: Dict[str, Any] = Field(default_factory=dict, description="原始信号数据")
+
+
+class ArbitrationResult(BaseModel):
+    """事件仲裁结果"""
+    has_conflict: bool = Field(description="是否存在冲突信号")
+    conflicting_signals: List[ArbitrationSignal] = Field(default_factory=list, description="冲突的信号列表")
+    dominant_signal: Optional[ArbitrationSignal] = Field(default=None, description="主导信号")
+    rejected_signals: List[ArbitrationSignal] = Field(default_factory=list, description="被拒绝的信号")
+    arbitration_reason: str = Field(description="仲裁理由")
+    suggested_phase: Optional[str] = Field(default=None, description="建议的阶段")
+    phase_adjustment: Optional[str] = Field(default=None, description="阶段调整说明")
+    confidence_adjustment: float = Field(default=1.0, description="置信度调整系数")
+
+
 class EventsModel(BaseModel):
     """所有事件"""
     trading_range: TradingRangeModel = Field(description="交易区间")
@@ -233,6 +255,7 @@ class EventsModel(BaseModel):
     lpsy: LpsyModel = Field(description="LPSY事件")
     joc: Optional[JocModel] = Field(default=None, description="JOC事件")
     fti: Optional[FtiModel] = Field(default=None, description="FTI事件")
+    arbitration_result: Optional[ArbitrationResult] = Field(default=None, description="事件仲裁结果")
 
 
 # ============================================================

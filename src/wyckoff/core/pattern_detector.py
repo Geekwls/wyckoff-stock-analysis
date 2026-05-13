@@ -482,10 +482,10 @@ class WyckoffPatternDetector:
             
             if not potential_ps:
                 return {"detected": False, "reason": "No PS pattern found in downtrend"}
-            
+
             best_ps = max(potential_ps, key=lambda x: x['confidence'])
             sc_found, sc_price = self._verify_ps_with_sc(data, best_ps)
-            
+
             return {
                 "detected": True,
                 "ps_date": best_ps['date'].strftime("%Y-%m-%d") if hasattr(best_ps['date'], 'strftime') else str(best_ps['date']),
@@ -504,6 +504,188 @@ class WyckoffPatternDetector:
         except Exception as e:
             logger.exception(f"PS检测失败: 未知异常: {e}")
             raise PatternDetectionError("PS", f"未知异常: {e}") from e
+
+    def _validate_ps_sc_sequence(self, ps_res: Dict, sc_res: Dict) -> Tuple[bool, str]:
+        """
+        验证PS和SC是否符合威科夫理论的时间序列
+
+        Args:
+            ps_res: PS检测结果
+            sc_res: SC检测结果
+
+        Returns:
+            (是否有效, 原因说明)
+
+        规则：
+        1. PS日期必须早于SC日期
+        2. PS价格应该高于SC低点（PS是支撑位，SC应该跌破PS）
+        3. 时间差应该在合理范围内（PS到SC通常5-60天）
+        """
+        if not ps_res.get('detected') or not sc_res.get('detected'):
+            return False, "PS或SC未检测到"
+
+        # 检查日期顺序
+        ps_date = self._parse_date(ps_res.get('ps_date') or ps_res.get('date'))
+        sc_date = self._parse_date(sc_res.get('date'))
+
+        if not ps_date or not sc_date:
+            return False, "无法解析PS或SC日期"
+
+        # PS必须在SC之前
+        if ps_date >= sc_date:
+            logger.warning(f"PS日期{ps_date}晚于或等于SC日期{sc_date}，不符合Phase A序列")
+            return False, f"PS日期({ps_date})晚于SC日期({sc_date})"
+
+        # 检查价格关系：PS价格应该高于SC低点
+        ps_price = ps_res.get('ps_price') or ps_res.get('price')
+        sc_price = sc_res.get('price')  # SC的价格就是低点
+
+        if ps_price and sc_price:
+            # PS价格应该高于SC低点
+            # PS是支撑位，SC应该跌破PS
+            if ps_price < sc_price * 0.95:  # 允许5%容差
+                logger.warning(
+                    f"PS价格{ps_price}远低于SC价格{sc_price}，"
+                    f"不符合Phase A逻辑（PS应该是支撑位，SC应跌破PS）"
+                )
+                return False, f"PS价格({ps_price})低于SC价格({sc_price})，时序混乱"
+
+        # 检查时间差
+        time_diff = (sc_date - ps_date).days
+        if time_diff > 90:  # 超过90天太长了
+            logger.warning(f"PS到SC时间差{time_diff}天过长，可能不是同一个Phase A")
+            return False, f"PS到SC时间差({time_diff}天)过长"
+
+        return True, "PS与SC时序一致"
+
+    def _parse_date(self, date_val):
+        """
+        解析日期为Timestamp，统一转换为tz-naive以避免比较错误
+        """
+        if date_val is None:
+            return None
+        if isinstance(date_val, pd.Timestamp):
+            # 转换为tz-naive以避免时区比较问题
+            return date_val.tz_localize(None) if date_val.tzinfo is not None else date_val
+        try:
+            dt = pd.to_datetime(date_val)
+            # 转换为tz-naive
+            return dt.tz_localize(None) if hasattr(dt, 'tzinfo') and dt.tzinfo is not None else dt
+        except:
+            return None
+
+    def analyze_phase_a_evidence(self) -> Dict:
+        """
+        综合分析 Phase A 的核心证据 (PS -> SC -> AR -> ST)
+        """
+        try:
+            sc_res = self.detect_climax_panic_selling()
+            ps_res = self.detect_preliminary_support()
+            ar_res = self.detect_automatic_rally()
+            st_res = self.detect_secondary_test(sc_res, ar_res)
+            sot_res = self.detect_stopping_of_transient()
+            spring_res = self.detect_spring_menhongtao()
+
+            # 🔧 新增：PS/SC时序验证
+            ps_sc_valid, ps_sc_reason = self._validate_ps_sc_sequence(ps_res, sc_res)
+
+            # 检测+必要字段双重验证，确保与报告层显示一致
+            def _check_detected(res: dict, required_fields: list) -> bool:
+                return bool(res.get("detected")) and all(k in res for k in required_fields)
+
+            # 🔧 修复：只有在PS/SC时序有效时，才计入PS和SC
+            checks = []
+
+            # PS：只有在PS/SC时序有效时才计入
+            if ps_sc_valid:
+                checks.append({
+                    'id': 'PS',
+                    'detected': _check_detected(ps_res, ['ps_price']),
+                    'weight': 1,
+                    'note': 'PS与SC时序一致'
+                })
+            else:
+                checks.append({
+                    'id': 'PS',
+                    'detected': False,
+                    'weight': 1,
+                    'note': ps_sc_reason
+                })
+
+            # SC：只有在PS/SC时序有效时才计入
+            if ps_sc_valid:
+                checks.append({
+                    'id': 'SC',
+                    'detected': _check_detected(sc_res, ['date', 'price', 'volume_ratio']),
+                    'weight': 2,
+                    'note': 'SC与PS时序一致'
+                })
+            else:
+                checks.append({
+                    'id': 'SC',
+                    'detected': False,
+                    'weight': 2,
+                    'note': ps_sc_reason
+                })
+
+            # AR和ST：独立验证
+            checks.append({
+                'id': 'AR',
+                'detected': _check_detected(ar_res, ['date', 'price']),
+                'weight': 2
+            })
+
+            checks.append({
+                'id': 'ST',
+                'detected': _check_detected(st_res, ['date', 'price', 'volume_ratio']),
+                'weight': 1
+            })
+
+            evidence_count = sum(1 for c in checks if c['detected'])
+            detected_weight = sum(c['weight'] for c in checks if c['detected'])
+
+            # 🔧 修复：基于有效证据重新计算强度
+            if detected_weight >= 4 and ps_sc_valid:
+                strength = "strong"
+                phase_a_confirmed = True
+            elif detected_weight >= 2:
+                strength = "weak"
+                phase_a_confirmed = True
+            else:
+                strength = "none"
+                phase_a_confirmed = False
+
+            return {
+                "phase_a_confirmed": phase_a_confirmed,
+                "strength": strength,
+                "is_valid_sequence": ps_sc_valid,  # 使用PS/SC时序验证
+                "evidence_count": evidence_count,
+                "total_checks": 4,
+                "evidence": {
+                    "sc": sc_res,
+                    "ps": ps_res,
+                    "ar": ar_res,
+                    "st": st_res,
+                    "sot": sot_res,
+                    "spring": spring_res
+                },
+                # 🔧 新增：时序验证信息
+                "sequence_validation": {
+                    "ps_sc_valid": ps_sc_valid,
+                    "ps_sc_reason": ps_sc_reason,
+                    "ps_date": ps_res.get('ps_date') if ps_res else None,
+                    "sc_date": sc_res.get('date') if sc_res else None,
+                    "ps_price": ps_res.get('ps_price') if ps_res else None,
+                    "sc_price": sc_res.get('price') if sc_res else None,
+                    "notes": [c.get('note', '') for c in checks if not c['detected']]
+                }
+            }
+        except (KeyError, ValueError, TypeError) as e:
+            logger.exception(f"Phase A证据分析失败: {e}")
+            return {"phase_a_confirmed": False, "strength": "none", "error": str(e)}
+        except Exception as e:
+            logger.exception(f"Phase A证据分析失败: 未知异常: {e}")
+            raise AnalysisError(f"Phase A证据分析失败: {e}") from e
 
     def detect_stopping_of_transient(self, lookback_days: int = 20) -> Dict:
         """
@@ -559,7 +741,6 @@ class WyckoffPatternDetector:
                             "atr_pct": self._atr_pct
                         }
                     }
-
             return {"detected": False, "reason": "No SOT pattern found"}
         except (KeyError, ValueError, TypeError) as e:
             logger.exception(f"SOT检测失败: {e}")
@@ -568,79 +749,3 @@ class WyckoffPatternDetector:
             logger.exception(f"SOT检测失败: 未知异常: {e}")
             raise PatternDetectionError("SOT", f"未知异常: {e}") from e
 
-    def analyze_phase_a_evidence(self) -> Dict:
-        """
-        综合分析 Phase A 的核心证据 (PS -> SC -> AR -> ST)
-        """
-        try:
-            sc_res = self.detect_climax_panic_selling()
-            ps_res = self.detect_preliminary_support()
-            ar_res = self.detect_automatic_rally()
-            st_res = self.detect_secondary_test(sc_res, ar_res)
-            sot_res = self.detect_stopping_of_transient()
-            spring_res = self.detect_spring_menhongtao()
-
-            # 检测+必要字段双重验证，确保与报告层显示一致
-            def _check_detected(res: dict, required_fields: list) -> bool:
-                return bool(res.get("detected")) and all(k in res for k in required_fields)
-
-            checks = [
-                {'id': 'PS', 'detected': _check_detected(ps_res, ['rebound_pct']), 'weight': 1},
-                {'id': 'SC', 'detected': _check_detected(sc_res, ['date', 'price', 'volume_ratio']), 'weight': 2},
-                {'id': 'AR', 'detected': _check_detected(ar_res, ['date', 'price']), 'weight': 2},
-                {'id': 'ST', 'detected': _check_detected(st_res, ['date', 'price', 'volume_ratio']), 'weight': 1}
-            ]
-
-            evidence_count = sum(1 for c in checks if c['detected'])
-            detected_weight = sum(c['weight'] for c in checks if c['detected'])
-
-            is_valid_sequence = False
-            if ps_res.get('detected') and sc_res.get('detected') and ar_res.get('detected'):
-                # 兼容性处理：支持 Timestamp 或字符串
-                def to_dt(d): 
-                    if not d: return None
-                    dt = pd.to_datetime(d)
-                    # Convert to naive timestamp for comparison
-                    if dt.tz is not None:
-                        dt = dt.tz_localize(None)
-                    return dt
-                
-                ps_date = to_dt(ps_res.get('ps_date'))
-                sc_date = to_dt(sc_res.get('date'))
-                ar_date = to_dt(ar_res.get('ar_date'))
-                
-                if ps_date and sc_date and ar_date:
-                    if ps_date < sc_date < ar_date:
-                        is_valid_sequence = True
-
-            if detected_weight >= 4 and is_valid_sequence:
-                strength = "strong"
-                phase_a_confirmed = True
-            elif detected_weight >= 2:
-                strength = "weak"
-                phase_a_confirmed = True
-            else:
-                strength = "none"
-                phase_a_confirmed = False
-
-            return {
-                "phase_a_confirmed": phase_a_confirmed,
-                "strength": strength,
-                "is_valid_sequence": is_valid_sequence,
-                "evidence_count": evidence_count,
-                "total_checks": 4,
-                "evidence": {
-                    "sc": sc_res,
-                    "ps": ps_res,
-                    "ar": ar_res,
-                    "st": st_res,
-                    "sot": sot_res,
-                    "spring": spring_res
-                }
-            }
-        except (KeyError, ValueError, TypeError) as e:
-            logger.exception(f"Phase A证据分析失败: {e}")
-            return {"phase_a_confirmed": False, "strength": "none", "error": str(e)}
-        except Exception as e:
-            logger.exception(f"Phase A证据分析失败: 未知异常: {e}")
-            raise AnalysisError(f"Phase A证据分析失败: {e}") from e
