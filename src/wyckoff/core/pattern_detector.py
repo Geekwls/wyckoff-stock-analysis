@@ -112,7 +112,77 @@ class WyckoffPatternDetector:
         if self.bayesian_model:
             return self.bayesian_model.get_volume_threshold('shrink', default=base_threshold)
         return base_threshold
-    
+
+    def _calculate_climax_confidence(self, vol_ratio: float, close_pos: float = 0.5) -> float:
+        """
+        🔧 修复 P0-2: 计算 BC/SC 置信度（基于量比分层）
+
+        理论依据：
+        - 量比 < 2.0：不是真正的高潮，置信度 < 0.3
+        - 量比 2.0-3.0：中等高潮，置信度 0.3-0.7
+        - 量比 > 3.0：真正的巨量高潮，置信度 0.7-1.0
+
+        Args:
+            vol_ratio: 成交量相对于均量的倍数
+            close_pos: 收盘位置（0=最低，1=最高），用于辅助判断
+
+        Returns:
+            置信度（0.0-1.0）
+        """
+        if vol_ratio < 2.0:
+            # 低量比：置信度极低
+            base_conf = (vol_ratio - 1.0) * 0.3
+            # 如果收盘位置高（>0.7），进一步降低置信度（BC应该收盘疲软）
+            if close_pos > 0.7:
+                base_conf *= 0.5
+            return max(0.0, min(0.3, base_conf))
+        elif vol_ratio < 3.0:
+            # 中等量比：置信度中等
+            return 0.3 + (vol_ratio - 2.0) * 0.4
+        else:
+            # 高量比：置信度高
+            return min(1.0, 0.7 + (vol_ratio - 3.0) * 0.1)
+
+    def _validate_climax_effort_result(
+        self,
+        vol_ratio: float,
+        price_progress: float,
+        close_pos: float = 0.5
+    ) -> tuple:
+        """
+        🔧 修复 P2-1: 验证 BC/SC 是否符合 Effort vs Result 原则
+
+        理论依据：
+        - 巨量但价格停滞 = Effort vs Result 背离（可能不是真正的高潮）
+        - 缩量但价格大涨 = 弱势突破（需求不足）
+        - 真正的 BC/SC 应该是巨量 + 显著价格推进
+
+        Args:
+            vol_ratio: 成交量相对于均量的倍数
+            price_progress: 价格变化幅度（百分比）
+            close_pos: 收盘位置（0=最低，1=最高）
+
+        Returns:
+            (is_valid, confidence_penalty, warning_message)
+        """
+        # 检查量价背离
+        if vol_ratio > 1.5 and abs(price_progress) < 0.01:
+            warning = "⚠️ 警告：量价背离，巨量未推动价格显著变化，可能不是真正的 BC/SC"
+            return False, 0.5, warning
+
+        # 检查缩量突破
+        if vol_ratio < 1.2 and abs(price_progress) > 0.03:
+            warning = "⚠️ 警告：缩量突破，需求不足，信号可靠性低"
+            return False, 0.7, warning
+
+        # 检查收盘位置（BC 应该收盘疲软）
+        if close_pos > 0.7 and vol_ratio < 2.0:
+            warning = "⚠️ 警告：收盘位置偏高位但量能不足，疑似诱多"
+            return False, 0.6, warning
+
+        # 通过验证
+        return True, 1.0, None
+
     def _get_dynamic_price_threshold(self, base_threshold: float = 0.03) -> float:
         """
         获取动态价格变化阈值
@@ -323,10 +393,10 @@ class WyckoffPatternDetector:
             
             # 动态阈值：基于ATR适配
             # 威科夫理论：SC必须伴随巨幅放量，通常为均量2倍以上
+            # 🔧 修复 P0-1: SC 至少需要 2.5x 巨量，fallback 也需要 2.5x
             climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
             climax_range_threshold = self._get_dynamic_volume_threshold(1.8)
-            # 降级阈值也至少1.8倍 — 1.2倍仅属正常波动，不足以定性为SC
-            fallback_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['moderate'], 1.8))
+            fallback_vol_threshold = self._get_dynamic_volume_threshold(2.5)  # 🔧 取消低量 fallback，强制 2.5x
             
             # 高潮候选者：成交量 > 动态阈值倍均量 且 价差 > 动态阈值倍均价差
             candidates = recent_data[
@@ -352,8 +422,19 @@ class WyckoffPatternDetector:
 
             sc_row = recent_data.loc[sc_idx]
             vol_ratio = sc_row['Volume'] / vol_ma.loc[sc_idx]
-            
-            confidence = min(100, (vol_ratio - 1.0) * 50)
+
+            # 🔧 修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
+            sc_close_pos = (sc_row['Close'] - sc_row['Low']) / max(sc_row['High'] - sc_row['Low'], 1e-9)
+            base_confidence = self._calculate_climax_confidence(vol_ratio, sc_close_pos)
+
+            # 🔧 修复 P2-1: Effort vs Result 验证
+            price_progress = (sc_row['Close'] - sc_row['Open']) / sc_row['Open']
+            is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, sc_close_pos)
+
+            if warning:
+                logger.warning(f"[SC Effort vs Result] {warning}")
+
+            confidence = base_confidence * penalty
 
             return {
                 "detected": is_climax,
@@ -382,8 +463,9 @@ class WyckoffPatternDetector:
             vol_ma = recent_data['Volume_MA20'] if 'Volume_MA20' in recent_data.columns else recent_data['Volume'].rolling(20).mean()
             
             # 动态阈值
+            # 🔧 修复 P0-1: BC 至少需要 2.5x 巨量，fallback 也需要 2.5x
             climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
-            fallback_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['moderate'], 1.8))
+            fallback_vol_threshold = self._get_dynamic_volume_threshold(2.5)  # 🔧 取消低量 fallback，强制 2.5x
             
             # 计算收盘位置分位和上影线比例
             range_size = recent_data['High'] - recent_data['Low']
@@ -418,7 +500,18 @@ class WyckoffPatternDetector:
 
             bc_row = recent_data.loc[bc_idx]
             vol_ratio = bc_row['Volume'] / vol_ma.loc[bc_idx]
-            confidence = min(100, (vol_ratio - 1.0) * 50)
+            # 🔧 修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
+            bc_close_pos = (bc_row['Close'] - bc_row['Low']) / max(bc_row['High'] - bc_row['Low'], 1e-9)
+            base_confidence = self._calculate_climax_confidence(vol_ratio, bc_close_pos)
+
+            # 🔧 修复 P2-1: Effort vs Result 验证
+            price_progress = (bc_row['Close'] - bc_row['Open']) / bc_row['Open']
+            is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, bc_close_pos)
+
+            if warning:
+                logger.warning(f"[BC Effort vs Result] {warning}")
+
+            confidence = base_confidence * penalty
 
             return {
                 "detected": is_climax,

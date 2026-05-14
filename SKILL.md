@@ -1,7 +1,7 @@
 ---
 name: wyckoff-stock-analysis
 description: This skill acts as an expert Wyckoff trading analyst and system router. Use it to analyze stocks, interpret market phases, and identify key events based on Richard D. Wyckoff's theory.
-version: 2.0.0
+version: 2.2.0
 ---
 
 # Wyckoff Stock Analysis - Expert System Router
@@ -27,6 +27,18 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    - Alternatively, import the library directly: `from src.wyckoff import WyckoffAnalyzer; analyzer = WyckoffAnalyzer("[SYMBOL]")`
    - If the tool fails or you don't have tool execution ability, strictly ask the user for recent price and volume data.
    - Evaluate the data. Determine Phase (A-E), Key Events (Spring/Upthrust/SOS/SOW), and Volume confirmation.
+   - **Signal Conflict Resolution**: If `has_conflict` is true in the JSON output, you MUST enter "Deep Discernment Mode". Compare the "Shakeout/Spring" vs "Bull Trap/UT" scenarios, analyze the supply/demand weight, and provide a bias confidence level.
+   - **🔑 Tool Selection (MANDATORY — choose the cheapest tool that satisfies the query):**
+
+     | User Intent | Tool to Call | Token Cost |
+     |---|---|---|
+     | "What phase is X in?" / "Is X accumulating?" | `detect_wyckoff_phase` | ~5-10% |
+     | "Support/resistance/stop loss/targets for X?" | `get_trading_levels` | ~5-10% |
+     | "Is it a shakeout or a bull trap?" / conflict analysis | `analyze_signal_conflict` | ~10-15% |
+     | "Scan / screen multiple stocks" | `batch_analyze_sector` | medium |
+     | Full analysis / trading plan / conflict report | `analyze_stock_wyckoff` | 100% |
+
+     **Rule**: NEVER call `analyze_stock_wyckoff` if a simpler atomic tool can answer the question.
    - Close the `</thinking>` block.
 
 2. **Output Formatting**
@@ -35,7 +47,11 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    **# 🎯 Core Conclusion**
    - **Trading Direction**: `[trading_plan.direction]` (Explicitly state whether this is a [Long Plan] or [Short Plan])
    - **Trading Recommendation**: (e.g., Wait-and-see / Buy-on-dips / Partial Profit Taking / Hold)
-   - **Key Levels**: Entry Zone `[entry_zone]`, Stop Loss `[stop_loss]`, Targets `[targets]`
+   - **Key Levels**: Entry Zone `[entry_zone]`, Stop Loss `[stop_loss]`, Targets `[targets]`, Critical Confirmation Level `[breakdown_level]`
+     *Requirement: Whenever a price level has a `derivation` field, you MUST quote it in your explanation.*
+     *Format: "关键确认位：XX.XX 元（来源：[note]，计算式：[derivation]）"*
+     *Example: "关键确认位：10.46 元（来源：SOS 启动位下方 3% 偏离，计算式：0.97 × TR 高点 10.78）"*
+     *The same rule applies to stop_loss.conservative.derivation, targets.target_1.derivation, support_level.derivation, etc.*
    - **Signal Quality**: `[signal_quality.score]/10` (Confidence Level: `[confidence]`)
    - **Market Context**: `[market_context.phase]` (Tailwind / Headwind)
 
@@ -51,6 +67,11 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    - **Conservative**: `[action]` - `[reason]` (Position/Stop-loss: `[entry_condition]`)
    - **Balanced**: `[action]` - `[position]` (Stop-loss: `[stop_loss]`)
    - **Aggressive**: `[action]` - `[position]` (Stop-loss: `[stop_loss]`)
+
+   **⚠️ PHASE-LINKED ADVICE RULES**:
+   - **Phase A/B**: Recommend "Observation" or "Very light position try-out" only.
+   - **Phase C**: Recommend "Batch entry" or "Position building".
+   - **Phase D/E**: Recommend "Holding" or "Adding to position".
 
    **# 📚 Jargon Explained**
    *(Directly read and list terms from `[terminology_guide]` with their `simple` and `action` explanations; skip if no data available)*
@@ -89,13 +110,14 @@ Your internal prompt context is deliberately kept small. If you are unsure about
 ## ⚠️ Strict Rules & Anti-Hallucination Constraints
 
 1. **Volume Dependency**: If you do not have volume data, your Confidence Score MUST NOT exceed 4/10. You must explicitly warn the user that "Effort vs Result cannot be measured without volume."
-2. **Market-Specific Rules**: Apply market-specific logic based on auto-detected market type:
+2. **Effort vs Result Constraint**: If volume is significantly high but price progress is minimal (wide effort, small result), you MUST explicitly output a warning: "⚠️ 警告：量价背离，疑似供应进场（Effort vs Result Divergence）", even if the overall trend appears bullish (Markup).
+3. **Market-Specific Rules**: Apply market-specific logic based on auto-detected market type:
    - **A-Share (China)**: Price limits vary by board (主板 10%, 科创板/创业板 20%, 北交所 30%). Limit-up/Limit-down causes extreme volume shrinkage. Do NOT interpret a limit-up with low volume as "weak demand" (which would normally be a divergence). It is a sign of extreme supply exhaustion.
      - **Main Board (沪市/深市主板)**: 10% daily limit
      - **ChiNext (创业板)**: 20% daily limit
      - **STAR Market (科创板)**: 20% daily limit
      - **BSE (北交所)**: 30% daily limit
-     - **Note**: ST股票涨跌幅与正常股票相同（全面注册制新规）
+     - **ST / *ST stocks (Special Treatment)**: 10% daily limit since 2026 rule revision (全面注册制新规下，主板ST股涨跌幅已统一为±10%)
      *If the system cannot auto-detect the board, default to 10% for conservative analysis.*
    - **US Market**: No price limits, normal volume-price analysis applies.
    - **HK Market**: No price limits, but be aware of different trading hours and session breaks.

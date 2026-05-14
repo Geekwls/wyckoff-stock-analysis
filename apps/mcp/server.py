@@ -94,5 +94,143 @@ def batch_analyze_sector(symbols: list[str], period: str = "1y") -> str:
         return resp.model_dump_json()
 
 
+@mcp.tool()
+def detect_wyckoff_phase(symbol: str, period: str = "1y") -> str:
+    """
+    [ATOMIC TOOL — Token Efficient] Detect the current Wyckoff phase for a stock.
+
+    Use this tool INSTEAD of analyze_stock_wyckoff when the user asks ONLY about:
+    - "What phase is X in?"
+    - "Is X accumulating or distributing?"
+    - "Where is X in the Wyckoff cycle?"
+
+    Skips RS analysis, multi-timeframe, sentiment, and report generation.
+    Token cost: ~5-10% of full analyze_stock_wyckoff.
+
+    Returns a compact JSON with:
+      - phase: current Wyckoff phase (e.g. "Accumulation Phase C")
+      - phase_confidence: float 0-1
+      - sequence_completeness: float 0-1 (event chain completeness)
+      - current_price: float
+      - key_events_summary: { sos_detected, sow_detected, spring_detected, trading_range }
+      - phase_advice: phase-linked position advice per Wyckoff theory
+
+    Args:
+        symbol: Stock symbol (e.g. 'AAPL' or 'sh.600519').
+        period: Time period (default: '1y').
+    """
+    try:
+        with WyckoffAnalyzer(symbol, period=period) as analyzer:
+            analyzer.fetch_data()
+            return analyzer.generate_phase_json()
+    except WyckoffError as e:
+        resp = ErrorResponseModel(
+            error_code=e.error_code.value,
+            error=str(e),
+            type=type(e).__name__,
+            retriable=isinstance(e, (DataFetchError, WyckoffError))
+        )
+        return resp.model_dump_json()
+    except Exception as e:
+        resp = ErrorResponseModel(
+            error_code=ErrorCode.SYSTEM_UNKNOWN.value,
+            error=str(e),
+            type="UnknownError"
+        )
+        return resp.model_dump_json()
+
+
+@mcp.tool()
+def get_trading_levels(symbol: str, period: str = "1y") -> str:
+    """
+    [ATOMIC TOOL — Token Efficient] Get key price levels for a stock.
+
+    Use this tool INSTEAD of analyze_stock_wyckoff when the user asks ONLY about:
+    - "What is the support / resistance for X?"
+    - "Where should I set my stop loss?"
+    - "What are the price targets for X?"
+    - "Give me the key levels for X"
+
+    Skips phase scoring, RS analysis, multi-timeframe, historical performance, and report generation.
+    Token cost: ~5-10% of full analyze_stock_wyckoff.
+
+    Returns a compact JSON with:
+      - current_price: float
+      - trading_range: { high, low, range_pct }
+      - stop_loss: { conservative: { value, derivation, note }, aggressive: { ... } }
+      - targets: { target_1: { value, derivation, note }, target_2: { ... } }
+      - key_confirmation_level: { value, derivation, note } (from SOS analysis, if available)
+      - atr: float (14-day ATR used for calculations)
+
+    Args:
+        symbol: Stock symbol (e.g. 'AAPL' or 'sh.600519').
+        period: Time period (default: '1y').
+    """
+    try:
+        with WyckoffAnalyzer(symbol, period=period) as analyzer:
+            analyzer.fetch_data()
+            return analyzer.generate_levels_json()
+    except WyckoffError as e:
+        resp = ErrorResponseModel(
+            error_code=e.error_code.value,
+            error=str(e),
+            type=type(e).__name__,
+            retriable=isinstance(e, (DataFetchError, WyckoffError))
+        )
+        return resp.model_dump_json()
+    except Exception as e:
+        resp = ErrorResponseModel(
+            error_code=ErrorCode.SYSTEM_UNKNOWN.value,
+            error=str(e),
+            type="UnknownError"
+        )
+        return resp.model_dump_json()
+
+
+@mcp.tool()
+def analyze_signal_conflict(symbol: str, period: str = "1y") -> str:
+    """
+    [ATOMIC TOOL — Token Efficient] Analyze contradictory SOS and SOW signals.
+
+    Use this tool INSTEAD of analyze_stock_wyckoff when the user asks:
+    - "Is this a shakeout or a bull trap?"
+    - "Explain the conflict between SOS and SOW."
+    - "Why are there contradictory signals?"
+
+    Token cost: ~10-15% of full analyze_stock_wyckoff.
+
+    Returns a JSON with:
+      - has_conflict: boolean
+      - interpretation: "shakeout_bullish" | "trap_bearish" | "uncertain"
+      - confidence: float 0-1
+      - reasons: list of strings (detailed evidence)
+      - confirmation_criteria: list of strings (what to watch for)
+      - breakdown_level: { value, derivation, note }
+
+    Args:
+        symbol: Stock symbol (e.g. 'AAPL' or 'sh.600519').
+        period: Time period (default: '1y').
+    """
+    try:
+        with WyckoffAnalyzer(symbol, period=period) as analyzer:
+            analyzer.fetch_data()
+            return analyzer.generate_conflict_json()
+    except WyckoffError as e:
+        resp = ErrorResponseModel(
+            error_code=e.error_code.value,
+            error=str(e),
+            type=type(e).__name__,
+            retriable=isinstance(e, (DataFetchError, WyckoffError))
+        )
+        return resp.model_dump_json()
+    except Exception as e:
+        resp = ErrorResponseModel(
+            error_code=ErrorCode.SYSTEM_UNKNOWN.value,
+            error=str(e),
+            type="UnknownError"
+        )
+        return resp.model_dump_json()
+
+
 if __name__ == "__main__":
     mcp.run()

@@ -75,8 +75,15 @@ def analyze_single(args):
                 return 1
 
             # 生成报告
-            if args.format == 'json':
-                report = analyzer.generate_json()
+            if args.format == 'json' or args.mode in ['phase', 'levels', 'conflict']:
+                if args.mode == 'phase':
+                    report = analyzer.generate_phase_json()
+                elif args.mode == 'levels':
+                    report = analyzer.generate_levels_json()
+                elif args.mode == 'conflict':
+                    report = analyzer.generate_conflict_json()
+                else:
+                    report = analyzer.generate_json()
                 print(report)
             else:
                 report = analyzer.generate_report()
@@ -181,6 +188,11 @@ def main():
   # 分析单只股票（JSON格式）
   python -m apps.cli.main AAPL --format json
 
+  # 原子分析模式 (Token高效)
+  python -m apps.cli.main AAPL --mode phase
+  python -m apps.cli.main AAPL --mode levels
+  python -m apps.cli.main AAPL --mode conflict
+
   # 批量扫描
   python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 
@@ -237,11 +249,12 @@ def main():
         '--pool',
         help='预定义股票池名称'
     )
+    # 分析模式选项
     parser.add_argument(
         '--mode',
-        default='quick',
-        choices=['quick'],
-        help='扫描模式 (默认: quick)'
+        default='full',
+        choices=['full', 'phase', 'levels', 'conflict', 'quick'],
+        help='分析/扫描模式 (默认: full)'
     )
     parser.add_argument(
         '--quiet',

@@ -410,3 +410,44 @@ class EffortResultMixin:
             "is_no_supply": bool(no_supply),
             "is_no_demand": bool(no_demand)
         }
+
+    def validate_climax_with_effort_result(
+        self,
+        vol_ratio: float,
+        price_progress: float,
+        close_pos: float = 0.5
+    ) -> tuple:
+        """
+        🔧 修复 P2-1: 验证 BC/SC 是否符合 Effort vs Result 原则
+
+        理论依据：
+        - 巨量但价格停滞 = Effort vs Result 背离（可能不是真正的高潮）
+        - 缩量但价格大涨 = 弱势突破（需求不足）
+        - 真正的 BC/SC 应该是巨量 + 显著价格推进
+
+        Args:
+            vol_ratio: 成交量相对于均量的倍数
+            price_progress: 价格变化幅度（百分比）
+            close_pos: 收盘位置（0=最低，1=最高）
+
+        Returns:
+            (is_valid, confidence_penalty, warning_message)
+        """
+        # 检查量价背离
+        if vol_ratio > 1.5 and abs(price_progress) < 0.01:
+            warning = "⚠️ 警告：量价背离，巨量未推动价格显著变化，可能不是真正的 BC/SC"
+            return False, 0.5, warning
+
+        # 检查缩量突破
+        if vol_ratio < 1.2 and abs(price_progress) > 0.03:
+            warning = "⚠️ 警告：缩量突破，需求不足，信号可靠性低"
+            return False, 0.7, warning
+
+        # 检查收盘位置（BC 应该收盘疲软）
+        if close_pos > 0.7 and vol_ratio < 2.0:
+            warning = "⚠️ 警告：收盘位置偏高位但量能不足，疑似诱多"
+            return False, 0.6, warning
+
+        # 通过验证
+        return True, 1.0, None
+

@@ -43,8 +43,13 @@ class WyckoffThresholds(BaseModel):
     SOW_PRICE_CHANGE_DEFAULT: float = Field(-0.02)
     
     # ── 成交量确认阈值 ──────────────────────────────────────
+    # 🔧 修复 P0-1: BC/SC 需要 true 巨量确认（量比 2.5+），避免低量比突破被误判
     VOLUME_CONFIRMATION: Dict[str, float] = Field(
-        default={'strong': 1.5, 'moderate': 1.2, 'weak': 0.8}
+        default={
+            'strong': 2.5,      # BC/SC: 真正的买入/抛售高潮需要 2.5x+ 巨量
+            'moderate': 1.5,    # SOS/SOW/LPS: 1.5x 量能确认
+            'weak': 0.8         # 一般信号: 0.8x 基准
+        }
     )
     
     # ── 收盘位置确认 ──────────────────────────────────────

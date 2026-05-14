@@ -36,6 +36,80 @@ class ReversalDetector(BaseDetector):
             self._indicator_cache.warm_up(common_indicators)
         self._cache_warmed = True
 
+    def _detect_market_environment(self) -> str:
+        """
+        🔧 修复 P1-2: 检测市场环境（多头/空头/震荡）
+
+        Returns:
+            'bullish' - 多头市场（MA20 > MA50 > MA200）
+            'bearish' - 空头市场（MA20 < MA50 < MA200）
+            'neutral' - 震荡市场（均线纠缠）
+        """
+        try:
+            if self.data is None or len(self.data) < 200:
+                return 'neutral'
+
+            current_price = self.data['Close'].iloc[-1]
+            ma20 = self.data['Close'].rolling(20).mean().iloc[-1]
+            ma50 = self.data['Close'].rolling(50).mean().iloc[-1]
+            ma200 = self.data['Close'].rolling(200).mean().iloc[-1]
+
+            # 多头排列
+            if current_price > ma20 > ma50 > ma200:
+                return 'bullish'
+            # 空头排列
+            elif current_price < ma20 < ma50 < ma200:
+                return 'bearish'
+            else:
+                return 'neutral'
+        except Exception:
+            return 'neutral'
+
+    def _classify_upthrust_with_context(
+        self,
+        breakout_vol_ratio: float,
+        penetration_depth: float,
+        market_env: str
+    ) -> tuple:
+        """
+        🔧 修复 P1-2: 根据市场环境动态调整 UT 分类
+
+        Args:
+            breakout_vol_ratio: 突破量比
+            penetration_depth: 穿透深度（百分比）
+            market_env: 市场环境 ('bullish'/'bearish'/'neutral')
+
+        Returns:
+            (upthrust_type, is_valid, needs_secondary_test, description)
+        """
+        is_valid = True
+        needs_secondary_test = False
+
+        if market_env == 'bullish':
+            # 多头市场：更宽容，倾向于认为是试探
+            if breakout_vol_ratio < 1.0 and penetration_depth < 2.0:
+                return 'type_3_safe', True, False, '缩量浅穿透，多头市场的正常试探'
+            elif breakout_vol_ratio > 2.0 and penetration_depth > 3.0:
+                return 'type_1_dangerous', False, True, '放量深穿透，多头市场需警惕转势'
+            else:
+                return 'type_2_neutral', True, True, '中性，等待二次测试'
+        elif market_env == 'bearish':
+            # 空头市场：更严格，倾向于警惕派发
+            if breakout_vol_ratio > 1.8 and penetration_depth > 2.0:
+                return 'type_1_dangerous', False, True, '弱势市场的放量突破，疑似派发'
+            elif breakout_vol_ratio < 0.6 and penetration_depth < 1.0:
+                return 'type_3_safe', True, False, '极度缩量，供应枯竭'
+            else:
+                return 'type_2_neutral', True, True, '中性，等待确认'
+        else:
+            # 震荡市场：使用原始标准
+            if breakout_vol_ratio > 1.5 and penetration_depth > 3.0:
+                return 'type_1_dangerous', False, True, '放量深穿透'
+            elif breakout_vol_ratio < 0.8 and penetration_depth < 1.5:
+                return 'type_3_safe', True, False, '缩量浅穿透'
+            else:
+                return 'type_2_neutral', True, True, '中性，需等待确认'
+
     # --- Climax, AR, ST ---
     def detect_climax(self) -> Dict:
         """检测高潮行为 (SC/BC)"""
@@ -338,8 +412,16 @@ class ReversalDetector(BaseDetector):
 
             if is_valid:
                 springs.append({
-                    'date': recent.index[nxt_idx], 'breakdown_date': recent.index[cur_idx],
-                    'breakdown_price': round(float(lows[cur_idx]), 2), 'support_level': round(support, 2),
+                    'breakdown_price': {
+                        "value": round(float(lows[cur_idx]), 2),
+                        "derivation": "lowest_in_breakdown_bar",
+                        "note": "跌破支撑位的价格点"
+                    },
+                    'support_level': {
+                        "value": round(support, 2),
+                        "derivation": "p5_p20_cluster_low",
+                        "note": "基于近期低点簇计算的支撑位"
+                    },
                     'recovery_price': round(float(closes[nxt_idx]), 2), 'recovery_days': actual_recovery_days,
                     'volume_ratio': round(recovery_vol_r, 2), 'close_position': round(nxt_close_pos * 100, 1),
                     'follow_up_score': follow_score, 'total_score': min(total_score, 100),
@@ -391,8 +473,18 @@ class ReversalDetector(BaseDetector):
 
             if is_valid:
                 springs.append({
-                    'date': nxt.name, 'breakdown_date': cur.name, 'breakdown_price': round(float(cur['Low']), 2),
-                    'support_level': round(support, 2), 'recovery_price': round(float(nxt['Close']), 2),
+                    'date': nxt.name, 'breakdown_date': cur.name, 
+                    'breakdown_price': {
+                        "value": round(float(cur['Low']), 2),
+                        "derivation": "lowest_in_breakdown_bar",
+                        "note": "跌破支撑位的价格点"
+                    },
+                    'support_level': {
+                        "value": round(support, 2),
+                        "derivation": "p5_p20_cluster_low",
+                        "note": "基于近期低点簇计算的支撑位"
+                    }, 
+                    'recovery_price': round(float(nxt['Close']), 2),
                     'recovery_days': actual_recovery_days, 'volume_ratio': round(recovery_vol_r, 2),
                     'close_position': round(nxt_close_pos * 100, 1), 'follow_up_score': follow_score,
                     'total_score': min(total_score, 100), 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
@@ -432,9 +524,12 @@ class ReversalDetector(BaseDetector):
         breakout_df = df.tail(M)
         upthrusts, breakout_indices = [], breakout_df.index[breakout_df['High'] > resistance_level]
         rejection_indices = df.index[df['Close'] < resistance_level]
-        
+
         mean_vol = df['Volume'].mean()
-        
+
+        # 🔧 修复 P1-2: 检测市场环境，用于动态调整 UT 分类
+        market_env = self._detect_market_environment()
+
         for b_idx in breakout_indices[-3:]:
             later_rejections = rejection_indices[rejection_indices > b_idx]
             if len(later_rejections) > 0:
@@ -442,39 +537,36 @@ class ReversalDetector(BaseDetector):
                 days_to_reject = (df.index.get_indexer([r_idx])[0] - df.index.get_indexer([b_idx])[0])
                 if days_to_reject <= self.config.spring_max_recovery_days:
                     b_vol, r_vol = df.loc[b_idx, 'Volume'], df.loc[r_idx, 'Volume']
-                    
+
                     b_high = df.loc[b_idx, 'High']
                     breakout_vol_ratio = b_vol / mean_vol if mean_vol > 0 else 1.0
                     penetration_depth = (b_high - resistance_level) / resistance_level * 100
-                    
+
                     close_pos = (df.loc[r_idx, 'High'] - df.loc[r_idx, 'Close']) / (df.loc[r_idx, 'High'] - df.loc[r_idx, 'Low'] + 1e-6)
                     follow_through = df[df.index > r_idx].head(3)
                     ft_quality = (follow_through['Low'] < df.loc[r_idx, 'Low']).sum() / len(follow_through) * 100 if len(follow_through) > 0 else 0
-                    
-                    # Upthrust 分类与安全性验证
-                    is_valid = True
-                    needs_secondary_test = False
-                    
-                    if breakout_vol_ratio > 1.5 and penetration_depth > 3.0:
-                        upthrust_type = 'type_1_dangerous'    # 放量深穿透，需求极大，危险
-                        is_valid = False
-                        needs_secondary_test = True
-                    elif breakout_vol_ratio < 0.8 and penetration_depth < 1.5:
-                        upthrust_type = 'type_3_safe'         # 缩量浅穿透，需求枯竭，安全
-                        needs_secondary_test = False
-                    else:
-                        upthrust_type = 'type_2_neutral'      # 中性，需等待 ST 确认
-                        needs_secondary_test = True
-                        
+
+                    # 🔧 修复 P1-2: 使用市场环境加权的 UT 分类
+                    upthrust_type, is_valid, needs_secondary_test, ut_note = self._classify_upthrust_with_context(
+                        breakout_vol_ratio, penetration_depth, market_env
+                    )
+
                     upthrusts.append({
                         'date': r_idx, 'breakout_date': b_idx, 'breakout_price': b_high,
-                        'resistance_level': resistance_level, 'rejection_price': df.loc[r_idx, 'Close'],
+                        'resistance_level': {
+                            "value": round(float(resistance_level), 2),
+                            "derivation": "max_high_before_breakout",
+                            "note": "近期交易区间上沿阻力位"
+                        },
+                        'rejection_price': round(float(df.loc[r_idx, 'Close']), 2),
                         'rejection_days': int(days_to_reject), 'close_from_high': round(close_pos, 2),
                         'follow_through_quality': round(ft_quality, 2),
                         'breakout_volume_ratio': round(breakout_vol_ratio, 2),
                         'penetration_depth': round(penetration_depth, 2),
                         'upthrust_type': upthrust_type,
                         'needs_secondary_test': needs_secondary_test,
-                        'is_valid': is_valid
+                        'is_valid': is_valid,
+                        'market_environment': market_env,  # 🔧 新增：记录市场环境
+                        'classification_note': ut_note  # 🔧 新增：分类说明
                     })
         return upthrusts

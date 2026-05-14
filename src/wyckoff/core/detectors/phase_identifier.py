@@ -185,11 +185,13 @@ class PhaseIdentifier(BaseDetector):
             if hasattr(climax, 'detected'):
                 has_strong_climax = climax.detected
                 climax_type = getattr(climax, 'type', None)
-                climax_confidence = getattr(climax, 'confidence', 0.94)
+                # 🔧 修复 P1-1: 降低默认置信度，避免低质量信号被误判为高置信度
+                climax_confidence = getattr(climax, 'confidence', 0.5)
             elif isinstance(climax, dict):
                 has_strong_climax = climax.get('detected', False)
                 climax_type = climax.get('type')
-                climax_confidence = climax.get('confidence', 0.94)
+                # 🔧 修复 P1-1: 降低默认置信度，避免低质量信号被误判为高置信度
+                climax_confidence = climax.get('confidence', 0.5)
 
         # 🔧 方案B增强：设置BC强度阈值（只处理高置信度BC）
         if not has_strong_climax or climax_confidence < 0.85:

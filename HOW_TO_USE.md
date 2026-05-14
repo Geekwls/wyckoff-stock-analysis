@@ -1,8 +1,36 @@
 # 威科夫分析 Skill - 多平台使用指南
 
-> 版本：v2.0.0 | 最后更新：2026-05-11
+> 版本：v2.2.0 | 最后更新：2026-05-14
 
 本指南帮助你将威科夫分析skill应用到多个AI平台和场景。
+
+---
+
+## 🚀 新增：原子化工具 (Token 高效版)
+
+在 v2.2.0 中，我们引入了原子化工具，专门用于节省 Token 消耗（相比全量分析节省 90% 以上）。
+
+### 1. 阶段检测 (`detect_wyckoff_phase`)
+**适用场景**：只关心"现在是什么阶段？"、"是否在吸筹？"
+- **CLI**: `python -m apps.cli.main AAPL --mode phase`
+- **MCP**: 直接询问 "AAPL 处于什么阶段？"
+
+### 2. 关键价格位 (`get_trading_levels`)
+**适用场景**：只关心"支撑位在哪？"、"止损设多少？"、"目标价是多少？"
+- **CLI**: `python -m apps.cli.main AAPL --mode levels`
+- **MCP**: 直接询问 "AAPL 的支撑位和目标价是多少？"
+
+### 3. 矛盾信号分析 (`analyze_signal_conflict`)
+**适用场景**：同时出现 SOS 和 SOW，询问 "这是震仓还是诱多？"
+- **CLI**: `python -m apps.cli.main AAPL --mode conflict`
+- **MCP**: 直接询问 "AAPL 现在的信号矛盾如何解读？"
+
+---
+
+## 🔍 新增：逻辑溯源 (Derivation)
+
+现在所有的关键价格位都带有 `derivation`（推导公式）和 `note`（备注）。
+**提示**：你可以要求 AI 解释这些数字的来源，例如："请解释止损位 10.46 是怎么算出来的？"
 
 ---
 

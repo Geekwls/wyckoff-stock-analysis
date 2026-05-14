@@ -23,6 +23,7 @@ from .core.multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from .core.relative_strength_analyzer import RelativeStrengthAnalyzer
 from .core.report_generator import WyckoffReportGenerator
 from .core.point_and_figure import PointAndFigureCalculator, calculate_cause_effect_from_pnf
+from .core.sos_sow_analyzer import SOSSOWAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,189 @@ class WyckoffAnalyzer:
     def generate_json(self) -> str:
         """生成 JSON 报告"""
         return WyckoffReportGenerator(self).generate_json()
+
+    def generate_phase_json(self) -> str:
+        """
+        原子化工具：仅返回威科夫阶段和置信度 (Token 高效版)
+
+        跳过 RS分析、多时间框架、市场情绪、交易计划生成等重型步骤。
+        适用于用户仅询问"当前处于什么阶段"时的轻量响应。
+
+        Returns:
+            JSON string: { symbol, phase, phase_confidence, sequence_score,
+                          current_price, key_events_summary, phase_advice }
+        """
+        if not self.pattern_detector:
+            self.fetch_data()
+
+        try:
+            phase_res = self.identify_phase()
+            phase_str   = phase_res.get('phase', 'Unknown')
+            confidence  = phase_res.get('confidence', 0.0)
+
+            # 序列评分
+            seq = phase_res.get('sequence_score', {})
+            seq_completeness = seq.get('completeness', 0.0) if isinstance(seq, dict) else 0.0
+
+            # 关键事件摘要（轻量版）
+            events_summary = {}
+            try:
+                tr = self.pattern_detector.detect_trading_range()
+                events_summary['trading_range'] = {
+                    'high': tr.get('high'), 'low': tr.get('low'),
+                    'duration_days': tr.get('duration_days')
+                }
+                sos = self.pattern_detector.sw_detector.detect_sos()
+                events_summary['sos_detected'] = sos.get('detected', False)
+                sow = self.pattern_detector.sw_detector.detect_sow()
+                events_summary['sow_detected'] = sow.get('detected', False)
+                spring = self.pattern_detector.reversal_detector.detect_spring()
+                events_summary['spring_detected'] = spring.get('detected', False)
+            except Exception:
+                pass
+
+            # 阶段挂钩建议（按 SKILL.md 规则）
+            phase_upper = phase_str.upper()
+            if 'PHASE_A' in phase_upper or 'PHASE_B' in phase_upper or \
+               'PHASE A' in phase_upper or 'PHASE B' in phase_upper:
+                phase_advice = "Observation / Very light position try-out only (Phase A/B)"
+            elif 'PHASE_C' in phase_upper or 'PHASE C' in phase_upper:
+                phase_advice = "Batch entry / Position building (Phase C)"
+            elif 'PHASE_D' in phase_upper or 'PHASE_E' in phase_upper or \
+                 'PHASE D' in phase_upper or 'PHASE E' in phase_upper:
+                phase_advice = "Hold / Add to position (Phase D/E)"
+            else:
+                phase_advice = "Assess full analysis for specific advice"
+
+            current_price = float(self.data['Close'].iloc[-1]) if self.data is not None else None
+
+            import json as _json
+            return _json.dumps({
+                'symbol': self.symbol,
+                'phase': phase_str,
+                'phase_confidence': round(float(confidence), 3),
+                'sequence_completeness': round(float(seq_completeness), 3),
+                'current_price': current_price,
+                'key_events_summary': events_summary,
+                'phase_advice': phase_advice,
+            }, ensure_ascii=False, indent=2)
+
+        except Exception as e:
+            import json as _json
+            return _json.dumps({'error': str(e), 'symbol': self.symbol}, ensure_ascii=False)
+
+    def generate_levels_json(self) -> str:
+        """
+        原子化工具：仅返回关键价格位 (Token 高效版)
+
+        跳过阶段评分、RS分析、多时间框架、历史表现等重型步骤。
+        适用于用户询问"支撑/阻力/止损/目标位"时的轻量响应。
+
+        Returns:
+            JSON string: { symbol, current_price, trading_range,
+                          stop_loss, targets, key_confirmation_level }
+        """
+        if not self.pattern_detector:
+            self.fetch_data()
+
+        try:
+            import json as _json
+            from .core.trading_plan_generator import TradingPlanGenerator
+            
+            current_price = float(self.data['Close'].iloc[-1])
+            atr = float(self.data['ATR'].iloc[-1]) if 'ATR' in self.data.columns else \
+                  float((self.data['High'] - self.data['Low']).rolling(14).mean().iloc[-1])
+
+            # 1. 获取交易区间
+            tr = self.pattern_detector.detect_trading_range()
+            tr_high = tr.get('high', current_price * 1.1)
+            tr_low  = tr.get('low',  current_price * 0.9)
+
+            # 2. 复用 TradingPlanGenerator 的计算逻辑
+            phase_res = self.identify_phase()
+            phase_str = phase_res.get('phase', 'Unknown')
+            is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
+            
+            plan_gen = TradingPlanGenerator(self.data, self.pattern_detector)
+            # 获取解析后的代码信息以确定市场
+            from .core.symbol_resolver import SymbolResolver
+            symbol_info = SymbolResolver().resolve(self.symbol)
+            
+            _, stop_loss, targets = plan_gen._calculate_levels(
+                current_price, atr, tr_high, tr_low, is_bullish
+            )
+
+            # 3. SOS-SOW 关键确认位
+            key_level = None
+            try:
+                sos = self.pattern_detector.sw_detector.detect_sos()
+                if sos.get('detected'):
+                    bt_raw = sos.get('latest', sos).get('breakthrough_level') or \
+                             sos.get('breakthrough_level')
+                    if bt_raw:
+                        key_level = bt_raw if isinstance(bt_raw, dict) else {
+                            'value': float(bt_raw),
+                            'derivation': 'max_high_in_60d_range',
+                            'note': '前期交易区间上沿阻力位'
+                        }
+            except Exception:
+                pass
+
+            return _json.dumps({
+                'symbol': self.symbol,
+                'current_price': round(current_price, 2),
+                'trading_range': {
+                    'high': round(tr_high, 2),
+                    'low': round(tr_low, 2),
+                    'range_pct': round((tr_high - tr_low) / tr_low * 100, 1)
+                },
+                'stop_loss': stop_loss,
+                'targets': targets,
+                'key_confirmation_level': key_level,
+                'atr': round(atr, 3),
+            }, ensure_ascii=False, indent=2)
+
+        except Exception as e:
+            import json as _json
+            return _json.dumps({'error': str(e), 'symbol': self.symbol}, ensure_ascii=False)
+
+    def generate_conflict_json(self) -> str:
+        """
+        原子化工具：仅返回 SOS-SOW 矛盾分析 (Token 高效版)
+        
+        适用于用户询问"这是震仓还是诱多？"或"信号矛盾如何解读？"时的轻量响应。
+        
+        Returns:
+            JSON string: { symbol, has_conflict, interpretation, confidence,
+                          reasons, confirmation_criteria, breakdown_level }
+        """
+        if not self.pattern_detector:
+            self.fetch_data()
+            
+        try:
+            import json as _json
+            
+            sos = self.pattern_detector.sw_detector.detect_sos()
+            sow = self.pattern_detector.sw_detector.detect_sow()
+            current_price = float(self.data['Close'].iloc[-1])
+            tr = self.pattern_detector.detect_trading_range()
+            
+            # 执行矛盾分析
+            conflict_res = SOSSOWAnalyzer.analyze_sos_sow_conflict(
+                sos, sow, current_price, tr
+            )
+            
+            # 包装结果
+            res = {
+                'symbol': self.symbol,
+                **conflict_res
+            }
+            
+            return _json.dumps(res, ensure_ascii=False, indent=2)
+            
+        except Exception as e:
+            import json as _json
+            return _json.dumps({'error': str(e), 'symbol': self.symbol}, ensure_ascii=False)
 
     # ----------------------------------------------------------
     # 代理旧方法 (为了兼容性)

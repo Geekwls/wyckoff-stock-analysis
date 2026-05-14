@@ -22,6 +22,7 @@ class SymbolInfo(BaseModel):
     market: MarketType
     source: str  # 'baostock' or 'yfinance'
     name: Optional[str] = None
+    is_st: bool = Field(default=False, description="是否为ST股")
 
 class SymbolResolver:
     """代码解析器 (P1 #3)"""
@@ -53,22 +54,30 @@ class SymbolResolver:
             raise ValueError("Invalid symbol type")
             
         # 基础安全性校验：限制长度和特殊字符，防止注入攻击
-        if len(symbol) > 50 or not all(c.isalnum() or c in '.-_/\u4e00-\u9fff' for c in symbol):
+        if len(symbol) > 50 or not all(c.isalnum() or c in '* .-_/\u4e00-\u9fff' for c in symbol):
              logger.warning(f"检测到潜在的非法代码输入: {symbol}")
              # 对于明显非法的输入，直接抛出异常或返回 UNKNOWN
              return SymbolInfo(original=symbol, normalized="UNKNOWN", market=MarketType.UNKNOWN, source="none")
 
         original = symbol
+        is_st = "ST" in original.upper() or "*ST" in original.upper()
         
         # 1. 处理中文名称解析
-        if any('\u4e00' <= char <= '\u9fff' for char in symbol):
+        has_chinese = any('\u4e00' <= char <= '\u9fff' for char in symbol)
+        if has_chinese:
             if symbol in self._name_cache:
                 symbol = self._name_cache[symbol]
             else:
-                # 注意：这里可能需要调用 Baostock 获取，但 Resolver 应该是无副作用的
-                # 如果缓存没中，我们暂时标记为 A_SHARE 等待 Fetcher 处理
-                pass
-
+                # 如果包含中文且包含 ST，基本确定是 A 股
+                if is_st:
+                    return SymbolInfo(
+                        original=original,
+                        normalized=original,
+                        market=MarketType.A_SHARE,
+                        source='baostock',
+                        is_st=True
+                    )
+        
         symbol_upper = symbol.upper()
         
         # 2. 识别市场与归一化
@@ -82,7 +91,8 @@ class SymbolResolver:
                 original=original,
                 normalized=normalized,
                 market=MarketType.A_SHARE,
-                source='baostock'
+                source='baostock',
+                is_st=is_st
             )
         
         # 港股逻辑
@@ -91,7 +101,8 @@ class SymbolResolver:
                 original=original,
                 normalized=symbol_upper,
                 market=MarketType.HK_STOCK,
-                source='yfinance'
+                source='yfinance',
+                is_st=is_st
             )
             
         # 加密货币逻辑 (如 BTC-USD, ETH/USDT)
@@ -102,7 +113,8 @@ class SymbolResolver:
                 original=original,
                 normalized=normalized,
                 market=MarketType.CRYPTO,
-                source='yfinance'
+                source='yfinance',
+                is_st=is_st
             )
 
         # 默认视为美股
@@ -110,7 +122,8 @@ class SymbolResolver:
             original=original,
             normalized=symbol_upper,
             market=MarketType.US_STOCK,
-            source='yfinance'
+            source='yfinance',
+            is_st=is_st
         )
 
     def update_name_cache(self, name: str, code: str):

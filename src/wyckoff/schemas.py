@@ -2,7 +2,7 @@
 威科夫分析系统数据模型
 定义所有JSON接口的强类型模型
 """
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Dict, Any, Optional
 from .core.enums import MarketEnvironment, WyckoffPhase
 from .core.enums import ErrorCode
@@ -11,6 +11,19 @@ from .core.enums import ErrorCode
 # ============================================================
 # 基础数据模型
 # ============================================================
+
+class DerivedValueModel(BaseModel):
+    """带推导逻辑的数值模型 (P1 #3)"""
+    value: float = Field(description="数值")
+    derivation: Optional[str] = Field(default=None, description="推导逻辑/来源")
+    note: Optional[str] = Field(default=None, description="备注说明")
+
+    @model_validator(mode='before')
+    @classmethod
+    def wrap_float(cls, data: Any) -> Any:
+        if isinstance(data, (int, float)):
+            return {"value": float(data), "derivation": "legacy_data", "note": "兼容性自动转换"}
+        return data
 
 class BasicDataModel(BaseModel):
     """基础数据"""
@@ -83,9 +96,9 @@ class SpringSignalModel(BaseModel):
     """Spring信号详情"""
     date: Optional[Any] = None
     breakdown_date: Any = Field(description="跌破日期")
-    breakdown_price: float = Field(description="跌破价格")
-    support_level: float = Field(description="支撑位")
-    recovery_price: float = Field(description="收回价格")
+    breakdown_price: Any = Field(description="跌破价格")
+    support_level: Any = Field(description="支撑位")
+    recovery_price: Any = Field(description="收回价格")
     recovery_days: int = Field(description="收回天数")
     volume_ratio: float = Field(description="量比")
     shadow_ratio: Optional[float] = Field(default=None, description="下影线与实体比例")
@@ -105,9 +118,9 @@ class UpthrustSignalModel(BaseModel):
     """Upthrust信号详情"""
     date: Optional[Any] = None
     breakout_date: Any = Field(description="突破日期")
-    breakout_price: float = Field(description="突破价格")
-    resistance_level: float = Field(description="阻力位")
-    rejection_price: float = Field(description="回落价格")
+    breakout_price: Any = Field(description="突破价格")
+    resistance_level: Any = Field(description="阻力位")
+    rejection_price: Any = Field(description="回落价格")
     rejection_days: int = Field(description="回落天数")
     close_from_high: float = Field(description="收盘距高点比例")
     follow_through_quality: Optional[float] = Field(default=None, description="回落跟随质量")
@@ -129,10 +142,10 @@ class UpthrustModel(BaseModel):
 class SosSignalModel(BaseModel):
     """SOS信号详情"""
     date: Optional[Any] = None
-    price: float = Field(description="价格")
+    price: Any = Field(description="价格")
     volume_ratio: float = Field(description="量比")
     price_change: float = Field(description="涨幅")
-    breakthrough_level: float = Field(description="突破位")
+    breakthrough_level: Any = Field(description="突破位")
 
 
 class SosModel(BaseModel):
@@ -148,10 +161,10 @@ class SosModel(BaseModel):
 class SowSignalModel(BaseModel):
     """SOW信号详情"""
     date: Optional[Any] = None
-    price: float = Field(description="价格")
+    price: Any = Field(description="价格")
     volume_ratio: float = Field(description="量比")
     price_change: float = Field(description="跌幅")
-    breakdown_level: float = Field(description="跌破位")
+    breakdown_level: Any = Field(description="跌破位")
 
 
 class SowModel(BaseModel):
@@ -283,15 +296,15 @@ class SignalQualityModel(BaseModel):
 
 class StopLossModel(BaseModel):
     """止损设置"""
-    conservative: float = Field(description="保守止损")
-    aggressive: float = Field(description="激进止损")
-    atr_dynamic_stop: Optional[float] = Field(default=None, description="ATR动态止损")
+    conservative: Any = Field(description="保守止损")
+    aggressive: Any = Field(description="激进止损")
+    atr_dynamic_stop: Optional[Any] = Field(default=None, description="ATR动态止损")
 
 
 class TargetsModel(BaseModel):
     """目标位"""
-    target_1: float = Field(description="第一目标")
-    target_2: float = Field(description="第二目标")
+    target_1: Any = Field(description="第一目标")
+    target_2: Any = Field(description="第二目标")
 
 
 class PositionSizingModel(BaseModel):

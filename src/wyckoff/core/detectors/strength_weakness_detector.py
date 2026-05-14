@@ -182,7 +182,11 @@ class StrengthWeaknessDetector(BaseDetector):
                 'price': float(closes[idx_pos]), 
                 'volume_ratio': round(float(volumes[idx_pos] / vol_ma[idx_pos]) if vol_ma[idx_pos] > 0 else 1.0, 2), 
                 'price_change': round(float(price_pct_change[idx_pos]), 4), 
-                'breakthrough_level': round(float(tr_high), 3),
+                'breakthrough_level': {
+                    "value": round(float(tr_high), 3),
+                    "derivation": f"max_high_in_60d_range",
+                    "note": "前期交易区间上沿阻力位"
+                },
                 'breakout_type': breakout_type,
                 'phase_context': 'accumulation_or_uptrend',
                 'interpretation': interpretation
@@ -256,7 +260,11 @@ class StrengthWeaknessDetector(BaseDetector):
                 'price': df.loc[idx, 'Close'], 
                 'volume_ratio': round(df.loc[idx, 'Volume']/vol_ma.loc[idx], 2), 
                 'price_change': round(price_pct_change.loc[idx], 4), 
-                'breakthrough_level': round(tr_high, 3),
+                'breakthrough_level': {
+                    "value": round(tr_high, 3),
+                    "derivation": "max_high_in_60d_range",
+                    "note": "前期交易区间上沿阻力位"
+                },
                 'breakout_type': breakout_type,
                 'phase_context': 'accumulation_or_uptrend',
                 'interpretation': interpretation
@@ -367,7 +375,11 @@ class StrengthWeaknessDetector(BaseDetector):
                 'low': sow_low,
                 'volume_ratio': round(float(volumes[idx_pos] / vol_ma[idx_pos]) if vol_ma[idx_pos] > 0 else 1.0, 2),
                 'price_change': round(float(price_pct_change[idx_pos]), 4),
-                'breakdown_level': float(breakdown_level),
+                'breakdown_level': {
+                    "value": float(breakdown_level),
+                    "derivation": "min_low_in_20d_window",
+                    "note": "近期支撑测试位"
+                },
                 'tr_low': tr_low,
                 'interpretation': interpretation
             }
@@ -422,7 +434,11 @@ class StrengthWeaknessDetector(BaseDetector):
 
             # 🔧 新增：获取交易区间下沿
             tr_low = trading_range.get('low') if trading_range else None
-            breakdown_level = df['Low'].rolling(20).min().iloc[-1]
+            breakdown_level = {
+                "value": float(df['Low'].rolling(20).min().iloc[-1]),
+                "derivation": "min_low_in_20d_window",
+                "note": "近期支撑测试位"
+            }
 
             # 🔧 新增：判断SOW类型
             if tr_low is not None:

@@ -2,6 +2,32 @@
 
 本文档记录了Wyckoff Stock Analysis Skill的所有重要变更和功能更新。
 
+## [v2.2.0] - 2026-05-14
+
+### 🚀 原子化工具 (Atomic Tools — Token Efficiency)
+- **新增 MCP 工具 `detect_wyckoff_phase`**: 仅返回阶段+置信度+事件摘要，节省 90%+ Token。
+- **新增 MCP 工具 `get_trading_levels`**: 仅返回支撑/阻力/止损/目标位（含逻辑溯源）。
+- **新增 MCP 工具 `analyze_signal_conflict`**: 专门用于分析 SOS-SOW 矛盾（震仓 vs 诱多）。
+- **CLI 增强**: `python -m apps.cli.main` 新增 `--mode [phase|levels|conflict]` 入口。
+- **SKILL.md 更新**: 新增强制路由表，引导 AI 优先使用原子工具。
+
+### 🔍 逻辑溯源 (Logic Traceability — P1 #3)
+- **DerivedValueModel**: 在 `schemas.py` 中新增，支持 `value / derivation / note` 三位一体。
+- **核心逻辑升级**: SOS/SOW/Spring/Upthrust 检测器全面接入溯源系统，不再输出幻觉数字。
+- **Schema 兼容性**: 引入 `model_validator` 确保旧版数据（float）自动升级为 `DerivedValueModel`。
+- **代码去重**: `generate_levels_json` 复用 `TradingPlanGenerator` 的核心计算逻辑。
+
+### 🛠️ 系统增强
+- **SymbolResolver**: 增加 `is_st` 标志位，支持通过代码或名称（含 `*ST`）自动识别 ST 股。
+- **BacktestEngine**: 为静态基准数据增加 `data_source` 标注，提升报告透明度。
+- **文档同步**: `HOW_TO_USE.md` 全面更新至 v2.2.0 规范。
+
+## [v2.1.1] - 2026-05-14
+
+### 🔄 市场规则对齐 (2026新规)
+- **ST股票限售规则更新**: 将 A 股 ST/*ST 股票的日涨跌幅限制从 5% 调整为 10%（对齐 2026 年全面注册制新规）。
+- **VSA 逻辑优化**: 针对 ST 股票不再应用极低波动的特殊豁免，统一使用标准 VSA 量价关系进行强度判定。
+
 ## [v2.0.0] - 2026-05-09
 
 ### 🎯 重大版本更新

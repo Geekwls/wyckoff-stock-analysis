@@ -52,7 +52,8 @@ class SOSSOWAnalyzer:
             'confidence': 0.0,
             'reasons': [],
             'confirmation_criteria': [],
-            'breakdown_level': None
+            'breakdown_level': None,
+            'breakdown_source': None
         }
 
         # 检查SOS和SOW是否都存在
@@ -195,10 +196,22 @@ class SOSSOWAnalyzer:
             result['has_conflict'] = True
             result['interpretation'] = 'trap_bearish'
             result['confidence'] = min(0.95, 0.5 + (trap_score - shakeout_score) / 200)
-            result['breakdown_level'] = tr_high * 0.97 if tr_high > 0 else sos_price * 0.95
+            
+            if tr_high > 0:
+                result['breakdown_level'] = {
+                    "value": tr_high * 0.97,
+                    "derivation": f"0.97 * tr_high_{tr_high:.2f}",
+                    "note": "SOS启动位下方3%偏离"
+                }
+            else:
+                result['breakdown_level'] = {
+                    "value": sos_price * 0.95,
+                    "derivation": f"0.95 * sos_price_{sos_price:.2f}",
+                    "note": "SOS信号价位下方5%偏离"
+                }
 
             result['confirmation_criteria'] = [
-                f"未来3天内有效跌破{result['breakdown_level']:.2f}且反弹无力",
+                f"未来3天内有效跌破{result['breakdown_level']['value']:.2f}且反弹无力",
                 f"反弹时量比 < 0.7（需求枯竭）",
                 f"继续下跌考验{tr_low:.2f}（区间下沿）"
             ]
@@ -217,7 +230,19 @@ class SOSSOWAnalyzer:
             result['has_conflict'] = True
             result['interpretation'] = 'shakeout_bullish'
             result['confidence'] = min(0.90, 0.5 + (shakeout_score - trap_score) / 200)
-            result['breakdown_level'] = tr_low * 0.95 if tr_low > 0 else sos_price * 0.90
+            
+            if tr_low > 0:
+                result['breakdown_level'] = {
+                    "value": tr_low * 0.95,
+                    "derivation": f"0.95 * tr_low_{tr_low:.2f}",
+                    "note": "SOW低点区域下方5%偏离"
+                }
+            else:
+                result['breakdown_level'] = {
+                    "value": sos_price * 0.90,
+                    "derivation": f"0.90 * sos_price_{sos_price:.2f}",
+                    "note": "SOS信号价位下方10%偏离（保守）"
+                }
 
             result['confirmation_criteria'] = [
                 f"价格在{tr_high:.2f}附近快速止跌",
@@ -239,10 +264,22 @@ class SOSSOWAnalyzer:
             result['has_conflict'] = True
             result['interpretation'] = 'uncertain'
             result['confidence'] = 0.4
-            result['breakdown_level'] = tr_high * 0.97 if tr_high > 0 else current_price * 0.95
+            
+            if tr_high > 0:
+                result['breakdown_level'] = {
+                    "value": tr_high * 0.97,
+                    "derivation": f"0.97 * tr_high_{tr_high:.2f}",
+                    "note": "SOS启动前支撑位"
+                }
+            else:
+                result['breakdown_level'] = {
+                    "value": current_price * 0.95,
+                    "derivation": f"0.95 * current_price_{current_price:.2f}",
+                    "note": "当前价位偏移"
+                }
 
             result['confirmation_criteria'] = [
-                f"观察是否跌破{result['breakdown_level']:.2f}",
+                f"观察是否跌破{result['breakdown_level']['value']:.2f}",
                 f"等待后续3-5天的价格走势确认"
             ]
 
@@ -281,10 +318,18 @@ class SOSSOWAnalyzer:
         # 核心判断
         if interpretation == 'trap_bearish' or interpretation == 'suspected_trap':
             report += f"**倾向判断：疑似诱多陷阱（解读B）- 看跌**\n"
-            report += f"置信度：{confidence*100:.0f}%（初步判断，需等待确认）\n\n"
+            report += f"置信度：{confidence*100:.0f}%（初步判断，需等待确认）\n"
+            if isinstance(breakdown_level, dict):
+                report += f"关键确认位：{breakdown_level['value']:.2f} 元（依据：{breakdown_level.get('note', '')}）\n\n"
+            else:
+                report += f"关键确认位：{breakdown_level:.2f} 元\n\n"
         elif interpretation == 'shakeout_bullish' or interpretation == 'suspected_shakeout':
             report += f"**倾向判断：疑似震仓洗盘（解读A）- 看涨**\n"
-            report += f"置信度：{confidence*100:.0f}%（初步判断，需等待确认）\n\n"
+            report += f"置信度：{confidence*100:.0f}%（初步判断，需等待确认）\n"
+            if isinstance(breakdown_level, dict):
+                report += f"关键确认位：{breakdown_level['value']:.2f} 元（依据：{breakdown_level.get('note', '')}）\n\n"
+            else:
+                report += f"关键确认位：{breakdown_level:.2f} 元\n\n"
         else:
             report += f"**倾向判断：不确定（需观察）**\n"
             report += f"置信度：{confidence*100:.0f}%\n\n"
@@ -304,7 +349,8 @@ class SOSSOWAnalyzer:
             report += f"  {i}. {criteria}\n"
 
         if breakdown_level:
-            report += f"\n**关键确认位：** {breakdown_level:.2f}元\n"
+            source_str = f"（{conflict_analysis.get('breakdown_source', '')}）" if conflict_analysis.get('breakdown_source') else ""
+            report += f"\n**关键确认位：** {breakdown_level:.2f}元 {source_str}\n"
             report += f"  - 跌破且3天不收复 → 确认诱多陷阱\n"
             report += f"  - 快速收复并创新高 → 确认震仓洗盘\n"
 

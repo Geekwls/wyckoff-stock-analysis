@@ -138,30 +138,79 @@ class TradingPlanGenerator:
         entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
         
         if is_bullish:
-            # 止损修复：使用 ATR 倍数 + TR 下沿兜底，避免全局下沿导致~20%止损
-            # 保守：2.5倍ATR（约6-8%），激进：1.5倍ATR（约4-5%）
-            conservative_stop = round(max(current_price - 2.5 * atr, low), 2)
-            aggressive_stop = round(max(current_price - 1.5 * atr, low), 2)
+            # 止损修复：使用 ATR 倍数 + TR 下沿兜底
+            conservative_val = round(max(current_price - 2.5 * atr, low), 2)
+            aggressive_val = round(max(current_price - 1.5 * atr, low), 2)
+            
             stop_loss = {
-                "conservative": conservative_stop,
-                "aggressive": aggressive_stop,
-                "atr_dynamic_stop": round(current_price - 1.5 * atr, 2)
+                "conservative": {
+                    "value": conservative_val,
+                    "derivation": "max(current_price - 2.5*ATR, TR_low)",
+                    "note": "保守止损，基于2.5倍ATR和区间下沿双重保护"
+                },
+                "aggressive": {
+                    "value": aggressive_val,
+                    "derivation": "max(current_price - 1.5*ATR, TR_low)",
+                    "note": "激进止损，基于1.5倍ATR和区间下沿"
+                },
+                "atr_dynamic_stop": {
+                    "value": round(current_price - 1.5 * atr, 2),
+                    "derivation": "current_price - 1.5*ATR",
+                    "note": "ATR动态追踪止损"
+                }
             }
+            
+            target_1_val = round(high, 2) if current_price < high else round(current_price + atr * 2, 2)
+            target_2_val = round(high + atr * 3, 2)
+            
             targets = {
-                "target_1": round(high, 2) if current_price < high else round(current_price + atr * 2, 2),
-                "target_2": round(high + atr * 3, 2)
+                "target_1": {
+                    "value": target_1_val,
+                    "derivation": "TR_high if current_price < high else current_price + 2*ATR",
+                    "note": "第一目标位，测试区间高点或平推2倍ATR"
+                },
+                "target_2": {
+                    "value": target_2_val,
+                    "derivation": "TR_high + 3*ATR",
+                    "note": "第二目标位，预期趋势加速"
+                }
             }
         else:
-            conservative_stop = round(min(high, current_price + 2.5 * atr), 2)
-            aggressive_stop = round(min(high, current_price + 1.5 * atr), 2)
+            conservative_val = round(min(high, current_price + 2.5 * atr), 2)
+            aggressive_val = round(min(high, current_price + 1.5 * atr), 2)
+            
             stop_loss = {
-                "conservative": conservative_stop,
-                "aggressive": aggressive_stop,
-                "atr_dynamic_stop": round(current_price + 1.5 * atr, 2)
+                "conservative": {
+                    "value": conservative_val,
+                    "derivation": "min(TR_high, current_price + 2.5*ATR)",
+                    "note": "保守止损，防止反抽过强"
+                },
+                "aggressive": {
+                    "value": aggressive_val,
+                    "derivation": "min(TR_high, current_price + 1.5*ATR)",
+                    "note": "激进止损，紧跟反抽阻力"
+                },
+                "atr_dynamic_stop": {
+                    "value": round(current_price + 1.5 * atr, 2),
+                    "derivation": "current_price + 1.5*ATR",
+                    "note": "ATR动态追踪止损"
+                }
             }
+            
+            target_1_val = round(low, 2) if current_price > low else round(current_price - atr * 2, 2)
+            target_2_val = round(low - atr * 3, 2)
+            
             targets = {
-                "target_1": round(low, 2) if current_price > low else round(current_price - atr * 2, 2),
-                "target_2": round(low - atr * 3, 2)
+                "target_1": {
+                    "value": target_1_val,
+                    "derivation": "TR_low if current_price > low else current_price - 2*ATR",
+                    "note": "第一目标位，测试区间底点或平推2倍ATR"
+                },
+                "target_2": {
+                    "value": target_2_val,
+                    "derivation": "TR_low - 3*ATR",
+                    "note": "第二目标位，看空趋势确立"
+                }
             }
         
         return entry_zone, stop_loss, targets
