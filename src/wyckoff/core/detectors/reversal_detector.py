@@ -317,6 +317,20 @@ class ReversalDetector(BaseDetector):
             actual_recovery_days = self._count_recovery_days(recent, i, support)
             total_score = min(recovery_vol_r * 15, 30) + min(nxt_close_pos * 25, 20) + min(follow_score * 3, 30) + min(recovery_pct, 10) + 10
             total_score = min(total_score, 100)
+            
+            # Spring 量能分类与 ST 强制绑定
+            mean_vol = recent['Volume'].mean()
+            breakdown_vol_ratio = float(volumes[cur_idx] / mean_vol) if mean_vol > 0 else 1.0
+            needs_secondary_test = False
+            spring_type = 'type_2'
+            
+            if breakdown_vol_ratio < 0.8:
+                spring_type = 'type_1_low_volume'
+            elif breakdown_vol_ratio > 1.5:
+                spring_type = 'type_3_high_volume'
+                needs_secondary_test = True
+                total_score *= 0.7  # 放量破底，强制降级，必须有ST确认
+
             springs.append({
                 'date': recent.index[nxt_idx], 'breakdown_date': recent.index[cur_idx],
                 'breakdown_price': round(float(lows[cur_idx]), 2), 'support_level': round(support, 2),
@@ -324,6 +338,9 @@ class ReversalDetector(BaseDetector):
                 'volume_ratio': round(recovery_vol_r, 2), 'close_position': round(nxt_close_pos * 100, 1),
                 'follow_up_score': follow_score, 'total_score': total_score,
                 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
+                'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
+                'spring_type': spring_type,
+                'needs_secondary_test': needs_secondary_test
             })
         return springs
 
@@ -346,12 +363,29 @@ class ReversalDetector(BaseDetector):
             recovery_pct = (nxt['Close'] - support) / support * 100 if support > 0 else 0
             actual_recovery_days = self._count_recovery_days(recent, i, support)
             total_score = min(recovery_vol_r * 15, 30) + min(nxt_close_pos * 25, 20) + min(follow_score * 3, 30) + min(recovery_pct, 10) + 10
+            
+            # Spring 量能分类与 ST 强制绑定
+            mean_vol = recent['Volume'].mean()
+            breakdown_vol_ratio = float(cur['Volume'] / mean_vol) if mean_vol > 0 else 1.0
+            needs_secondary_test = False
+            spring_type = 'type_2'
+            
+            if breakdown_vol_ratio < 0.8:
+                spring_type = 'type_1_low_volume'
+            elif breakdown_vol_ratio > 1.5:
+                spring_type = 'type_3_high_volume'
+                needs_secondary_test = True
+                total_score *= 0.7  # 放量破底，强制降级，必须有ST确认
+
             springs.append({
                 'date': nxt.name, 'breakdown_date': cur.name, 'breakdown_price': round(float(cur['Low']), 2),
                 'support_level': round(support, 2), 'recovery_price': round(float(nxt['Close']), 2),
                 'recovery_days': actual_recovery_days, 'volume_ratio': round(recovery_vol_r, 2),
                 'close_position': round(nxt_close_pos * 100, 1), 'follow_up_score': follow_score,
                 'total_score': min(total_score, 100), 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
+                'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
+                'spring_type': spring_type,
+                'needs_secondary_test': needs_secondary_test
             })
         return springs
 

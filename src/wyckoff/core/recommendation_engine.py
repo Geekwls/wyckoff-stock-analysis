@@ -279,12 +279,14 @@ class RecommendationEngine:
                 reasons.append("🔥 高能预警：系统已进入「死角突破」严密监控模式")
 
         dead_corner = pattern_results.get('dead_corner_breakout', {})
+        skip_conflict_penalty = False
         if dead_corner.get('detected'):
             base_score += 25
-            reasons.append("🎯 发现“死角突破”信号！从枯燥区放量跃起，极具爆发力")
+            skip_conflict_penalty = True
+            reasons.append("🎯 发现“死角突破”信号！从枯燥区放量跃起，极具爆发力，豁免历史冲突惩罚")
 
         # --- 冲突惩罚 (v2.1校准) ---
-        if bullish_count > 0 and bearish_count > 0:
+        if bullish_count > 0 and bearish_count > 0 and not skip_conflict_penalty:
             phase_str = pattern_results.get('phase', 'Unknown')
 
             # Phase E/Markup中SOW是正常回调，不应惩罚
@@ -370,6 +372,10 @@ class RecommendationEngine:
         if self._get_attr(boring, 'score', 0) >= 85 and final_score < 85:
             final_score = 85
             reasons.append("触发高能预警阈值，综合评分上调至 85 (死角突破临界)")
+            
+        if dead_corner.get('detected') and final_score < 85:
+            final_score = 85
+            reasons.append("🎯 死角突破确立，综合评分强制托底至 85 (极高置信度)")
 
         return SignalQualityModel(
             score=final_score,
@@ -443,15 +449,23 @@ class RecommendationEngine:
         stop = StopLossModel(conservative=0.0, aggressive=0.0)
         phase_str = pattern_results.get('phase', 'Unknown')
 
+        def _get_lps_low(window: int = 15) -> float:
+            return float(data['Low'].tail(window).min())
+            
+        def _get_lpsy_high(window: int = 15) -> float:
+            return float(data['High'].tail(window).max())
+
         # ── 方向判断 (结构导向止损) ──
         if joc.get('detected'):
             direction = "做多"
             zone = f"{joc.get('creek_level', current_price):.2f} 附近 (JOC突破)"
             creek = joc.get('creek_level', current_price)
+            lps_low = _get_lps_low(15)
+            cons_stop = min(lps_low, creek * 0.985)
             stop = StopLossModel(
-                conservative=round(creek * 0.97, 2),
-                aggressive=round(creek * 0.95, 2),
-                atr_dynamic_stop=round(creek - atr_val * 2, 2),
+                conservative=round(cons_stop, 2),
+                aggressive=round(cons_stop * 0.98, 2),
+                atr_dynamic_stop=round(cons_stop - atr_val, 2),
             )
         elif spring.get('detected'):
             direction = "做多"
@@ -466,21 +480,24 @@ class RecommendationEngine:
         elif sos.get('detected') and not joc.get('detected') and not spring.get('detected'):
             direction = "做多"
             sos_price = _safe_get(sos, 'price', current_price)
-            tr_low = _safe_get(tr, 'low', sos_price * 0.95) if tr else sos_price * 0.95
             zone = f"{sos_price:.2f} 附近 (SOS突破)"
+            lps_low = _get_lps_low(15)
+            cons_stop = min(lps_low, sos_price * 0.985)
             stop = StopLossModel(
-                conservative=round(tr_low * 0.97, 2) if tr_low else round(sos_price * 0.93, 2),
-                aggressive=round(tr_low * 0.99, 2) if tr_low else round(sos_price * 0.95, 2),
-                atr_dynamic_stop=round(tr_low * 0.97 - atr_val, 2) if tr_low else round(sos_price * 0.93 - atr_val, 2),
+                conservative=round(cons_stop, 2),
+                aggressive=round(cons_stop * 0.98, 2),
+                atr_dynamic_stop=round(cons_stop - atr_val, 2),
             )
         elif fti.get('detected'):
             direction = "做空"
             ice = fti.get('ice_level', current_price)
             zone = f"{ice:.2f} 附近 (FTI跌破)"
+            lpsy_high = _get_lpsy_high(15)
+            cons_stop = max(lpsy_high, ice * 1.015)
             stop = StopLossModel(
-                conservative=round(ice * 1.03, 2),
-                aggressive=round(ice * 1.05, 2),
-                atr_dynamic_stop=round(ice + atr_val * 2, 2),
+                conservative=round(cons_stop, 2),
+                aggressive=round(cons_stop * 1.02, 2),
+                atr_dynamic_stop=round(cons_stop + atr_val, 2),
             )
         elif upthrust.get('detected'):
             direction = "做空"
@@ -495,12 +512,13 @@ class RecommendationEngine:
         elif sow.get('detected') and not fti.get('detected') and not upthrust.get('detected'):
             direction = "做空"
             sow_price = _safe_get(sow, 'price', current_price)
-            tr_high = _safe_get(tr, 'high', sow_price * 1.05) if tr else sow_price * 1.05
             zone = f"{sow_price:.2f} 附近 (SOW跌破)"
+            lpsy_high = _get_lpsy_high(15)
+            cons_stop = max(lpsy_high, sow_price * 1.015)
             stop = StopLossModel(
-                conservative=round(tr_high * 1.03, 2) if tr_high else round(sow_price * 1.07, 2),
-                aggressive=round(tr_high * 1.01, 2) if tr_high else round(sow_price * 1.05, 2),
-                atr_dynamic_stop=round(tr_high * 1.03 + atr_val, 2) if tr_high else round(sow_price * 1.07 + atr_val, 2),
+                conservative=round(cons_stop, 2),
+                aggressive=round(cons_stop * 1.02, 2),
+                atr_dynamic_stop=round(cons_stop + atr_val, 2),
             )
 
         # ── 仓位建议 (Phase+风险导向) ──

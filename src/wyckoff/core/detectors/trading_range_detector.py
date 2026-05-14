@@ -142,6 +142,41 @@ class TradingRangeDetector(BaseDetector):
         resistance_tests = int((self.data['High'] >= high * 0.97).sum())
         quality = round(min(1.0, (support_tests + resistance_tests) / 12.0), 2)
 
+        # ---------- 再积累/吸收特征检测 (Absorption) ----------
+        absorption_detected = False
+        absorption_score = 0.0
+        
+        if is_consolidation and not is_broken and len(recent) >= 40:
+            # 1. 检查 Higher Lows
+            recent_swing_lows = _swing_levels(recent['Low'], kind='low', window=3)
+            higher_lows = False
+            if len(recent_swing_lows) >= 3:
+                # 检查最后三个波段低点是否呈现上升趋势
+                last_3_lows = recent_swing_lows[-3:]
+                if last_3_lows[2] > last_3_lows[1]: # 放宽条件，只要最后两个低点上移即可
+                    higher_lows = True
+                    absorption_score += 0.5
+            
+            # 2. 检查波动率和量能双重萎缩
+            half = len(recent) // 2
+            first_half = recent.iloc[:half]
+            second_half = recent.iloc[half:]
+            
+            # 量能萎缩
+            vol_std_1 = first_half['Volume'].std()
+            vol_std_2 = second_half['Volume'].std()
+            vol_mean_1 = first_half['Volume'].mean()
+            vol_mean_2 = second_half['Volume'].mean()
+            
+            vol_contraction = False
+            if pd.notna(vol_std_1) and pd.notna(vol_std_2) and vol_mean_1 > 0:
+                if (vol_std_2 < vol_std_1 * 0.9) and (vol_mean_2 < vol_mean_1 * 0.9):
+                    vol_contraction = True
+                    absorption_score += 0.5
+                    
+            if higher_lows and vol_contraction:
+                absorption_detected = True
+
         return {
             'is_consolidation': is_consolidation,
             'is_broken': is_broken,
@@ -161,4 +196,6 @@ class TradingRangeDetector(BaseDetector):
             '_resistance_tests': resistance_tests,
             '_atr_threshold': round(dynamic_threshold, 4),
             '_atr_pct': round(atr_pct, 4) if atr_pct else None,
+            'absorption_detected': absorption_detected,
+            'absorption_score': absorption_score,
         }

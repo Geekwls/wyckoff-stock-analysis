@@ -126,13 +126,15 @@ class EffortResultMixin:
 
         volume_health = self._analyze_volume_health_context()
         follow_through = self._analyze_signal_follow_through()
+        vsa_anomalies = self._detect_vsa_anomalies()
 
         return {
             "overall_assessment": overall_assessment,
             "wyckoff_guidance": wyckoff_guidance,
             "timeframe_analysis": effort_result_analysis,
             "volume_health": volume_health,
-            "follow_through": follow_through
+            "follow_through": follow_through,
+            "vsa_anomalies": vsa_anomalies
         }
 
     def _analyze_volume_health_context(self) -> dict:
@@ -324,3 +326,49 @@ class EffortResultMixin:
             elif interpretation in ('WEAK_UNDERPERFORMANCE', 'DOUBLE_WEAKNESS'):
                 return ' | [Markdown] 弱势放量下跌，市场恐慌情绪加剧，等待 SC 出现'
         return ''
+
+    def _detect_vsa_anomalies(self) -> dict:
+        """
+        检测微观 VSA (Volume Spread Analysis) 关键确认信号
+        - 无供应柱 (No Supply Bar): 收盘下跌，价差缩小，成交量低于前两日
+        - 无需求柱 (No Demand Bar): 收盘上涨，价差缩小，成交量低于前两日
+        """
+        if self.data is None or len(self.data) < 5:
+            return {"status": "insufficient_data"}
+            
+        df = self.data.tail(5)
+        last_idx = len(df) - 1
+        curr = df.iloc[last_idx]
+        prev1 = df.iloc[last_idx - 1]
+        prev2 = df.iloc[last_idx - 2]
+        
+        curr_spread = curr['High'] - curr['Low']
+        prev1_spread = prev1['High'] - prev1['Low']
+        prev2_spread = prev2['High'] - prev2['Low']
+        
+        is_down_close = curr['Close'] < prev1['Close']
+        is_narrow_spread = curr_spread < prev1_spread and curr_spread < prev2_spread
+        is_low_volume = curr['Volume'] < prev1['Volume'] and curr['Volume'] < prev2['Volume']
+        
+        no_supply = is_down_close and is_narrow_spread and is_low_volume
+        
+        is_up_close = curr['Close'] > prev1['Close']
+        no_demand = is_up_close and is_narrow_spread and is_low_volume
+        
+        signal = "none"
+        desc = "未检测到微观VSA枯竭信号"
+        
+        if no_supply:
+            signal = "no_supply"
+            desc = "检测到【无供应柱】(No Supply)：缩量窄幅回落，供应枯竭，是二次测试(ST)或破底翻的绝佳微观确认"
+        elif no_demand:
+            signal = "no_demand"
+            desc = "检测到【无需求柱】(No Demand)：缩量窄幅反弹，需求枯竭，是遇阻(Upthrust)或假突破的绝佳微观确认"
+            
+        return {
+            "status": "ok",
+            "signal": signal,
+            "description": desc,
+            "is_no_supply": bool(no_supply),
+            "is_no_demand": bool(no_demand)
+        }

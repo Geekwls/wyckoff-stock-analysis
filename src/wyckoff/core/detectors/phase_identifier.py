@@ -26,7 +26,7 @@ class PhaseIdentifier(BaseDetector):
 
         phase_str, phase_enum, confidence = self._determine_phase_from_events(events)
         if phase_enum == WyckoffPhase.UNKNOWN:
-            phase_str, phase_enum, confidence = self._fallback_logic()
+            phase_str, phase_enum, confidence = self._fallback_logic(events)
         
         # 🔧 评分修正：如果 Phase A 结构不完整，大幅扣减置信度
         if phase_enum != WyckoffPhase.UNKNOWN:
@@ -357,7 +357,7 @@ class PhaseIdentifier(BaseDetector):
 
         return False
 
-    def _fallback_logic(self) -> Tuple[str, WyckoffPhase, float]:
+    def _fallback_logic(self, events: Dict = None) -> Tuple[str, WyckoffPhase, float]:
         """基于均线排布的降级判定逻辑"""
         current = self.data['Close'].iloc[-1]
         
@@ -375,6 +375,15 @@ class PhaseIdentifier(BaseDetector):
         ma20 = get_ma(20)
         ma50 = get_ma(50)
         ma200 = get_ma(200)
+        
+        # 🔧 新增：利用交易区间内的吸收特征提前判定再积累
+        if events:
+            tr = events.get('trading_range', {})
+            if hasattr(tr, 'model_dump'): tr = tr.model_dump()
+            elif hasattr(tr, 'dict'): tr = tr.dict()
+            if isinstance(tr, dict) and tr.get('absorption_detected', False):
+                if current > ma200:
+                    return "Reaccumulation Phase C/D (再积累确认，供应已被吸收)", WyckoffPhase.PHASE_D, 0.75
         
         if current > ma20 > ma50 > ma200: 
             return "Markup Phase E (强势上涨)", WyckoffPhase.PHASE_E, 0.6
@@ -394,16 +403,34 @@ class PhaseIdentifier(BaseDetector):
         return 0.5
 
     def _check_volume_confirmation(self, phase: Union[str, WyckoffPhase]) -> float:
-        """检查成交量确认 (Effort vs Result)"""
-        df = self.data.tail(20)
-        up_v = df[df['Close'] > df['Close'].shift(1)]['Volume'].mean()
-        dn_v = df[df['Close'] < df['Close'].shift(1)]['Volume'].mean()
-        ratio = up_v / dn_v if dn_v > 0 else 1
+        """检查成交量确认 (Effort vs Result) - 引入波段累积量能分析"""
+        df = self.data.tail(40)  # 扩大观察窗口以包含完整的波段
+        if len(df) < 5:
+            return 0.5
+
+        up_days = df[df['Close'] > df['Close'].shift(1)]
+        dn_days = df[df['Close'] < df['Close'].shift(1)]
         
+        up_v_mean = up_days['Volume'].mean() if not up_days.empty else 0
+        dn_v_mean = dn_days['Volume'].mean() if not dn_days.empty else 0
+        ratio = up_v_mean / dn_v_mean if dn_v_mean > 0 else 1.0
+        
+        # 波段累积量能：计算上行波段和下行波段的总量能
+        up_v_sum = up_days['Volume'].sum()
+        dn_v_sum = dn_days['Volume'].sum()
+        sum_ratio = up_v_sum / dn_v_sum if dn_v_sum > 0 else 1.0
+
+        if PhaseAdapter.is_accumulation(phase):
+            # 吸筹期：下行波段量能萎缩，上行波段量能放大
+            return 0.9 if sum_ratio > 1.2 else (0.7 if sum_ratio > 0.8 else 0.4)
+        if PhaseAdapter.is_distribution(phase):
+            # 派发期：上行波段量能萎缩，下行波段量能放大
+            return 0.9 if sum_ratio < 0.8 else (0.7 if sum_ratio < 1.2 else 0.4)
         if PhaseAdapter.is_markup(phase): 
             return 0.9 if ratio > 1.2 else 0.5
         if PhaseAdapter.is_markdown(phase): 
             return 0.9 if ratio < 0.8 else 0.5
+            
         return 0.5
 
     def filter_relevant_events(self, events: Dict, lookback_days: int = 120) -> Dict:
