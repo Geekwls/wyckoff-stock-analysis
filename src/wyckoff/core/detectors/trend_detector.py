@@ -65,6 +65,12 @@ class TrendDetector(BaseDetector):
                 
             joc_idx = joc_idx_temp
             joc_row = df.loc[joc_idx]
+            
+            # 增加：Weis Wave 波段推力验证
+            if not self._verify_joc_wave_thrust(joc_idx):
+                logger.info(f"JOC signal at {joc_idx} rejected due to weak wave thrust (potential Upthrust)")
+                continue
+
             fresh_joc_found = True
             break
 
@@ -177,6 +183,12 @@ class TrendDetector(BaseDetector):
                 
             fti_idx = fti_idx_temp
             fti_row = df.loc[fti_idx]
+            
+            # 增加：Weis Wave 波段推力验证
+            if not self._verify_fti_wave_thrust(fti_idx):
+                logger.info(f"FTI signal at {fti_idx} rejected due to weak wave thrust (potential Spring)")
+                continue
+                
             fresh_fti_found = True
             break
 
@@ -223,3 +235,91 @@ class TrendDetector(BaseDetector):
                 test_detected, test_date, test_vol_ratio = True, idx_test, round(row_test['Volume'] / vol_ma.loc[idx_test], 2)
                 break
         return test_detected, test_date, test_vol_ratio
+
+    def _verify_joc_wave_thrust(self, joc_idx) -> bool:
+        """
+        验证 JOC 发生时的向上波段是否具有真实的压倒性推力
+        """
+        try:
+            from ..weis_wave import WeisWaveGenerator
+            generator = WeisWaveGenerator(self.data)
+            waves = generator.generate()
+            
+            up_waves = [w for w in waves if w.direction == 'up']
+            if len(up_waves) < 2:
+                return True
+                
+            joc_pos = self.data.index.get_loc(joc_idx)
+            current_wave = None
+            for w in reversed(up_waves):
+                w_start = self.data.index.get_loc(w.start_idx)
+                w_end = self.data.index.get_loc(w.end_idx)
+                if w_start <= joc_pos <= w_end + 3:
+                    current_wave = w
+                    break
+                    
+            if not current_wave:
+                current_wave = up_waves[-1]
+                
+            idx_in_up_waves = up_waves.index(current_wave)
+            past_waves = up_waves[max(0, idx_in_up_waves - 5):idx_in_up_waves]
+            
+            if not past_waves:
+                return True
+                
+            avg_thrust = np.mean([w.thrust for w in past_waves])
+            vol_ma = self.data['Volume'].rolling(20).mean()
+            vol_ratio = self.data.loc[joc_idx, 'Volume'] / vol_ma.loc[joc_idx] if vol_ma.loc[joc_idx] > 0 else 1.0
+            
+            if vol_ratio > 2.5:
+                return current_wave.thrust > avg_thrust * 1.0
+            else:
+                return current_wave.thrust > avg_thrust * 1.5
+                
+        except Exception as e:
+            logger.warning(f"WeisWave verification for JOC failed: {e}")
+            return True
+            
+    def _verify_fti_wave_thrust(self, fti_idx) -> bool:
+        """
+        验证 FTI 发生时的向下波段是否具有真实的压倒性推力
+        """
+        try:
+            from ..weis_wave import WeisWaveGenerator
+            generator = WeisWaveGenerator(self.data)
+            waves = generator.generate()
+            
+            down_waves = [w for w in waves if w.direction == 'down']
+            if len(down_waves) < 2:
+                return True
+                
+            fti_pos = self.data.index.get_loc(fti_idx)
+            current_wave = None
+            for w in reversed(down_waves):
+                w_start = self.data.index.get_loc(w.start_idx)
+                w_end = self.data.index.get_loc(w.end_idx)
+                if w_start <= fti_pos <= w_end + 3:
+                    current_wave = w
+                    break
+                    
+            if not current_wave:
+                current_wave = down_waves[-1]
+                
+            idx_in_down_waves = down_waves.index(current_wave)
+            past_waves = down_waves[max(0, idx_in_down_waves - 5):idx_in_down_waves]
+            
+            if not past_waves:
+                return True
+                
+            avg_thrust = np.mean([w.thrust for w in past_waves])
+            vol_ma = self.data['Volume'].rolling(20).mean()
+            vol_ratio = self.data.loc[fti_idx, 'Volume'] / vol_ma.loc[fti_idx] if vol_ma.loc[fti_idx] > 0 else 1.0
+            
+            if vol_ratio > 2.5:
+                return current_wave.thrust > avg_thrust * 1.0
+            else:
+                return current_wave.thrust > avg_thrust * 1.5
+                
+        except Exception as e:
+            logger.warning(f"WeisWave verification for FTI failed: {e}")
+            return True

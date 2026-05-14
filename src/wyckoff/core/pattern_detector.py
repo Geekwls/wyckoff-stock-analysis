@@ -4,6 +4,7 @@ from .detectors.trading_range_detector import TradingRangeDetector
 from .detectors.classic_pattern_detector import ClassicPatternDetector
 from .detectors.strength_weakness_detector import StrengthWeaknessDetector
 from .detectors.phase_identifier import PhaseIdentifier
+from .detectors.channel_detector import ChannelDetector
 from .meng_pattern_enhancer import MengPatternEnhancer
 from .phase_coordinator import PhaseCoordinator
 from .adaptive.bayesian_updater import BayesianThresholdModel
@@ -37,6 +38,7 @@ class WyckoffPatternDetector:
         self.classic_detector = ClassicPatternDetector(data, config, self.thresholds, analysis_cache, indicator_cache=self._indicator_cache)
         self.sw_detector = StrengthWeaknessDetector(data, config, self.thresholds, indicator_cache=self._indicator_cache)
         self.phase_identifier = PhaseIdentifier(data, config, self.thresholds, indicator_cache=self._indicator_cache)
+        self.channel_detector = ChannelDetector(data, use_log_price=False, indicator_cache=self._indicator_cache)
 
         # 初始化孟洪涛增强检测器
         self.meng_enhancer = MengPatternEnhancer(data, config, self.thresholds, indicator_cache=self._indicator_cache)
@@ -48,7 +50,7 @@ class WyckoffPatternDetector:
         self.all_detectors = [
             self.range_detector, self.classic_detector,
             self.sw_detector, self.phase_identifier,
-            self.meng_enhancer
+            self.meng_enhancer, self.channel_detector
         ]
 
         # 计算ATR百分比用于动态阈值
@@ -155,10 +157,31 @@ class WyckoffPatternDetector:
     def detect_sow_variants(self) -> Dict:
         return self.sw_detector.detect_sow_variants()
 
+    def detect_channels(self) -> Dict:
+        return self.channel_detector.detect()
+
     def detect_joc(self, lookback: int = 90) -> Dict:
+        # 联动逻辑：如遇超买刺穿+放量，则抑制普通 JOC，改报趋势耗尽
+        channel_res = self.detect_channels()
+        ob_os = channel_res.get('overbought_oversold')
+        if ob_os and ob_os['status'] == 'overbought':
+            return {
+                'detected': False,
+                'reason': 'suppressed_by_overbought_climax',
+                'channel_warning': ob_os['message']
+            }
         return self.classic_detector.detect_joc(lookback)
 
     def detect_fti(self, lookback: int = 90) -> Dict:
+        # 联动逻辑：如遇超卖刺穿+放量，则抑制普通 FTI，改报趋势耗尽
+        channel_res = self.detect_channels()
+        ob_os = channel_res.get('overbought_oversold')
+        if ob_os and ob_os['status'] == 'oversold':
+            return {
+                'detected': False,
+                'reason': 'suppressed_by_oversold_climax',
+                'channel_warning': ob_os['message']
+            }
         return self.classic_detector.detect_fti(lookback)
 
     def detect_vsa_signals(self, lookback: int = 20) -> Dict:
@@ -347,6 +370,71 @@ class WyckoffPatternDetector:
         except Exception as e:
             logger.exception(f"SC检测失败: 未知异常: {e}")
             raise PatternDetectionError("SC", f"未知异常: {e}") from e
+
+    def detect_climax_buying(self, lookback_days: int = 60) -> Dict:
+        """
+        检测买入高潮（Buying Climax, BC）
+        理论依据：主升段末端，成交量异常放大，价格创阶段新高，但收盘表现疲软（长上影线或收盘位置偏低），代表需求被庞大的派发供应吸收。
+        使用动态阈值：基于ATR适配不同波动率的资产
+        """
+        try:
+            recent_data = self.data.tail(lookback_days)
+            vol_ma = recent_data['Volume_MA20'] if 'Volume_MA20' in recent_data.columns else recent_data['Volume'].rolling(20).mean()
+            
+            # 动态阈值
+            climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
+            fallback_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['moderate'], 1.8))
+            
+            # 计算收盘位置分位和上影线比例
+            range_size = recent_data['High'] - recent_data['Low']
+            close_pos = (recent_data['Close'] - recent_data['Low']) / range_size.replace(0, 1e-9)
+            upper_shadow = recent_data['High'] - recent_data[['Open', 'Close']].max(axis=1)
+            upper_shadow_ratio = upper_shadow / range_size.replace(0, 1e-9)
+            
+            # 高潮候选者：成交量大 且 (收盘偏低 或 长上影线) 且 必须是阳线或高开(可选，主要是放量冲高回落)
+            candidates = recent_data[
+                (recent_data['Volume'] > vol_ma * climax_vol_threshold) & 
+                ((close_pos < 0.5) | (upper_shadow_ratio > 0.4))
+            ]
+            
+            if candidates.empty:
+                # 降级：找最高点且量能尚可的
+                max_idx = recent_data['High'].idxmax()
+                max_row = recent_data.loc[max_idx]
+                vol_ratio = max_row['Volume'] / vol_ma.loc[max_idx] if vol_ma.loc[max_idx] > 0 else 1.0
+                # 验证最高点是否符合偏弱收盘
+                max_close_pos = (max_row['Close'] - max_row['Low']) / max(max_row['High'] - max_row['Low'], 1e-9)
+                max_upper_shadow = (max_row['High'] - max(max_row['Open'], max_row['Close'])) / max(max_row['High'] - max_row['Low'], 1e-9)
+                
+                if vol_ratio > fallback_vol_threshold and (max_close_pos < 0.6 or max_upper_shadow > 0.3):
+                    is_climax = True
+                    bc_idx = max_idx
+                else:
+                    return {"detected": False, "reason": "No climactic volume found at highs with poor close"}
+            else:
+                # 取最后一个符合条件的作为 BC
+                bc_idx = candidates.index[-1]
+                is_climax = True
+
+            bc_row = recent_data.loc[bc_idx]
+            vol_ratio = bc_row['Volume'] / vol_ma.loc[bc_idx]
+            confidence = min(100, (vol_ratio - 1.0) * 50)
+
+            return {
+                "detected": is_climax,
+                "date": bc_idx,
+                "price": float(bc_row['High']),
+                "volume": float(bc_row['Volume']),
+                "type": "buying_climax",
+                "volume_ratio": float(vol_ratio),
+                "confidence": float(confidence)
+            }
+        except (KeyError, ValueError, TypeError) as e:
+            logger.exception(f"BC检测失败: {e}")
+            return {"detected": False, "error": str(e)}
+        except Exception as e:
+            logger.exception(f"BC检测失败: 未知异常: {e}")
+            raise PatternDetectionError("BC", f"未知异常: {e}") from e
 
     def detect_automatic_rally(self, lookback_days: int = 60) -> Dict:
         """

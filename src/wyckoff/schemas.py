@@ -36,6 +36,7 @@ class WyckoffEventModel(BaseModel):
     date: Optional[Any] = None
     price: Optional[float] = Field(default=None, description="事件价格")
     volume: Optional[float] = Field(default=None, description="事件成交量")
+    volume_ratio: Optional[float] = Field(default=None, description="事件量比")
     confidence: float = Field(default=0.0, description="置信度 (0-1)")
     description: Optional[str] = Field(default=None, description="事件描述")
     # 新增字段：反弹/回落百分比（从Climax实体中位值计算）
@@ -109,6 +110,12 @@ class UpthrustSignalModel(BaseModel):
     rejection_price: float = Field(description="回落价格")
     rejection_days: int = Field(description="回落天数")
     close_from_high: float = Field(description="收盘距高点比例")
+    follow_through_quality: Optional[float] = Field(default=None, description="回落跟随质量")
+    breakout_volume_ratio: Optional[float] = Field(default=None, description="突破量比")
+    penetration_depth: Optional[float] = Field(default=None, description="向上刺穿深度(%)")
+    upthrust_type: Optional[str] = Field(default=None, description="Upthrust类型(Type1/2/3)")
+    needs_secondary_test: Optional[bool] = Field(default=None, description="是否需要ST")
+    is_valid: Optional[bool] = Field(default=None, description="是否为有效信号")
 
 
 class UpthrustModel(BaseModel):

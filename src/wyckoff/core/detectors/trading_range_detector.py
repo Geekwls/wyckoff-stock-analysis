@@ -177,6 +177,25 @@ class TradingRangeDetector(BaseDetector):
             if higher_lows and vol_contraction:
                 absorption_detected = True
 
+            # 3. 补充：放量吸收检测 (High Volume Absorption)
+            # 在阻力位下方，出现放量但价差极窄的 K 线（多头积极吃下空头抛压）
+            last_row = recent.iloc[-1]
+            vol_ma = recent['Volume'].mean()
+            range_size = max(last_row['High'] - last_row['Low'], 1e-9)
+            avg_range = (recent['High'] - recent['Low']).mean()
+            close_position = (last_row['Close'] - last_row['Low']) / range_size
+            
+            high_volume_absorption = (
+                (close_position > 0.5) and                    # 收盘在上半部
+                (last_row['Volume'] > vol_ma * 1.5) and       # 放量
+                (range_size < avg_range * 0.7) and            # 价差极窄
+                (last_row['High'] > high * 0.95)              # 接近阻力位
+            )
+            
+            if high_volume_absorption:
+                absorption_detected = True
+                absorption_score += 1.0  # 放量吸收信号强烈
+
         return {
             'is_consolidation': is_consolidation,
             'is_broken': is_broken,

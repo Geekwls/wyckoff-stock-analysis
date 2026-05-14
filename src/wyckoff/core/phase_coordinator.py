@@ -67,7 +67,19 @@ class PhaseCoordinator:
             self.detector.sw_detector.reset_blocked_signals()
 
         # 1. 收集基础价格形态（不依赖全局阶段）
-        climax_res = self.detector.detect_climax()
+        # 🔧 P3修复：弃用旧的基于固定百分比的 detect_climax，全面拥抱动态 ATR 的 SC/BC
+        sc_res = self.detector.detect_climax_panic_selling()
+        bc_res = self.detector.detect_climax_buying()
+        
+        # 仲裁：如果同时检测到SC和BC（比如先暴涨后暴跌），取距离当前最近的一个作为主高潮
+        if sc_res.get('detected') and bc_res.get('detected'):
+            climax_res = sc_res if sc_res.get('date') > bc_res.get('date') else bc_res
+        elif sc_res.get('detected'):
+            climax_res = sc_res
+        elif bc_res.get('detected'):
+            climax_res = bc_res
+        else:
+            climax_res = {'detected': False}
         ar_res = self.detector.detect_automatic_reaction(climax_res)
         st_res = self.detector.detect_secondary_test(climax_res, ar_res)
 

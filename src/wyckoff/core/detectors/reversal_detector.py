@@ -318,30 +318,37 @@ class ReversalDetector(BaseDetector):
             total_score = min(recovery_vol_r * 15, 30) + min(nxt_close_pos * 25, 20) + min(follow_score * 3, 30) + min(recovery_pct, 10) + 10
             total_score = min(total_score, 100)
             
-            # Spring 量能分类与 ST 强制绑定
+            # Spring 量能分类与 ST 强制绑定 (符合 David Weis 原著)
             mean_vol = recent['Volume'].mean()
             breakdown_vol_ratio = float(volumes[cur_idx] / mean_vol) if mean_vol > 0 else 1.0
+            penetration_depth = breakdown_pcts[i]
             needs_secondary_test = False
-            spring_type = 'type_2'
+            is_valid = True
             
-            if breakdown_vol_ratio < 0.8:
-                spring_type = 'type_1_low_volume'
-            elif breakdown_vol_ratio > 1.5:
-                spring_type = 'type_3_high_volume'
+            if breakdown_vol_ratio > 1.5 and penetration_depth > 3.0:
+                spring_type = 'type_1_dangerous'      # 放量深跌，危险，不能买
+                is_valid = False
                 needs_secondary_test = True
-                total_score *= 0.7  # 放量破底，强制降级，必须有ST确认
+            elif breakdown_vol_ratio < 0.8 and penetration_depth < 1.5:
+                spring_type = 'type_3_safe'           # 缩量浅跌，安全，可立即买
+                needs_secondary_test = False
+            else:
+                spring_type = 'type_2_neutral'        # 中性，需等待 ST 确认
+                needs_secondary_test = True
 
-            springs.append({
-                'date': recent.index[nxt_idx], 'breakdown_date': recent.index[cur_idx],
-                'breakdown_price': round(float(lows[cur_idx]), 2), 'support_level': round(support, 2),
-                'recovery_price': round(float(closes[nxt_idx]), 2), 'recovery_days': actual_recovery_days,
-                'volume_ratio': round(recovery_vol_r, 2), 'close_position': round(nxt_close_pos * 100, 1),
-                'follow_up_score': follow_score, 'total_score': total_score,
-                'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
-                'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
-                'spring_type': spring_type,
-                'needs_secondary_test': needs_secondary_test
-            })
+            if is_valid:
+                springs.append({
+                    'date': recent.index[nxt_idx], 'breakdown_date': recent.index[cur_idx],
+                    'breakdown_price': round(float(lows[cur_idx]), 2), 'support_level': round(support, 2),
+                    'recovery_price': round(float(closes[nxt_idx]), 2), 'recovery_days': actual_recovery_days,
+                    'volume_ratio': round(recovery_vol_r, 2), 'close_position': round(nxt_close_pos * 100, 1),
+                    'follow_up_score': follow_score, 'total_score': min(total_score, 100),
+                    'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
+                    'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
+                    'spring_type': spring_type,
+                    'needs_secondary_test': needs_secondary_test,
+                    'penetration_depth': round(float(penetration_depth), 2)
+                })
         return springs
 
     def _detect_spring_iterative(self, recent: pd.DataFrame, support: float) -> List[Dict]:
@@ -364,29 +371,36 @@ class ReversalDetector(BaseDetector):
             actual_recovery_days = self._count_recovery_days(recent, i, support)
             total_score = min(recovery_vol_r * 15, 30) + min(nxt_close_pos * 25, 20) + min(follow_score * 3, 30) + min(recovery_pct, 10) + 10
             
-            # Spring 量能分类与 ST 强制绑定
+            # Spring 量能分类与 ST 强制绑定 (符合 David Weis 原著)
             mean_vol = recent['Volume'].mean()
             breakdown_vol_ratio = float(cur['Volume'] / mean_vol) if mean_vol > 0 else 1.0
+            penetration_depth = breakdown_pct
             needs_secondary_test = False
-            spring_type = 'type_2'
+            is_valid = True
             
-            if breakdown_vol_ratio < 0.8:
-                spring_type = 'type_1_low_volume'
-            elif breakdown_vol_ratio > 1.5:
-                spring_type = 'type_3_high_volume'
+            if breakdown_vol_ratio > 1.5 and penetration_depth > 3.0:
+                spring_type = 'type_1_dangerous'      # 放量深跌，危险，不能买
+                is_valid = False
                 needs_secondary_test = True
-                total_score *= 0.7  # 放量破底，强制降级，必须有ST确认
+            elif breakdown_vol_ratio < 0.8 and penetration_depth < 1.5:
+                spring_type = 'type_3_safe'           # 缩量浅跌，安全，可立即买
+                needs_secondary_test = False
+            else:
+                spring_type = 'type_2_neutral'        # 中性，需等待 ST 确认
+                needs_secondary_test = True
 
-            springs.append({
-                'date': nxt.name, 'breakdown_date': cur.name, 'breakdown_price': round(float(cur['Low']), 2),
-                'support_level': round(support, 2), 'recovery_price': round(float(nxt['Close']), 2),
-                'recovery_days': actual_recovery_days, 'volume_ratio': round(recovery_vol_r, 2),
-                'close_position': round(nxt_close_pos * 100, 1), 'follow_up_score': follow_score,
-                'total_score': min(total_score, 100), 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
-                'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
-                'spring_type': spring_type,
-                'needs_secondary_test': needs_secondary_test
-            })
+            if is_valid:
+                springs.append({
+                    'date': nxt.name, 'breakdown_date': cur.name, 'breakdown_price': round(float(cur['Low']), 2),
+                    'support_level': round(support, 2), 'recovery_price': round(float(nxt['Close']), 2),
+                    'recovery_days': actual_recovery_days, 'volume_ratio': round(recovery_vol_r, 2),
+                    'close_position': round(nxt_close_pos * 100, 1), 'follow_up_score': follow_score,
+                    'total_score': min(total_score, 100), 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
+                    'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
+                    'spring_type': spring_type,
+                    'needs_secondary_test': needs_secondary_test,
+                    'penetration_depth': round(float(penetration_depth), 2)
+                })
         return springs
 
     def detect_upthrust(self, lookback: int = None) -> Dict:
@@ -418,6 +432,9 @@ class ReversalDetector(BaseDetector):
         breakout_df = df.tail(M)
         upthrusts, breakout_indices = [], breakout_df.index[breakout_df['High'] > resistance_level]
         rejection_indices = df.index[df['Close'] < resistance_level]
+        
+        mean_vol = df['Volume'].mean()
+        
         for b_idx in breakout_indices[-3:]:
             later_rejections = rejection_indices[rejection_indices > b_idx]
             if len(later_rejections) > 0:
@@ -425,14 +442,39 @@ class ReversalDetector(BaseDetector):
                 days_to_reject = (df.index.get_indexer([r_idx])[0] - df.index.get_indexer([b_idx])[0])
                 if days_to_reject <= self.config.spring_max_recovery_days:
                     b_vol, r_vol = df.loc[b_idx, 'Volume'], df.loc[r_idx, 'Volume']
+                    
+                    b_high = df.loc[b_idx, 'High']
+                    breakout_vol_ratio = b_vol / mean_vol if mean_vol > 0 else 1.0
+                    penetration_depth = (b_high - resistance_level) / resistance_level * 100
+                    
                     close_pos = (df.loc[r_idx, 'High'] - df.loc[r_idx, 'Close']) / (df.loc[r_idx, 'High'] - df.loc[r_idx, 'Low'] + 1e-6)
                     follow_through = df[df.index > r_idx].head(3)
                     ft_quality = (follow_through['Low'] < df.loc[r_idx, 'Low']).sum() / len(follow_through) * 100 if len(follow_through) > 0 else 0
-                    if r_vol > b_vol * 1.1 or close_pos > 0.7:
-                        upthrusts.append({
-                            'date': r_idx, 'breakout_date': b_idx, 'breakout_price': df.loc[b_idx, 'High'],
-                            'resistance_level': resistance_level, 'rejection_price': df.loc[r_idx, 'Close'],
-                            'rejection_days': int(days_to_reject), 'close_from_high': round(close_pos, 2),
-                            'follow_through_quality': round(ft_quality, 2)
-                        })
+                    
+                    # Upthrust 分类与安全性验证
+                    is_valid = True
+                    needs_secondary_test = False
+                    
+                    if breakout_vol_ratio > 1.5 and penetration_depth > 3.0:
+                        upthrust_type = 'type_1_dangerous'    # 放量深穿透，需求极大，危险
+                        is_valid = False
+                        needs_secondary_test = True
+                    elif breakout_vol_ratio < 0.8 and penetration_depth < 1.5:
+                        upthrust_type = 'type_3_safe'         # 缩量浅穿透，需求枯竭，安全
+                        needs_secondary_test = False
+                    else:
+                        upthrust_type = 'type_2_neutral'      # 中性，需等待 ST 确认
+                        needs_secondary_test = True
+                        
+                    upthrusts.append({
+                        'date': r_idx, 'breakout_date': b_idx, 'breakout_price': b_high,
+                        'resistance_level': resistance_level, 'rejection_price': df.loc[r_idx, 'Close'],
+                        'rejection_days': int(days_to_reject), 'close_from_high': round(close_pos, 2),
+                        'follow_through_quality': round(ft_quality, 2),
+                        'breakout_volume_ratio': round(breakout_vol_ratio, 2),
+                        'penetration_depth': round(penetration_depth, 2),
+                        'upthrust_type': upthrust_type,
+                        'needs_secondary_test': needs_secondary_test,
+                        'is_valid': is_valid
+                    })
         return upthrusts

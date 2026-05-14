@@ -196,26 +196,64 @@ class EffortResultMixin:
     def _analyze_wave_efficiency(self, df) -> dict:
         if len(df) < 25:
             return {"status": "insufficient_data"}
-        recent = df.tail(25)
-        returns = recent['Close'].pct_change().fillna(0)
-        up_idx = returns[returns > 0].index.tolist()
-        if len(up_idx) < 6:
-            return {"status": "insufficient_swings"}
-        wave1 = recent.iloc[-12:-6]
-        wave2 = recent.iloc[-6:]
-        wave1_push = wave1['High'].max() - wave1['Low'].min()
-        wave2_push = wave2['High'].max() - wave2['Low'].min()
-        wave1_vol = wave1['Volume'].mean()
-        wave2_vol = wave2['Volume'].mean()
-        sot = wave2_vol > wave1_vol * 1.1 and wave2_push < wave1_push * 0.8
-        return {
-            "status": "ok",
-            "sot_detected": bool(sot),
-            "wave1_push": round(wave1_push, 2),
-            "wave2_push": round(wave2_push, 2),
-            "wave1_avg_vol": round(wave1_vol, 2),
-            "wave2_avg_vol": round(wave2_vol, 2)
-        }
+            
+        try:
+            from ..weis_wave import WeisWaveGenerator
+            generator = WeisWaveGenerator(df)
+            waves = generator.generate()
+            
+            if len(waves) >= 3:
+                # 寻找最近的两个同向波段
+                last_wave = waves[-1]
+                direction = last_wave.direction
+                
+                # 倒序查找同向波段
+                same_dir_waves = [w for w in waves if w.direction == direction]
+                if len(same_dir_waves) >= 2:
+                    wave2 = same_dir_waves[-1] # 当前/最近波段
+                    wave1 = same_dir_waves[-2] # 上一个同向波段
+                    
+                    # SOT 判断：推力减小但成交量放大
+                    sot = wave2.volume > wave1.volume * 1.1 and wave2.thrust < wave1.thrust * 0.8
+                    return {
+                        "status": "ok",
+                        "sot_detected": bool(sot),
+                        "wave1_push": round(wave1.thrust, 2),
+                        "wave2_push": round(wave2.thrust, 2),
+                        "wave1_vol": round(wave1.volume, 2),
+                        "wave2_vol": round(wave2.volume, 2),
+                        "method": "weis_wave"
+                    }
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"WeisWave analysis failed: {e}. Falling back to legacy mode.")
+
+        # Legacy Mode (降级方案): 不再硬编码 6天，而是改为动态窗口
+        recent = df.tail(40)
+        # 根据 ATR 或简单的高低点寻找一个稍微动态的窗口长度
+        # 为了稳定，取近期的波动周期，这里取 8 天作为默认降级窗口
+        w_len = 8
+        if len(recent) >= w_len * 2:
+            wave1 = recent.iloc[-w_len*2:-w_len]
+            wave2 = recent.iloc[-w_len:]
+            wave1_push = max(wave1['High'].max() - wave1['Low'].min(), 1e-9)
+            wave2_push = max(wave2['High'].max() - wave2['Low'].min(), 1e-9)
+            # Legacy 模式下原来用的是 mean()，现在改为真实波段累加的 sum()，以向 Weis Wave 靠拢
+            wave1_vol = wave1['Volume'].sum()
+            wave2_vol = wave2['Volume'].sum()
+            sot = wave2_vol > wave1_vol * 1.1 and wave2_push < wave1_push * 0.8
+            return {
+                "status": "ok",
+                "sot_detected": bool(sot),
+                "wave1_push": round(wave1_push, 2),
+                "wave2_push": round(wave2_push, 2),
+                "wave1_vol": round(wave1_vol, 2),
+                "wave2_vol": round(wave2_vol, 2),
+                "method": "legacy_fixed_window"
+            }
+            
+        return {"status": "insufficient_swings"}
 
     def _analyze_signal_follow_through(self) -> dict:
         if len(self.data) < 5:
