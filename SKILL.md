@@ -55,6 +55,17 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    **# 📚 Jargon Explained**
    *(Directly read and list terms from `[terminology_guide]` with their `simple` and `action` explanations; skip if no data available)*
 
+   **⚠️ CRITICAL TERMINOLOGY RULES** — You MUST follow these rules whenever explaining Wyckoff terms:
+   - **LPSY (Last Point of Supply)**:
+     * In **Accumulation** context: A *weak* rally (low volume, fails to reclaim resistance) before markdown begins. It is NOT a buy point. Do NOT write "吸笹尾声特征" or "可在LPSY回调时建仓".
+     * In **Distribution** context: The final low-volume rally before price breaks down through Ice. It is a **short-entry signal**, not a long opportunity.
+     * **ALWAYS clarify context**. LPSY and LPS (Last Point of Support) are **opposite signals** — never conflate them.
+   - **Phase A (Stopping the Trend)**:
+     * Correct: "恐慧抛售停止，市场从急跌转为横盘，主力开始**试探性**承接（PS→SC→AR→ST）。"
+     * **Do NOT write** "主力开始承接" without the qualifier "试探性". Phase A does NOT guarantee price will not fall further.
+     * **Spring CANNOT occur in Phase A**. Spring is a Phase C event. If both are detected simultaneously, the system automatically upgrades the phase to Phase C.
+
+
    **# 📊 Historical Performance**
    *(Extract historical win rate data from `[performance_tracking]` corresponding to the detected key events, such as SOS/Spring success rates)*
 

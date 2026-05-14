@@ -627,8 +627,17 @@ class RecommendationEngine:
                 elif mode == "moderate":
                     return RiskAdviceItem(action="观望", reason=f"跨周期冲突：{conflict_details}")
                 else:  # aggressive
-                    # 激进策略也应抑制，但可以给出等待方向
-                    return RiskAdviceItem(action="等待信号", reason=f"跨周期冲突：{conflict_details}，等待日线级别明确信号")
+                    # ✅ 修复：跨周期冲突下激进仓位上限从15-20%严格降至5-10%
+                    # 理论依据：周月线双空头压制下，日线吸笹结构失败概率显著增加
+                    # 可能是下跌中继，而非真正吸笹。轻仓仅适合极短线快进快出。
+                    return RiskAdviceItem(
+                        action="极轻仓试错",
+                        reason=(
+                            f"跨周期冲突：{conflict_details}，等待日线级别明确信号。"
+                            "⚠️ 风险警告：高时间框空头压制下，日线吸笹结构有失效风险（可能是下跌中继）。"
+                            "如强行参与，仓位严格控制在5-10%，必须设好止损，极短线快进快出，不宜隔夜持仓。"
+                        )
+                    )
 
             if direction == "观望":
                 return RiskAdviceItem(action="观望", reason="无清晰信号")

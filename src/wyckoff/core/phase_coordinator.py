@@ -628,6 +628,25 @@ class PhaseCoordinator:
 
         if spring_upthrust:
             event_type = spring_upthrust.get('_type')
+            # ✅ 修复问题1：Phase A 与 Spring 时序矛盾
+            # Wyckoff 理论：Spring 只能发生在 Phase C（吸筹区积累完成后的震仓测试）
+            # 如果阶段仍在 Phase A，但已检测到 Spring，必须强制升级为 Phase C
+            if 'Phase A' in preliminary_phase and 'Accumulation' in preliminary_phase and event_type == 'spring':
+                new_phase = 'Accumulation Phase C'
+                revision_logs.append(
+                    f"[时序修正] Spring 只属于 Phase C。当前阶段 '{preliminary_phase}' 与 Spring 信号矛盾，"
+                    f"强制升级为 '{new_phase}'。（Spring 是 Phase C 的震仓测试行为，"
+                    f"发生在 SC→AR→ST 积累之后，而非 Phase A 初期）"
+                )
+                return new_phase, revision_logs
+            # 派发阶段同理：Phase A 不应出现 Upthrust（Upthrust 属于 Phase C）
+            if 'Phase A' in preliminary_phase and 'Distribution' in preliminary_phase and event_type == 'upthrust':
+                new_phase = 'Distribution Phase C'
+                revision_logs.append(
+                    f"[时序修正] Upthrust 只属于 Phase C。当前阶段 '{preliminary_phase}' 与 Upthrust 信号矛盾，"
+                    f"强制升级为 '{new_phase}'。"
+                )
+                return new_phase, revision_logs
             # 如果初步判断是派发，但检测到 Spring
             if 'Distribution' in preliminary_phase and event_type == 'spring':
                 revision_logs.append(f"检测到 Spring，从 {preliminary_phase} 修正为 Accumulation")
