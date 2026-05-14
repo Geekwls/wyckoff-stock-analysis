@@ -52,7 +52,16 @@ class WyckoffReportGenerator:
         sow = self.pattern_detector.detect_sow(trading_range=trading_range)
         lps = self.pattern_detector.detect_lps()
         lpsy = self.pattern_detector.detect_lpsy()
-        
+
+        # 🔧 新增：SOS-SOW矛盾分析
+        sos_sow_analysis = None
+        if sos.get('detected') and sow.get('detected'):
+            from .sos_sow_analyzer import SOSSOWAnalyzer
+            current_price = self.data['Close'].iloc[-1]
+            sos_sow_analysis = SOSSOWAnalyzer.analyze_sos_sow_conflict(
+                sos, sow, current_price, trading_range
+            )
+
         # 高级信号
         joc = self.pattern_detector.detect_joc_menhongtao()
         fti = self.pattern_detector.detect_fti()
@@ -118,7 +127,8 @@ class WyckoffReportGenerator:
         report += self.conclusion_builder.build(
             phase_result, trading_range, cause_effect, conflict, quality_data,
             joc, spring, sos, lps, fti, upthrust, sow, lpsy, mtf,
-            boring_res, dead_corner, market_env, arbitration_result, breakout_analysis
+            boring_res, dead_corner, market_env, arbitration_result, breakout_analysis,
+            sos_sow_analysis  # 🔧 新增：传递SOS-SOW分析结果
         )
         
         return report

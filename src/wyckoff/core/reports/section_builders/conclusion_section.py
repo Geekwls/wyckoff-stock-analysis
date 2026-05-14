@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any
 from .base_builder import BaseSectionBuilder
+from ...sos_sow_analyzer import SOSSOWAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,7 @@ class ConclusionSection(BaseSectionBuilder):
               quality_data: dict, joc: dict, spring: dict, sos: dict, lps: dict, fti: dict,
               upthrust: dict, sow: dict, lpsy: dict, mtf: dict, boring_res: dict,
               dead_corner: dict, market_env: str, arbitration_result: dict = None,
-              breakout_analysis: dict = None) -> str:
+              breakout_analysis: dict = None, sos_sow_analysis: dict = None) -> str:
 
         phase_str = phase_result.get('phase', 'Unknown')
         phase_conf = phase_result.get('confidence', 0.0)
@@ -33,6 +34,10 @@ class ConclusionSection(BaseSectionBuilder):
         if arbitration_result:
             report += self._build_arbitration_section(arbitration_result)
 
+        # === SOS-SOW矛盾分析 ===
+        if sos_sow_analysis and sos_sow_analysis.get('has_conflict'):
+            report += SOSSOWAnalyzer.format_conflict_report(sos_sow_analysis)
+
         # 🔧 新增：TR突破后的重新评估
         if trading_range and trading_range.get('is_broken'):
             report += self._build_tr_breakdown_reassessment(trading_range, phase_result, breakout_analysis)
@@ -42,7 +47,7 @@ class ConclusionSection(BaseSectionBuilder):
                 report += self._build_breakout_quality_section(breakout_analysis, trading_range)
 
         # Cause & Effect
-        report += self._build_cause_effect(cause_effect, trading_range)
+        report += self._build_cause_effect(cause_effect, trading_range, sos_sow_analysis)
         
         # Conflict Warning
         if conflict.get('has_conflict'):
@@ -648,17 +653,125 @@ class ConclusionSection(BaseSectionBuilder):
 
         return report
 
-    def _build_cause_effect(self, cause_effect, trading_range) -> str:
+    def _build_cause_effect(self, cause_effect, trading_range, sos_sow_analysis=None) -> str:
+        """
+        构建因果测算部分
+
+        修改要点：
+        - 上涨目标优先显示（当前价格在区间上方时）
+        - 下跌目标降级为"极端情景"展示
+        - 根据SOS-SOW分析结果调整展示逻辑
+        """
         if not cause_effect or 'targets' not in cause_effect: return ''
+
         tr_high, tr_low = trading_range.get('high', 0), trading_range.get('low', 0)
         current_price = self.data['Close'].iloc[-1]
-        
+        is_above_range = current_price > tr_high if tr_high > 0 else False
+
         if trading_range.get('is_broken'):
             direction = trading_range.get('breakout_direction', 'unknown')
             return f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【因果测算 - 待重新锚定】\n原区间: {tr_low:.2f} - {tr_high:.2f}（已被{direction}突破至{current_price:.2f}）\n状态: 原TR已失效，旧因果目标不再适用\n"
 
-        t1, t2 = cause_effect['targets'].get('target_1', 0), cause_effect['targets'].get('target_2', 0)
-        return f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【因果测算】\n交易区间: {tr_low:.2f} - {tr_high:.2f}\n突破方向: {cause_effect.get('breakout_direction', '待定')}\n目标1 (保守 1.0×): {t1:.2f}\n目标2 (正常 1.618×): {t2:.2f}\n"
+        # 获取base_effect和breakout_direction
+        base_effect = cause_effect.get('base_effect', 0)
+        breakout_dir = cause_effect.get('breakout_direction', 'up')
+        cause_bars = cause_effect.get('cause_bars', 0)
+
+        # 🔧 修复：根据当前价格位置计算正确的上涨/下跌目标
+        if is_above_range or breakout_dir == 'up':
+            # 价格在区间上方或向上突破 → 计算上涨目标
+            # 使用保守的上涨目标计算（避免base_effect过大导致不合理）
+            price_range = tr_high - tr_low
+            range_pct = price_range / tr_low if tr_low > 0 else 0
+
+            # 方法1：基于区间幅度的扩展（威科夫因果法则）
+            # 保守估计：上涨幅度 = 区间幅度的1-2倍
+            if base_effect > 0 and base_effect < 3:  # base_effect合理时才使用
+                t1_up = current_price * (1 + base_effect * 0.2)   # 保守：20%的base_effect
+                t2_up = current_price * (1 + base_effect * 0.4)   # 正常：40%的base_effect
+                t3_up = current_price * (1 + base_effect * 0.6)   # 激进：60%的base_effect
+            else:
+                # 方法2：使用斐波那契扩展（更保守）
+                t1_up = current_price * 1.10   # +10%（保守）
+                t2_up = current_price * 1.20   # +20%（正常）
+                t3_up = current_price * 1.35   # +35%（激进）
+
+            # 获取下跌目标（用于极端情景展示）
+            targets = cause_effect.get('targets', {})
+            t1_down = targets.get('target_1', 0)
+        else:
+            # 价格在区间内或向下突破 → 使用原始目标
+            targets = cause_effect.get('targets', {})
+            t1_down = targets.get('target_1', 0)
+            t2_down = targets.get('target_2', 0)
+            t3_down = targets.get('target_3', 0)
+
+        # 🔧 修改：根据当前价格位置和SOS-SOW分析，决定展示顺序
+        report = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        report += "【📈 因果法则目标预测】\n\n"
+
+        # 判断当前状态
+        if is_above_range or breakout_dir == 'up':
+            # 情景A：当前价格在区间上方或突破方向向上 → 优先显示上涨目标
+            report += "### ✅ 上涨情景（当前突破有效）\n\n"
+            report += f"基于{cause_bars}列水平积累，若**有效站稳{tr_high:.2f}上方**：\n\n"
+
+            # 计算更合理的触发条件
+            # 从SOS信号中获取价格
+            sos_price = current_price  # 默认值
+            # 尝试获取SOS的高点作为参考
+            try:
+                if hasattr(self, 'pattern_detector') and hasattr(self.pattern_detector, 'detect_sos'):
+                    sos_result = self.pattern_detector.detect_sos()
+                    if sos_result and sos_result.get('detected'):
+                        sos_price = sos_result.get('price', current_price)
+            except Exception:
+                pass
+
+            # 计算合理的触发条件价格（比当前价格高2-3%）
+            trigger_price = current_price * 1.025  # +2.5%作为突破确认位
+
+            report += "| 目标位 | 价格 | 涨幅 | 触发条件 |\n"
+            report += "|--------|------|------|----------|\n"
+            report += f"| **T1** | {t1_up:.2f} | {(t1_up/current_price - 1)*100:+.1f}% | 放量突破{trigger_price:.2f}并回踩不破 |\n"
+            report += f"| **T2** | {t2_up:.2f} | {(t2_up/current_price - 1)*100:+.1f}% | T1达成后延续上涨 |\n"
+            report += f"| **T3** | {t3_up:.2f} | {(t3_up/current_price - 1)*100:+.1f}% | 进入派发期前高 |\n"
+
+            # 下跌目标降级展示（如果有明显的下跌目标）
+            if t1_down > 0 and t1_down < current_price * 0.8:
+                report += f"\n### ⚠️ 下跌情景（若跌破{tr_low:.2f}激活）\n\n"
+                report += f"**极端情景（仅供参考，概率较低）**：\n"
+                report += f"- 跌破{tr_low:.2f}后，基于点数图{cause_bars}列计数\n"
+                report += f"- 理论目标{t1_down:.2f}元（{(t1_down/current_price - 1)*100:.1f}%）\n"
+                report += f"- **激活条件**：有效跌破{tr_low:.2f}且3天不收复\n\n"
+                report += f"**当前判断**：由于价格在{tr_high:.2f}上方，**上涨情景概率更高**"
+
+                # 如果有SOS-SOW分析，补充说明
+                if sos_sow_analysis and sos_sow_analysis.get('has_conflict'):
+                    interpretation = sos_sow_analysis.get('interpretation')
+                    if interpretation in ['trap_bearish', 'suspected_trap']:
+                        conf = sos_sow_analysis.get('confidence', 0) * 100
+                        report += f"，但⚠️ **SOS-SOW分析疑似为诱多陷阱（{conf:.0f}%置信度，待确认）**，需警惕假突破风险。"
+                    elif interpretation in ['shakeout_bullish', 'suspected_shakeout']:
+                        conf = sos_sow_analysis.get('confidence', 0) * 100
+                        report += f"，✅ **SOS-SOW分析疑似为震仓洗盘（{conf:.0f}%置信度，待确认）**，支持上涨情景。"
+                report += "\n"
+
+        else:
+            # 情景B：当前价格在区间内或下方 → 均衡展示
+            report += f"交易区间：{tr_low:.2f} - {tr_high:.2f}\n"
+            report += f"突破方向：{breakout_dir}\n\n"
+
+            if breakout_dir == 'up':
+                report += f"上涨目标（若突破{tr_high:.2f}）：\n"
+                report += f"  目标1（保守）：{t1:.2f}元\n"
+                report += f"  目标2（正常）：{t2:.2f}元\n"
+            else:
+                report += f"下跌目标（若跌破{tr_low:.2f}）：\n"
+                report += f"  目标1：{t1:.2f}元\n"
+                report += f"  目标2：{t2:.2f}元\n"
+
+        return report
 
     def _check_post_breakout_state(self, trading_range, joc, current_price) -> str:
         if not trading_range.get('is_broken'): return ''
@@ -692,7 +805,64 @@ class ConclusionSection(BaseSectionBuilder):
             else:
                 report += f"[!] 关键观察点位:\n   • 突破位: {breakout_level:.2f}元\n   • 原TR上沿: {tr_high:.2f}元\n"
         else:
-            report += "[!] 观察要点:\n   • 关键阻力位: {tr_high:.2f}元\n   • 关键支撑位: {tr_low:.2f}元\n"
+            # 🔧 修复格式化bug：使用f-string正确格式化
+            report += f"[!] 观察要点:\n   • 关键阻力位: {tr_high:.2f}元\n   • 关键支撑位: {tr_low:.2f}元\n"
+
+        # 🔧 新增：BC警示下的特殊止损纪律
+        try:
+            # 尝试从phase_coordinator获取climax信息
+            bc_detected = False
+            bc_type = None
+
+            # 方法1：检查phase_coordinator的events
+            if hasattr(self, 'pattern_detector') and hasattr(self.pattern_detector, 'phase_coordinator'):
+                try:
+                    events = self.pattern_detector.phase_coordinator.collect_all_events()
+                    if isinstance(events, dict):
+                        climax = events.get('climax')
+                        if climax:
+                            # 检查detected属性
+                            detected = getattr(climax, 'detected', None)
+                            if detected is None and isinstance(climax, dict):
+                                detected = climax.get('detected', False)
+
+                            # 检查type属性
+                            climax_type_value = getattr(climax, 'type', None)
+                            if climax_type_value is None and isinstance(climax, dict):
+                                climax_type_value = climax.get('type')
+
+                            bc_detected = detected if detected is not None else False
+                            bc_type = climax_type_value
+
+                            logger.info(f"BC check: detected={bc_detected}, type={bc_type}")
+                except Exception as e:
+                    logger.debug(f"Failed to get climax from phase_coordinator: {e}")
+
+            # 方法2：检查阶段字符串（备用）
+            if not bc_detected:
+                has_bc_keywords = any(keyword in phase_str for keyword in [
+                    'Buying Climax', '买入高潮', 'BC Warning', 'BC警示',
+                    '潜在派发初期', '派发初期'
+                ])
+                if has_bc_keywords:
+                    bc_detected = True
+                    bc_type = 'buying_climax'
+
+            # 如果检测到Buying Climax
+            if bc_detected and bc_type == 'buying_climax':
+                report += f"\n\n【⚠️ 买入高潮（BC）警示】\n\n"
+                report += "威科夫铁律：派发/BC阶段的止损纪律\n\n"
+                report += "若止损触发（跌破上述关键位）：\n"
+                report += "  ✅ **必须无条件离场**\n"
+                report += "  ❌ **不可补仓摊平**\n"
+                report += "  ❌ **不可等待反弹**\n\n"
+                report += "原因：\n"
+                report += "  • BC后止损触发 = 确认派发结构成立\n"
+                report += "  • 派发期抄底 = 接飞刀\n"
+                report += "  • 威科夫原则：永不对抗趋势，尤其在派发期\n\n"
+                logger.info(f"BC warning added: type={bc_type}")
+        except Exception as e:
+            logger.debug(f"Failed to add BC warning: {e}")
 
         return report
 
