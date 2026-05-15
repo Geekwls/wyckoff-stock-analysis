@@ -1,4 +1,4 @@
-# 📈 Wyckoff Stock Analysis Skill v2.0.0
+# 📈 Wyckoff Stock Analysis Skill v2.6.0 "Expert Edition"
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![Pydantic](https://img.shields.io/badge/Pydantic-v2-red.svg)](https://docs.pydantic.dev/)
@@ -79,7 +79,9 @@ python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 | **多周期共振** | 自动分析日线、周线、月线趋势的一致性，捕捉高胜率共振信号。 |
 | **点数图 (P&F)** | 基于横盘时间计算“因果法则”目标位，量化上涨/下跌空间。 |
 | **供需评估** | 量化每一波反弹与回撤中的供需比，识别主力吸筹质量。 |
-| **信号生命周期** | 自动管理信号时效性，过滤陈旧信号，聚焦当下机会。 |
+| **信号生命周期** | 自动管理信号时效性，通过 10 日窗口验证 Spring/JOC 的真伪并自动更新信号状态。 |
+| **PS/PSY 早期预警** | 检测 Phase A 的“初步”进场/抛压信号 (PS/PSY)，建立从趋势停止到高潮确认的完整证据链。 |
+| **跨周期 EVR 共振** | 实现 Effort vs Result 的周线-日线跨级别共振分析，识别具备大级别潜力的主力吸筹行情。 |
 
 ---
 

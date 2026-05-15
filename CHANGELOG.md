@@ -2,6 +2,14 @@
 
 本文档记录了Wyckoff Stock Analysis Skill的所有重要变更和功能更新。
 
+## [v2.6.0] - 2026-05-15
+### 💎 实战大师版 (Expert Edition Upgrade)
+- **Spring 生命周期管理**: 引入 10 日动态跟踪窗口，增加了对 Spring 失败（Failed）状态的证伪逻辑，显著减少假信号误报。
+- **PS/PSY 专家探测器**: 新增 `PsDetector` 与 `PsyDetector`，完整覆盖威科夫 Phase A 的 PS → Climax → AR → ST 证据链。
+- **JOC/Spring 状态化评分**: 建立了 100 分制定量评估模型，并引入 20% 趋势容差，增强在极端行情下的稳健性。
+- **跨周期 (MTF) EVR 共振**: 实现了周线降采样逻辑，当周线与日线同时出现 Effort vs Result 异常时，自动提升信号权重。
+- **报告系统健壮性**: 修复了 `report_generator` 和 `conclusion_section` 在特定突破情景下的变量定义及编码 Bug。
+
 ## [v2.5.0] - 2026-05-15 (Today)
 
 ### 🏆 专家级逻辑补全 (Expert Logic Completion)
