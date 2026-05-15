@@ -147,12 +147,64 @@ class ReversalDetector(BaseDetector):
         
         if sc_mask.any():
             idx = df[sc_mask].index[-1]
-            return {'detected': True, 'type': 'selling_climax', 'date': idx, 'price': df.loc[idx, 'Low'], 'volume': df.loc[idx, 'Volume']}
+            climax = {'detected': True, 'type': 'selling_climax', 'date': idx, 'price': df.loc[idx, 'Low'], 'volume': df.loc[idx, 'Volume']}
+            self._verify_climax_confirmation(climax)
+            return climax
         if bc_mask.any():
             idx = df[bc_mask].index[-1]
-            return {'detected': True, 'type': 'buying_climax', 'date': idx, 'price': df.loc[idx, 'High'], 'volume': df.loc[idx, 'Volume']}
+            climax = {'detected': True, 'type': 'buying_climax', 'date': idx, 'price': df.loc[idx, 'High'], 'volume': df.loc[idx, 'Volume']}
+            self._verify_climax_confirmation(climax)
+            return climax
             
         return {'detected': False}
+
+    def _verify_climax_confirmation(self, climax_res: dict):
+        """
+        验证高潮信号是否已确认 (P1 #6)
+        SC 确认：AR 反弹需收复 (Benchmark-Low) 的 50%。
+        Benchmark = (Open+Close)/2
+        """
+        climax_date = climax_res['date']
+        df = self.data
+        try:
+            climax_row = df.loc[climax_date]
+            benchmark = (climax_row['Open'] + climax_row['Close']) / 2.0
+            climax_res['sc_benchmark'] = float(benchmark)
+            
+            # 查找之后 5 日的 AR
+            df_after = df[df.index > climax_date].head(5)
+            if len(df_after) == 0:
+                climax_res['is_confirmed'] = False
+                return
+
+            if climax_res['type'] == 'selling_climax':
+                # SC 确认逻辑
+                max_high = df_after['High'].max()
+                climax_low = climax_res['price']
+                total_drop = benchmark - climax_low
+                recovery = max_high - climax_low
+                
+                if total_drop > 0 and recovery >= total_drop * 0.5:
+                    climax_res['is_confirmed'] = True
+                    climax_res['confirmation_date'] = df_after['High'].idxmax()
+                else:
+                    climax_res['is_confirmed'] = False
+            else:
+                # BC 确认逻辑：AR 不能有效跌破 BC 发生前的支撑位
+                # 获取 BC 前的支撑 (取前20日最低)
+                pre_bc_df = df[df.index < climax_date].tail(20)
+                if len(pre_bc_df) > 0:
+                    support = pre_bc_df['Low'].min()
+                    min_low_after = df_after['Low'].min()
+                    if min_low_after >= support:
+                        climax_res['is_confirmed'] = True
+                        climax_res['confirmation_date'] = df_after['Low'].idxmin()
+                    else:
+                        climax_res['is_confirmed'] = False
+                else:
+                    climax_res['is_confirmed'] = True # 数据不足默认通过，但在报告中标记
+        except Exception:
+            climax_res['is_confirmed'] = False
 
     def detect_automatic_reaction(self, climax_res: Dict) -> Dict:
         """检测自动反弹/回落 (AR)"""
@@ -632,18 +684,29 @@ class ReversalDetector(BaseDetector):
         vol_ma = df['Volume'].tail(60).mean()
         breakout_vol_ratio = breakout_row['Volume'] / vol_ma if vol_ma > 0 else 1.0
 
+        # UTAD 核心量价特征：突破时成交量为近期(20日)最高 (P1 #3)
+        vol_20_max = df['Volume'].tail(20).max()
+        is_highest_vol = breakout_row['Volume'] >= vol_20_max
+        
         range_val = max(breakout_row['High'] - breakout_row['Low'], 1e-9)
         upper_shadow = breakout_row['High'] - max(breakout_row['Open'], breakout_row['Close'])
         upper_shadow_ratio = upper_shadow / range_val
 
-        has_climax_volume = breakout_vol_ratio > 2.0
+        has_climax_volume = breakout_vol_ratio > 2.0 or is_highest_vol
         has_long_upper_shadow = upper_shadow_ratio > 0.4
 
         if not (has_climax_volume and has_long_upper_shadow):
             return {'detected': False, 'reason': 'no_climax_volume_or_upper_shadow'}
 
-        after_breakout = df[df.index > recent_high_idx].head(5)
-        if len(after_breakout) < 2:
+        # UTAD 必须发生在 Phase C/D (P1 #3)
+        current_phase = self._current_phase
+        is_dist_context = PhaseAdapter.is_distribution(current_phase) if current_phase else True
+            
+        if not is_dist_context:
+            return {'detected': False, 'reason': 'not_in_distribution_phase'}
+
+        after_breakout = df[df.index > recent_high_idx].head(3) # 缩短到 3 天确认 (P1 #3)
+        if len(after_breakout) == 0:
             return {'detected': False, 'reason': 'insufficient_data_after_breakout'}
 
         resistance_level = lookback_high

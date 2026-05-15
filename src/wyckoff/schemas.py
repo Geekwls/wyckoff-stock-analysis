@@ -90,6 +90,8 @@ class ClimaxModel(BaseModel):
     price: Optional[float] = Field(default=None, description="价格")
     volume: Optional[float] = Field(default=None, description="成交量")
     volume_ratio: Optional[float] = Field(default=None, description="量比")
+    is_confirmed: bool = Field(default=False, description="是否已通过AR确认")
+    confirmation_date: Optional[Any] = Field(default=None, description="确认日期")
 
 
 class SpringSignalModel(BaseModel):
@@ -104,6 +106,8 @@ class SpringSignalModel(BaseModel):
     shadow_ratio: Optional[float] = Field(default=None, description="下影线与实体比例")
     total_score: Optional[float] = Field(default=None, description="综合评分(0-100)")
     strength: Optional[str] = Field(default=None, description="信号强度: strong/normal/weak")
+    spring_type: Optional[int] = Field(default=None, description="Spring类型(1/2/3)")
+    lifecycle_status: str = Field(default="active", description="生命周期状态: active/confirmed/failed")
 
 
 class SpringModel(BaseModel):
@@ -218,6 +222,9 @@ class JocModel(BaseModel):
     date: Optional[Any] = None
     creek_level: float = Field(default=0.0, description="小溪位")
     breakout_pct: float = Field(default=0.0, description="突破幅度")
+    test_detected: bool = Field(default=False, description="是否检测到回测")
+    test_quality: Optional[str] = Field(default=None, description="回测质量: HIGH/MEDIUM/LOW")
+    test_score: float = Field(default=0.0, description="回测质量评分(0-100)")
     confidence: float = Field(default=0.0, description="置信度")
 
 class FtiModel(BaseModel):

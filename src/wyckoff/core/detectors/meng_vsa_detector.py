@@ -81,7 +81,30 @@ class MengVsaDetector(BaseDetector):
         vc, ac = rv_avg / ov_ma20 if ov_ma20 > 0 else 1.0, recent['ATR_Pct'].mean() / avg_atr_p if avg_atr_p > 0 else 1.0
         is_boring = vc < 0.75 and ac < 0.8
         score = self.calculate_boring_alert_score(vc, ac, window)
-        return {"detected": is_boring, "score": score, "vol_contraction": round(vc, 2), "atr_contraction": round(ac, 2), "duration": window, "high_alert": score >= 85}
+        
+        # 新增：地量确认与爆发前夜
+        is_eve_of_breakout = False
+        if score >= 80:
+            last_3_vol = recent['Volume'].tail(3).values
+            ground_vol_limit = ov_ma20 * 0.4
+            # 地量判断：最近 3 天均低于均量的 40%，且呈萎缩趋势
+            is_ground_vol = all(v < ground_vol_limit for v in last_3_vol)
+            is_shrinking = last_3_vol[-1] < last_3_vol[-2] < last_3_vol[-3]
+            
+            if is_ground_vol and is_shrinking:
+                is_eve_of_breakout = True
+                score += 20 # 额外奖励分
+        
+        return {
+            "detected": is_boring, 
+            "score": min(100, score), 
+            "vol_contraction": round(vc, 2), 
+            "atr_contraction": round(ac, 2), 
+            "duration": window, 
+            "high_alert": score >= 85,
+            "is_eve_of_breakout": is_eve_of_breakout,
+            "signal_status": "THE_EVE_OF_BREAKOUT" if is_eve_of_breakout else "BORING_ZONE"
+        }
 
     def calculate_boring_alert_score(self, vc, ac, dur) -> int:
         score = 0

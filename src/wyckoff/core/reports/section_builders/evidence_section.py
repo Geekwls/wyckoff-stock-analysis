@@ -30,7 +30,7 @@ class EvidenceSection(BaseSectionBuilder):
 
         # SC
         sc = evidence.get('sc', {})
-        sc_detected = sc.get('detected') and all(k in sc for k in ['date', 'price', 'volume_ratio', 'confidence'])
+        sc_detected = sc.get('detected') and any(k in sc for k in ['price', 'close'])
         if ps_sc_valid:
             # 时序有效时正常显示
             if sc_detected:
@@ -46,10 +46,11 @@ class EvidenceSection(BaseSectionBuilder):
 
         # PS
         ps = evidence.get('ps', {})
-        ps_detected = ps.get('detected') and all(k in ps for k in ['rebound_pct', 'sc_date', 'ps_date', 'confidence'])
+        ps_detected = ps.get('detected') and any(k in ps for k in ['ps_price', 'rebound_pct'])
         if ps_sc_valid:
             if ps_detected:
-                text += f"   [Phase A] PS (初步支撑): 反弹{ps['rebound_pct']:.1f}% ({ps['sc_date']} → {ps['ps_date']}) 置信度{ps['confidence']:.0f}%\n"
+                price_str = f"价格{ps['ps_price']:.2f}" if 'ps_price' in ps else f"反弹{ps.get('rebound_pct', 0):.1f}%"
+                text += f"   [Phase A] PS (初步支撑): {ps.get('date', '?')} {price_str} 置信度{ps.get('confidence', 0):.0f}%\n"
             else:
                 text += "   [Phase A] PS (初步支撑): 未检测到\n"
         else:
@@ -57,6 +58,14 @@ class EvidenceSection(BaseSectionBuilder):
                 text += f"   [Phase A] PS (初步支撑): 检测到但时序不符，不计入证据\n"
             else:
                 text += "   [Phase A] PS (初步支撑): 未检测到\n"
+
+        # PSY
+        psy = evidence.get('psy', {})
+        psy_detected = psy.get('detected') and any(k in psy for k in ['price', 'confidence'])
+        if psy_detected:
+            text += f"   [Phase A] PSY (初步供应): {psy.get('date', '?')} 价格{psy.get('price', 0):.2f} 置信度{psy.get('confidence', 0):.0f}%\n"
+        elif 'psy' in evidence:
+            text += "   [Phase A] PSY (初步供应): 未检测到\n"
 
         # AR
         ar = evidence.get('ar', {})

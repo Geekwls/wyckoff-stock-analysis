@@ -84,15 +84,18 @@ class PhaseCoordinator:
         st_res = self.detector.detect_secondary_test(climax_res, ar_res)
 
         ps_res = self.detector.detect_preliminary_support()
+        psy_res = self.detector.detect_preliminary_supply()
 
         spring_res = self.detector.detect_spring()
         upthrust_res = self.detector.detect_upthrust()
 
         boring_zone_res = self.detector.detect_boring_zone()
+        choch_res = self.detector.detect_choch()
 
         # P1 修复：存储完整Phase A事件(PS→SC/BC→AR→ST)到detector
         phase_a_events = {
             'ps': ps_res,
+            'psy': psy_res,
             'climax': climax_res,
             'ar': ar_res,
             'st': st_res
@@ -104,7 +107,7 @@ class PhaseCoordinator:
 
         # 2. 初步阶段识别
         preliminary_phase = self._preliminary_phase_identification(
-            climax_res, ar_res, st_res, spring_res, upthrust_res, ps_res
+            climax_res, ar_res, st_res, spring_res, upthrust_res, ps_res, psy_res, choch_res
         )
 
         #  P0-2修复步骤2：初步阶段识别后立即屏蔽矛盾信号（从源头杜绝信号污染）
@@ -140,6 +143,7 @@ class PhaseCoordinator:
         # 5. 运行事件序列验证（在原始dict上，模型封装前）
         raw_events = {
             "preliminary_support": ps_res,
+            "preliminary_supply": psy_res,
             "climax": climax_res,
             "automatic_reaction": ar_res,
             "secondary_test": st_res,
@@ -152,6 +156,7 @@ class PhaseCoordinator:
             "joc": joc_res,
             "fti": fti_res,
             "utad": utad_res,
+            "choch": choch_res,
         }
         sequence_validation = SequenceValidator(raw_events, self.detector.data).validate_all()
 
@@ -274,6 +279,19 @@ class PhaseCoordinator:
             if sc_low and ar_high and ar_high > sc_low:
                 tr_detector.update_from_phase_events(ar_high, sc_low, "SC-AR")
 
+    def _detect_prior_trend(self) -> str:
+        """识别前序趋势 (Markup / Markdown)"""
+        df = self.detector.data
+        if len(df) < 60: return 'neutral'
+        
+        # 使用 50/200 均线及价格斜率判断
+        ma50 = df['Close'].rolling(50).mean().iloc[-1]
+        ma200 = df['Close'].rolling(200).mean().iloc[-1] if len(df) >= 200 else df['Close'].rolling(100).mean().iloc[-1]
+        
+        if ma50 > ma200 * 1.05: return 'markup'
+        if ma50 < ma200 * 0.95: return 'markdown'
+        return 'neutral'
+
     def _preliminary_phase_identification(
         self,
         climax_res: Dict,
@@ -282,6 +300,8 @@ class PhaseCoordinator:
         spring_res: Dict,
         upthrust_res: Dict,
         ps_res: Optional[Dict] = None,
+        psy_res: Optional[Dict] = None,
+        choch_res: Optional[Dict] = None
     ) -> str:
         """
         初步阶段识别：基于已收集的事件进行初步判断
@@ -290,18 +310,28 @@ class PhaseCoordinator:
         Phase A 完整链条: PS → SC/BC → AR → ST
         """
         is_ps = ps_res.get('detected') if ps_res else False
+        is_psy = psy_res.get('detected') if psy_res else False
         is_sc = climax_res.get('detected') and climax_res.get('type') == 'selling_climax'
         is_bc = climax_res.get('detected') and climax_res.get('type') == 'buying_climax'
         is_ar = ar_res.get('detected')
         is_st = st_res.get('detected')
-
-        # \u2705 \u7f3a\u965712\u4fee\u590d\uff1aPhase A\u5fc5\u987b\u8981SC+AR\u6700\u4f4e\u8981\u6c42\uff0c\u5355\u72ecSC\u4ec5\u662f\u201c\u505c\u6b62\u884c\u4e3a\u201d\u800c\u975e\u5b8c\u6574Phase A
-        # Weis\u539f\u8457\u8981\u6c42\uff1aPhase A\u5b8c\u6574\u94fe\u6761 = PS\u2192SC\u2192AR\u2192ST\u81f3\u5c11\u9700\u8981\u524d\u4e09\u8005\n
-        # \u6d3e\u53d1\u521d\u6b65\u8ff9\u8c61\uff1aBC + AR + ST\uff08\u81f3\u5c11BC+AR\uff09\u624d\u80fd\u786e\u8ba4Phase A\u7ed3\u6784
+        
+        # P1: 再吸筹识别 (Re-accumulation Mode)
+        prior_trend = self._detect_prior_trend()
+        if prior_trend == 'markup':
+            # 在上涨趋势中，即使没有明显的 SC，只要有回踩后的 AR 和 ST
+            if not is_sc and is_ar and is_st:
+                return 'Accumulation Phase A (Re-accumulation)'
+        
+        # 派发初步迹象：BC + AR + ST（至少BC+AR）
         if is_bc and is_ar and is_st:
             return 'Distribution Phase A'  # 置信度高：完整结构 BC+AR+ST
         if is_bc and is_ar:
             return 'Distribution Phase A'  # 置信度中：BC+AR，ST 待确认
+        
+        # 孟洪涛原则：PSY + BC 也是强有力的派发信号
+        if is_psy and is_bc:
+            return 'Distribution Phase A'  # 置信度中：PSY+BC，预警派发
 
         # 吸筹初步迹象：SC + AR（至少两者）才确认 Phase A 结构启动
         if is_sc and is_ar and is_st:
@@ -334,6 +364,16 @@ class PhaseCoordinator:
         # Upthrust 也跳转到 Phase C，但置信度略低于 Spring
         if upthrust_res.get('detected'):
             return 'Distribution Phase C'  # 置信度: 0.85
+
+        # 孟洪涛：CHoCH 是阶段转换的终极确认 (P0)
+        if choch_res and choch_res.get('detected'):
+            direction = choch_res.get('direction')
+            if direction == 'up':
+                # 下跌中出现的第一个强力反弹波段 -> 进入吸筹 Phase A
+                return 'Accumulation Phase A (CHoCH 确认特征变异)'
+            else:
+                # 上涨中出现的第一个强力下跌波段 -> 进入派发 Phase A
+                return 'Distribution Phase A (CHoCH 确认特征变异)'
 
         # 默认未知
         return 'Unknown'
@@ -374,7 +414,7 @@ class PhaseCoordinator:
 
     def transition_phase_with_criteria(self, current_phase: str, events: Dict) -> Tuple[str, float]:
         """
-        🔧 v1.1新增：使用量化标准进行Phase转换
+        新增：使用量化标准进行Phase转换
 
         理论依据：孟洪涛《新威科夫操盘法》
         - Phase A→B：需要完整结构（SC/AR/ST）+ 20天震荡

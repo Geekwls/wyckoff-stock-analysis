@@ -243,15 +243,20 @@ class CauseEffectMixin:
                 projected_direction = "DOWNSIDE"
                 effect_probability = self._calculate_breakout_probability(phase, "down")
 
+        # 动态评估达成概率
+        prob_res = self._calculate_breakout_probability_enhanced(phase, projected_direction.lower())
+        
         cause_effect_interpretation = {
             "method": "volatility_contraction",
             "current_situation": f"当前处于{phase}，波动率收缩{volatility_contraction*100:.1f}%",
             "effort_assessment": f"积累/派发努力质量为{accumulation_effort['effort_quality']}",
             "projected_direction": projected_direction,
-            "breakout_probability": effect_probability,
+            "breakout_probability": prob_res['label'],
+            "probability_value": prob_res['probability'],
+            "probability_note": prob_res['note'],
             "target_projections": targets,
             "wyckoff_logic": f"基于波动率收缩{volatility_contraction*100:.1f}%和{range_duration}天积累，预计{cause:.2f}点的积累/派发努力",
-            "theory": "改进估算：基于波动率收缩和时间积累"
+            "theory": "因果定律进阶：基于突破质量的动态概率预测"
         }
         return self._build_final_cause_effect_return(basic_cause_effect, accumulation_effort, cause_effect_interpretation, tr_story)
 
@@ -319,12 +324,52 @@ class CauseEffectMixin:
             }
         }
 
+    def _calculate_breakout_probability_enhanced(self, phase: str, direction: str) -> dict:
+        """
+        P2 优化：基于突破质量动态评估因果目标达成概率
+        """
+        # 1. 基础概率 (基于威科夫阶段常态)
+        base_prob = 0.6
+        if ("Accumulation" in phase or "吸筹" in phase) and direction in ("up", "upside"):
+            base_prob = 0.75
+        elif ("Distribution" in phase or "派发" in phase) and direction in ("down", "downside"):
+            base_prob = 0.75
+            
+        # 2. 突破质量加权 (JOC/FTI 质量)
+        quality_score = 0
+        joc = self.pattern_detector.detect_joc_menhongtao() if self.pattern_detector else {}
+        
+        if joc.get('detected'):
+            vol_ratio = joc.get('breakout_volume_ratio', 1.0)
+            close_pos = joc.get('close_position', 0.5)
+            
+            # 【待升级】Weis Wave 波段评估：目前先使用单根 K 线作为降级方案
+            # TODO: 待 Weis Wave 模块稳定后，此处应改为波段累加量评估
+            if vol_ratio > 1.5 and close_pos > 0.8:
+                quality_score = 0.15
+            elif vol_ratio < 1.2 or close_pos < 0.6:
+                quality_score = -0.2
+                
+        final_prob = base_prob + quality_score
+        
+        if final_prob >= 0.85:
+            label = "高 (85-95%)"
+        elif final_prob >= 0.7:
+            label = "较高 (70-85%)"
+        elif final_prob >= 0.5:
+            label = "中 (50-70%)"
+        else:
+            label = "低 (<50%)"
+            
+        return {
+            "probability": round(final_prob, 2),
+            "label": label,
+            "note": "基于突破波段质量(降级至单K线)动态评估" if quality_score != 0 else "基于阶段常态评估"
+        }
+
     def _calculate_breakout_probability(self, phase: str, direction: str) -> str:
-        if "Accumulation" in phase and direction == "up":
-            return "HIGH (75-85%)"
-        elif "Distribution" in phase and direction == "down":
-            return "HIGH (75-85%)"
-        return "MEDIUM (50-65%)"
+        res = self._calculate_breakout_probability_enhanced(phase, direction)
+        return res['label']
 
     def _basic_cause_effect_analysis(self, phase: str = '', known_tr_high: float = None, known_tr_low: float = None) -> dict:
         try:

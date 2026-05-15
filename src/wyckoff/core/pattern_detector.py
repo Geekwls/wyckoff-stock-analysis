@@ -7,6 +7,8 @@ from .detectors.phase_identifier import PhaseIdentifier
 from .detectors.channel_detector import ChannelDetector
 from .meng_pattern_enhancer import MengPatternEnhancer
 from .phase_coordinator import PhaseCoordinator
+from .detectors.ps_detector import PsDetector
+from .detectors.psy_detector import PsyDetector
 from .adaptive.bayesian_updater import BayesianThresholdModel
 from ..config.settings import WyckoffConfig, WyckoffThresholds
 from ..schemas import (
@@ -40,6 +42,8 @@ class WyckoffPatternDetector:
         self.sw_detector = StrengthWeaknessDetector(data, config, self.thresholds, indicator_cache=self._indicator_cache)
         self.phase_identifier = PhaseIdentifier(data, config, self.thresholds, indicator_cache=self._indicator_cache)
         self.channel_detector = ChannelDetector(data, use_log_price=False, indicator_cache=self._indicator_cache)
+        self.ps_detector = PsDetector(data, config, self.thresholds, indicator_cache=self._indicator_cache)
+        self.psy_detector = PsyDetector(data, config, self.thresholds, indicator_cache=self._indicator_cache)
 
         # 初始化孟洪涛增强检测器
         self.meng_enhancer = MengPatternEnhancer(data, config, self.thresholds, indicator_cache=self._indicator_cache)
@@ -51,7 +55,8 @@ class WyckoffPatternDetector:
         self.all_detectors = [
             self.range_detector, self.classic_detector,
             self.sw_detector, self.phase_identifier,
-            self.meng_enhancer, self.channel_detector
+            self.meng_enhancer, self.channel_detector,
+            self.ps_detector, self.psy_detector
         ]
 
         # 计算ATR百分比用于动态阈值
@@ -380,6 +385,22 @@ class WyckoffPatternDetector:
         """检测死角突破 (Dead Corner Breakout)"""
         return self.meng_enhancer.detect_dead_corner_breakout()
 
+    def detect_rvs(self, market_df: Optional[pd.DataFrame] = None, industry_dfs: Optional[Dict] = None) -> Dict:
+        """检测成交量相对强度 (RVS)"""
+        return self.meng_enhancer.detect_rvs(market_df, industry_dfs)
+
+    def detect_choch(self) -> Dict:
+        """检测特征变异 (CHoCH)"""
+        return self.meng_enhancer.reversal.detect_choch()
+
+    def detect_preliminary_support(self, lookback: int = 90) -> Dict:
+        """检测初次支撑 (Preliminary Support, PS)"""
+        return self.meng_enhancer.detect_preliminary_support(lookback)
+
+    def detect_preliminary_supply(self, lookback: int = 90) -> Dict:
+        """检测初次供应 (Preliminary Supply, PSY)"""
+        return self.meng_enhancer.detect_preliminary_supply(lookback)
+
     # ============================================================
     # 孟洪涛核心证据检测（Core Evidence Detection）
     # ============================================================
@@ -445,7 +466,9 @@ class WyckoffPatternDetector:
 
             confidence = base_confidence * penalty
 
-            return {
+            confidence = base_confidence * penalty
+
+            result = {
                 "detected": is_climax,
                 "date": sc_idx, # 保持 Timestamp 类型以供其他检测器使用
                 "price": float(sc_row['Low']),
@@ -454,6 +477,9 @@ class WyckoffPatternDetector:
                 "volume_ratio": float(vol_ratio),
                 "confidence": float(confidence)
             }
+            # P1 修复：增加 AR 确认逻辑
+            self.classic_detector.reversal._verify_climax_confirmation(result)
+            return result
         except (KeyError, ValueError, TypeError) as e:
             logger.exception(f"SC检测失败: {e}")
             return {"detected": False, "error": str(e)}
@@ -522,7 +548,9 @@ class WyckoffPatternDetector:
 
             confidence = base_confidence * penalty
 
-            return {
+            confidence = base_confidence * penalty
+
+            result = {
                 "detected": is_climax,
                 "date": bc_idx,
                 "price": float(bc_row['High']),
@@ -531,6 +559,9 @@ class WyckoffPatternDetector:
                 "volume_ratio": float(vol_ratio),
                 "confidence": float(confidence)
             }
+            # P1 修复：增加回落确认逻辑
+            self.classic_detector.reversal._verify_climax_confirmation(result)
+            return result
         except (KeyError, ValueError, TypeError) as e:
             logger.exception(f"BC检测失败: {e}")
             return {"detected": False, "error": str(e)}
@@ -661,72 +692,14 @@ class WyckoffPatternDetector:
     def detect_preliminary_support(self, lookback_days: int = 90) -> Dict:
         """
         检测初次支撑（Preliminary Support, PS）
-        
-        威科夫理论定义：
-        - PS 是主跌段中的第一次抄底尝试，发生在 SC（恐慌抛售）之前
-        - 特征：成交量放大 + 价格止跌/反弹 + 下影线抵抗
-        时序关系：PS → SC → AR → ST
         """
-        try:
-            data = self.data.tail(lookback_days)
-            if len(data) < 20:
-                return {"detected": False, "reason": "Insufficient data"}
-            
-            downtrend_start = self._find_downtrend_start(data)
-            if downtrend_start is None:
-                return {"detected": False, "reason": "No downtrend found"}
-            if downtrend_start >= len(data) - 5:
-                return {"detected": False, "reason": "Downtrend too short"}
-            
-            ps_vol_threshold = self._get_dynamic_volume_threshold(1.2)
-            ps_vol_strong_threshold = self._get_dynamic_volume_threshold(1.5)
-            
-            potential_ps = []
-            downtrend_data = data.iloc[downtrend_start:]
-            
-            for i in range(2, len(downtrend_data) - 1):
-                current = downtrend_data.iloc[i]
-                prev = downtrend_data.iloc[i-1]
-                next_day = downtrend_data.iloc[i+1] if i + 1 < len(downtrend_data) else None
-                vol_ma = current.get('Volume_MA20', data['Volume'].iloc[:downtrend_start + i].tail(20).mean())
-                
-                candidate = self._evaluate_ps_candidate(
-                    current, prev, next_day, vol_ma,
-                    ps_vol_threshold, ps_vol_strong_threshold
-                )
-                if candidate:
-                    candidate.update({
-                        'idx': downtrend_start + i,
-                        'date': data.index[downtrend_start + i],
-                        'price': float(current['Close']),
-                        'low': float(current['Low']),
-                    })
-                    potential_ps.append(candidate)
-            
-            if not potential_ps:
-                return {"detected": False, "reason": "No PS pattern found in downtrend"}
+        return self.ps_detector.detect(lookback_days)
 
-            best_ps = max(potential_ps, key=lambda x: x['confidence'])
-            sc_found, sc_price = self._verify_ps_with_sc(data, best_ps)
-
-            return {
-                "detected": True,
-                "ps_date": best_ps['date'].strftime("%Y-%m-%d") if hasattr(best_ps['date'], 'strftime') else str(best_ps['date']),
-                "ps_price": best_ps['price'],
-                "ps_low": best_ps['low'],
-                "vol_ratio": best_ps['vol_ratio'],
-                "lower_shadow_ratio": best_ps['lower_shadow_ratio'],
-                "confidence": best_ps['confidence'],
-                "sc_confirmed_after": sc_found,
-                "sc_price": sc_price,
-                "theory": "PS是主跌段中的第一次抄底尝试，发生在SC之前"
-            }
-        except (KeyError, ValueError, TypeError) as e:
-            logger.exception(f"PS检测失败: {e}")
-            return {"detected": False, "error": str(e)}
-        except Exception as e:
-            logger.exception(f"PS检测失败: 未知异常: {e}")
-            raise PatternDetectionError("PS", f"未知异常: {e}") from e
+    def detect_preliminary_supply(self, lookback_days: int = 90) -> Dict:
+        """
+        检测初次供应（Preliminary Supply, PSY）
+        """
+        return self.psy_detector.detect(lookback_days)
 
     def _validate_ps_sc_sequence(self, ps_res: Dict, sc_res: Dict) -> Tuple[bool, str]:
         """
@@ -781,112 +754,112 @@ class WyckoffPatternDetector:
 
         return True, "PS与SC时序一致"
 
+    def _validate_psy_bc_sequence(self, psy_res: Dict, bc_res: Dict) -> Tuple[bool, str]:
+        """
+        验证 PSY (初次供应) 和 BC (买入高潮) 的时序逻辑
+        """
+        if not psy_res.get('detected') or not bc_res.get('detected'):
+            return False, "缺少PSY或BC证据"
+
+        psy_date = self._parse_date(psy_res.get('date'))
+        bc_date = self._parse_date(bc_res.get('date'))
+
+        if psy_date is None or bc_date is None:
+            return False, "日期解析失败"
+
+        if psy_date > bc_date:
+            return False, "时序错误：PSY出现在BC之后"
+
+        time_diff = (bc_date - psy_date).days
+        if time_diff > 60:
+            return False, f"PSY到BC时间差({time_diff}天)过长"
+
+        return True, "PSY与BC时序一致"
+
     def _parse_date(self, date_val):
         """统一日期解析 — 委托至共享 TypeConverter"""
         return TypeConverter.parse_date_naive(date_val)
 
     def analyze_phase_a_evidence(self) -> Dict:
         """
-        综合分析 Phase A 的核心证据 (PS -> SC -> AR -> ST)
+        综合分析 Phase A 的核心证据 (吸筹或派发)
         """
         try:
-            sc_res = self.detect_climax_panic_selling()
-            ps_res = self.detect_preliminary_support()
-            ar_res = self.detect_automatic_rally()
-            st_res = self.detect_secondary_test(sc_res, ar_res)
-            sot_res = self.detect_stopping_of_transient()
-            spring_res = self.detect_spring_menhongtao()
+            acc_res = self._analyze_accumulation_phase_a()
+            dist_res = self._analyze_distribution_phase_a()
 
-            #  新增：PS/SC时序验证
-            ps_sc_valid, ps_sc_reason = self._validate_ps_sc_sequence(ps_res, sc_res)
-
-            # 检测+必要字段双重验证，确保与报告层显示一致
-            def _check_detected(res: dict, required_fields: list) -> bool:
-                return bool(res.get("detected")) and all(k in res for k in required_fields)
-
-            #  修复：PS 和 SC 独立检测，时序验证作为质量修正而非开关
-            # 威科夫理论：PS 和 SC 是独立事件，时序异常时各自仍可能有效
-            checks = []
-
-            ps_detected = _check_detected(ps_res, ['ps_price'])
-            sc_detected = _check_detected(sc_res, ['date', 'price', 'volume_ratio'])
-
-            # PS：独立检测，时序验证影响权重而非否决
-            checks.append({
-                'id': 'PS',
-                'detected': ps_detected,
-                'weight': 2 if ps_sc_valid else 1,  # 时序有效则权重加倍
-                'note': 'PS与SC时序一致' if ps_sc_valid and ps_detected else
-                        ('PS已检测到（时序异常）' if ps_detected else ps_sc_reason)
-            })
-
-            # SC：独立检测，时序验证影响权重而非否决
-            checks.append({
-                'id': 'SC',
-                'detected': sc_detected,
-                'weight': 3 if ps_sc_valid else 2,  # 时序有效则权重更高
-                'note': 'SC与PS时序一致' if ps_sc_valid and sc_detected else
-                        ('SC已检测到（时序异常）' if sc_detected else ps_sc_reason)
-            })
-
-            # AR和ST：独立验证
-            checks.append({
-                'id': 'AR',
-                'detected': _check_detected(ar_res, ['date', 'price']),
-                'weight': 2
-            })
-
-            checks.append({
-                'id': 'ST',
-                'detected': _check_detected(st_res, ['date', 'price', 'volume_ratio']),
-                'weight': 1
-            })
-
-            evidence_count = sum(1 for c in checks if c['detected'])
-            detected_weight = sum(c['weight'] for c in checks if c['detected'])
-
-            #  修复：基于有效证据重新计算强度
-            if detected_weight >= 4 and ps_sc_valid:
-                strength = "strong"
-                phase_a_confirmed = True
-            elif detected_weight >= 2:
-                strength = "weak"
-                phase_a_confirmed = True
+            # 返回证据权重更高的一个
+            if dist_res['detected_weight'] > acc_res['detected_weight']:
+                dist_res['direction'] = 'distribution'
+                return dist_res
             else:
-                strength = "none"
-                phase_a_confirmed = False
-
-            return {
-                "phase_a_confirmed": phase_a_confirmed,
-                "strength": strength,
-                "is_valid_sequence": ps_sc_valid,  # 使用PS/SC时序验证
-                "evidence_count": evidence_count,
-                "total_checks": 4,
-                "evidence": {
-                    "sc": sc_res,
-                    "ps": ps_res,
-                    "ar": ar_res,
-                    "st": st_res,
-                    "sot": sot_res,
-                    "spring": spring_res
-                },
-                #  新增：时序验证信息
-                "sequence_validation": {
-                    "ps_sc_valid": ps_sc_valid,
-                    "ps_sc_reason": ps_sc_reason,
-                    "ps_date": ps_res.get('ps_date') if ps_res else None,
-                    "sc_date": sc_res.get('date') if sc_res else None,
-                    "ps_price": ps_res.get('ps_price') if ps_res else None,
-                    "sc_price": sc_res.get('price') if sc_res else None,
-                    "notes": [c.get('note', '') for c in checks if not c['detected']]
-                }
-            }
-        except (KeyError, ValueError, TypeError) as e:
+                acc_res['direction'] = 'accumulation'
+                return acc_res
+        except Exception as e:
             logger.exception(f"Phase A证据分析失败: {e}")
             return {"phase_a_confirmed": False, "strength": "none", "error": str(e)}
-        except Exception as e:
-            logger.exception(f"Phase A证据分析失败: 未知异常: {e}")
-            raise AnalysisError(f"Phase A证据分析失败: {e}") from e
+
+    def _analyze_accumulation_phase_a(self) -> Dict:
+        """分析吸筹阶段 A 的证据 (PS -> SC -> AR -> ST)"""
+        sc_res = self.detect_climax_panic_selling()
+        ps_res = self.detect_preliminary_support()
+        ar_res = self.detect_automatic_rally()
+        st_res = self.detect_secondary_test(sc_res, ar_res)
+        
+        ps_sc_valid, ps_sc_reason = self._validate_ps_sc_sequence(ps_res, sc_res)
+        
+        def _check_detected(res: dict, required_fields: list) -> bool:
+            return bool(res.get("detected")) and all(k in res for k in required_fields)
+
+        checks = []
+        ps_detected = _check_detected(ps_res, ['ps_price'])
+        sc_detected = _check_detected(sc_res, ['date', 'price'])
+        
+        checks.append({'id': 'PS', 'detected': ps_detected, 'weight': 2 if ps_sc_valid else 1})
+        checks.append({'id': 'SC', 'detected': sc_detected, 'weight': 3 if ps_sc_valid else 2})
+        checks.append({'id': 'AR', 'detected': _check_detected(ar_res, ['date', 'price']), 'weight': 2})
+        checks.append({'id': 'ST', 'detected': _check_detected(st_res, ['date', 'price']), 'weight': 1})
+        
+        detected_weight = sum(c['weight'] for c in checks if c['detected'])
+        strength = "strong" if detected_weight >= 4 else ("weak" if detected_weight >= 2 else "none")
+        
+        return {
+            "phase_a_confirmed": strength != "none",
+            "strength": strength,
+            "detected_weight": detected_weight,
+            "evidence": {"ps": ps_res, "sc": sc_res, "ar": ar_res, "st": st_res}
+        }
+
+    def _analyze_distribution_phase_a(self) -> Dict:
+        """分析派发阶段 A 的证据 (PSY -> BC -> AR -> ST)"""
+        bc_res = self.detect_climax_buying()
+        psy_res = self.detect_preliminary_supply()
+        ar_res = self.detect_automatic_reaction(bc_res)
+        st_res = self.detect_secondary_test(bc_res, ar_res)
+        
+        psy_bc_valid, psy_bc_reason = self._validate_psy_bc_sequence(psy_res, bc_res)
+        
+        def _check_detected(res: dict, required_fields: list) -> bool:
+            return bool(res.get("detected")) and all(k in res for k in required_fields)
+
+        checks = []
+        psy_detected = _check_detected(psy_res, ['price'])
+        bc_detected = _check_detected(bc_res, ['date', 'price'])
+        
+        checks.append({'id': 'PSY', 'detected': psy_detected, 'weight': 2 if psy_bc_valid else 1})
+        checks.append({'id': 'BC', 'detected': bc_detected, 'weight': 3 if psy_bc_valid else 2})
+        checks.append({'id': 'AR', 'detected': _check_detected(ar_res, ['date', 'price']), 'weight': 2})
+        checks.append({'id': 'ST', 'detected': _check_detected(st_res, ['date', 'price']), 'weight': 1})
+        
+        detected_weight = sum(c['weight'] for c in checks if c['detected'])
+        strength = "strong" if detected_weight >= 4 else ("weak" if detected_weight >= 2 else "none")
+        
+        return {
+            "phase_a_confirmed": strength != "none",
+            "strength": strength,
+            "detected_weight": detected_weight,
+            "evidence": {"psy": psy_res, "bc": bc_res, "ar": ar_res, "st": st_res}
+        }
 
     def detect_stopping_of_transient(self, lookback_days: int = 20) -> Dict:
         """

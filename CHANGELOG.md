@@ -2,7 +2,38 @@
 
 本文档记录了Wyckoff Stock Analysis Skill的所有重要变更和功能更新。
 
-## [v2.2.0] - 2026-05-14
+## [v2.5.0] - 2026-05-15 (Today)
+
+### 🏆 专家级逻辑补全 (Expert Logic Completion)
+- **CHoCH (特征变异) 检测**: 引入基于波段推力对比的 CHoCH 逻辑，精准识别趋势终结与阶段转换的先行信号。
+- **Spring/Upthrust 1-3 号模型**: 细化反转信号分类。识别“终极震仓 (Type 1)”、“普通测试 (Type 2)”与“卖压/需求耗尽 (Type 3)”，提供差异化评分与交易含义。
+- **动态冰层 (Ice Area) 算法**: 优化 FTI 检测位，从单点分位数升级为基于多点低点拟合的动态区域，显著降低假突破误判。
+- **再吸筹 (Re-accumulation) 模式**: 新增前序趋势感知，识别上涨中继中的“停止行为”结构，填补了非典型 Phase A 的识别盲区。
+
+## [v2.4.0] - 2026-05-15
+
+### 📈 进阶量化优化 (Advanced Quantitative Optimization)
+- **Spring/Upthrust 速率量化**: 引入斜率分析对比收回速率与破位速率，增加收盘位置约束，有效区分“震仓”与“弱势反弹”。
+- **LPS/LPSY VCP 验证**: 新增 K 线实体序列检查，通过波动率收缩 (Volatility Contraction Pattern) 确认真正的“供应耗尽”。
+- **死角突破地量确认**: 增强 `Boring Zone` 检测，引入地量萎缩趋势判定（成交量 < 40% 均量），定义“爆发前夜”状态。
+- **因果目标动态概率**: P&F 计算出的目标价现在与突破质量 (JOC/FTI 强度) 联动，提供动态达成概率评估。
+
+## [v2.3.0] - 2026-05-15
+
+### 🛡️ 派发检测对称性增强 (Distribution Symmetry Enhancement)
+- **新增 `PsyDetector`**: 实现初次供应 (PSY) 检测逻辑，补全派发 Phase A 的第一个关键证据。
+- **派发 Phase A 预警**: `PhaseCoordinator` 现在支持 `PSY + BC` 组合触发派发 A 阶段判定，提供更早的风险提示。
+- **对称架构**: 提取 `PsDetector` 并重构 `analyze_phase_a_evidence`，实现吸筹与派发检测逻辑的完全对称。
+
+### 📊 信号分层与 VSA 深化
+- **SOS/SOW 信号分层**: `StrengthWeaknessDetector` 现在根据阶段上下文区分 `Major`（主要突破）与 `Minor`（区间内试探）信号。
+- **停止行为细化**: `VsaDetector` 能够更精确地识别并区分 `Stopping Volume`（普通停止行为）与 `Bag Holding`（极端接盘行为）。
+- **理论对齐**: 全面校对并更新 VSA 描述文字，使其更贴合《新威科夫操盘法》专业术语。
+
+### 🛠️ 系统优化
+- **模块化重构**: 将 PS/PSY 从 God Object 中拆分至独立检测器。
+- **阶段识别鲁棒性**: 优化了 `Distribution Phase A` 的触发门槛，确保在 BC 之后即使 AR 尚未充分展开也能识别风险。
+
 
 ### 🚀 原子化工具 (Atomic Tools — Token Efficiency)
 - **新增 MCP 工具 `detect_wyckoff_phase`**: 仅返回阶段+置信度+事件摘要，节省 90%+ Token。

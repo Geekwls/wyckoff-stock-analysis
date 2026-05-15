@@ -76,12 +76,12 @@ class RecommendationEngine:
             patience_reasons.append("信号质量中等，建议提高入场门槛")
 
         # 4. 检查市场环境是否适合交易
-        if market_env == MarketEnvironment.NEUTRAL:
+        if market_env == MarketEnvironment.RANGE_BOUND:
             if not has_high_quality:
                 patience_penalty -= 5
                 patience_reasons.append("震荡市场且无高质量信号，建议等待")
                 should_wait = True
-        elif market_env == MarketEnvironment.MIXED:
+        elif market_env == MarketEnvironment.UNKNOWN:
             patience_penalty -= 8
             patience_reasons.append("多空信号混杂，建议等待市场明确方向")
             should_wait = True
@@ -378,7 +378,7 @@ class RecommendationEngine:
         has_sos = 'sos' in detected_keys
         has_upthrust = 'upthrust' in detected_keys
         if has_sos and has_upthrust and not skip_conflict_penalty:
-            is_uncertain = market_env in (MarketEnvironment.NEUTRAL, MarketEnvironment.MIXED)
+            is_uncertain = market_env in (MarketEnvironment.RANGE_BOUND, MarketEnvironment.UNKNOWN)
             if is_uncertain:
                 base_score -= 15
                 reasons.append("模糊区间内SOS与Upthrust同时出现，信号冲突 (-15分)")

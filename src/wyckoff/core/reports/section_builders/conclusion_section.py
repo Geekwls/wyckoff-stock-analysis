@@ -696,15 +696,15 @@ class ConclusionSection(BaseSectionBuilder):
                 t2_up = current_price * 1.20   # +20%（正常）
                 t3_up = current_price * 1.35   # +35%（激进）
 
-            # 获取下跌目标（用于极端情景展示）
-            targets = cause_effect.get('targets', {})
-            t1_down = targets.get('target_1', 0)
-        else:
-            # 价格在区间内或向下突破 → 使用原始目标
-            targets = cause_effect.get('targets', {})
-            t1_down = targets.get('target_1', 0)
-            t2_down = targets.get('target_2', 0)
-            t3_down = targets.get('target_3', 0)
+        # 获取各个方向的目标
+        targets = cause_effect.get('targets', {})
+        t1_up = targets.get('target_1', 0) if breakout_dir == 'up' else 0
+        t2_up = targets.get('target_2', 0) if breakout_dir == 'up' else 0
+        t1_down = targets.get('target_1', 0) if breakout_dir == 'down' else 0
+        t2_down = targets.get('target_2', 0) if breakout_dir == 'down' else 0
+        
+        # 兼容性变量定义，防止后续崩溃
+        t1, t2 = 0, 0
 
         #  修改：根据当前价格位置和SOS-SOW分析，决定展示顺序
         report = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -764,12 +764,12 @@ class ConclusionSection(BaseSectionBuilder):
 
             if breakout_dir == 'up':
                 report += f"上涨目标（若突破{tr_high:.2f}）：\n"
-                report += f"  目标1（保守）：{t1:.2f}元\n"
-                report += f"  目标2（正常）：{t2:.2f}元\n"
+                report += f"  目标1（保守）：{t1_up:.2f}元\n"
+                report += f"  目标2（正常）：{t2_up:.2f}元\n"
             else:
                 report += f"下跌目标（若跌破{tr_low:.2f}）：\n"
-                report += f"  目标1：{t1:.2f}元\n"
-                report += f"  目标2：{t2:.2f}元\n"
+                report += f"  目标1：{t1_down:.2f}元\n"
+                report += f"  目标2：{t2_down:.2f}元\n"
 
         return report
 

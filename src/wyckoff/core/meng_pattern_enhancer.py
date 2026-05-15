@@ -23,6 +23,12 @@ class MengPatternEnhancer(BaseDetector):
         self.reversal = MengReversalDetector(data, config, thresholds, self._indicator_cache)
         self.trend = MengTrendDetector(data, config, thresholds, self._indicator_cache)
         self.vsa = MengVsaDetector(data, config, thresholds, self._indicator_cache)
+        
+        # 专家级探测器 (Preliminary Support/Supply)
+        from .detectors.ps_detector import PsDetector
+        from .detectors.psy_detector import PsyDetector
+        self.ps_detector = PsDetector(data, config, thresholds, self._indicator_cache)
+        self.psy_detector = PsyDetector(data, config, thresholds, self._indicator_cache)
 
     def detect_spring_enhanced(self) -> Dict:
         return self.reversal.detect_spring_enhanced()
@@ -41,3 +47,15 @@ class MengPatternEnhancer(BaseDetector):
 
     def detect_dead_corner_breakout_enhanced(self) -> Dict:
         return self.trend.detect_dead_corner_breakout_enhanced(self.vsa)
+
+    def detect_rvs(self, market_df=None, industry_dfs=None) -> Dict:
+        from .volume_context_analyzer import VolumeContextAnalyzer
+        return VolumeContextAnalyzer.calculate_rvs(self.data, market_df, industry_dfs)
+
+    def detect_preliminary_support(self, lookback: int = 90) -> Dict:
+        """检测初次支撑 (Preliminary Support, PS)"""
+        return self.ps_detector.detect(lookback)
+
+    def detect_preliminary_supply(self, lookback: int = 90) -> Dict:
+        """检测初次供应 (Preliminary Supply, PSY)"""
+        return self.psy_detector.detect(lookback)

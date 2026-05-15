@@ -45,13 +45,18 @@ class VsaDetector(BaseDetector):
         res = {'no_supply': {'detected': False}, 'no_demand': {'detected': False}, 'stopping_vol': {'detected': False}}
         if no_supply_mask.any():
             idx = no_supply_mask.index[no_supply_mask][-1]
-            res['no_supply'] = {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2), 'description': '无供应 - 缩量下跌，卖盘枯竭'}
+            res['no_supply'] = {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2), 'description': '无供应 (No Supply) - 缩量下跌且收盘位于高位，表明供应已枯竭'}
         if no_demand_mask.any():
             idx = no_demand_mask.index[no_demand_mask][-1]
-            res['no_demand'] = {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2), 'description': '无需求 - 缩量上涨，买盘不足'}
+            res['no_demand'] = {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2), 'description': '无需求 (No Demand) - 缩量上涨且收盘位于低位，表明买盘动力不足'}
         if stopping_mask.any():
             idx = stopping_mask.index[stopping_mask][-1]
-            res['stopping_vol'] = {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2), 'description': '停止量 - 放量窄幅，主力吸筹'}
+            # 检查是否同时符合 Bag Holding 条件
+            bag_res = self.detect_bag_holding()
+            if bag_res.get('detected') and bag_res.get('date') == idx:
+                res['stopping_vol'] = bag_res
+            else:
+                res['stopping_vol'] = {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2), 'description': '停止行为 (Stopping Volume) - 放量但价差缩小，表明需求开始吸收供应'}
         return res
 
     def detect_bag_holding(self) -> Dict:
@@ -67,11 +72,17 @@ class VsaDetector(BaseDetector):
         
         mask = (df['Volume'] > vol_ma * self.thresholds.VSA_BAG_HOLDING_VOL_RATIO) & \
                (body_ratio < self.thresholds.VSA_STOPPING_BODY_RATIO) & \
-               (df['Low'] == df['Low'].rolling(10).min())
+               (df['Low'] <= df['Low'].rolling(10).min() * 1.01) # 在近期低点附近
                
         if mask.any():
             idx = mask.index[mask][-1]
-            return {'detected': True, 'date': idx, 'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2), 'description': 'Bag Holding - 极端放量且窄幅，庄家大量接盘'}
+            return {
+                'detected': True, 
+                'type': 'bag_holding',
+                'date': idx, 
+                'vol_ratio': round(df.loc[idx, 'Volume'] / vol_ma.loc[idx], 2), 
+                'description': '接盘 (Bag Holding) - 极端放量且窄幅，发生在关键低位，表明大资金全力进场接盘，是强烈的停止行为'
+            }
         return {'detected': False}
 
     def detect_shakeout(self, spring_detector=None) -> Dict:

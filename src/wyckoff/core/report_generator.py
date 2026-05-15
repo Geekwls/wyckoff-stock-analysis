@@ -52,6 +52,9 @@ class WyckoffReportGenerator:
         sow = self.pattern_detector.detect_sow(trading_range=trading_range)
         lps = self.pattern_detector.detect_lps()
         lpsy = self.pattern_detector.detect_lpsy()
+        ps = self.pattern_detector.detect_preliminary_support()
+        psy = self.pattern_detector.detect_preliminary_supply()
+
 
         #  新增：SOS-SOW矛盾分析
         sos_sow_analysis = None
@@ -68,6 +71,11 @@ class WyckoffReportGenerator:
         vsa = self.pattern_detector.detect_vsa_menhongtao()
         boring_res = self.pattern_detector.detect_boring_zone()
         dead_corner = self.pattern_detector.detect_dead_corner_breakout()
+        
+        # 集成 RVS 分析 (P2 #5)
+        market_idx_analyzer = getattr(self.analyzer, '_get_cached_index_analyzer', lambda: None)()
+        market_df = market_idx_analyzer.data if market_idx_analyzer else None
+        vsa['rvs'] = self.pattern_detector.detect_rvs(market_df=market_df)
         
         # 外部分析
         cause_effect = getattr(self.analyzer, 'calculate_cause_effect', lambda: {})()
@@ -121,7 +129,7 @@ class WyckoffReportGenerator:
         # 组装报告
         report = self.header_builder.build(phase_result, trading_range)
         report += self.evidence_builder.build(phase_result)
-        report += self.pattern_builder.build(trading_range, spring, upthrust, sos, sow, lps, lpsy, phase_result.get('phase'))
+        report += self.pattern_builder.build(trading_range, spring, upthrust, sos, sow, lps, lpsy, phase_result.get('phase'), ps=ps, psy=psy)
         report += self.signal_builder.build(joc, fti, vsa, boring_res, dead_corner)
 
         report += self.conclusion_builder.build(
@@ -152,6 +160,9 @@ class WyckoffReportGenerator:
         sow = self.pattern_detector.detect_sow(trading_range=trading_range)
         lps = self.pattern_detector.detect_lps()
         lpsy = self.pattern_detector.detect_lpsy()
+        ps = self.pattern_detector.detect_preliminary_support()
+        psy = self.pattern_detector.detect_preliminary_supply()
+
 
         # 高级信号
         joc = self.pattern_detector.detect_joc_menhongtao()
@@ -202,9 +213,9 @@ class WyckoffReportGenerator:
                 'spring': spring,
                 'upthrust': upthrust,
                 'sos': sos,
-                'sow': sow,
-                'lps': lps,
                 'lpsy': lpsy,
+                'ps': ps,
+                'psy': psy,
                 'joc': joc,
                 'fti': fti,
             },

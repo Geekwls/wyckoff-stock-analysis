@@ -75,8 +75,9 @@ class SignalSection(BaseSectionBuilder):
    小溪阻力位: {joc_data['creek_level']:.2f}
    突破收盘: {joc_data['close_price']:.2f} (+{joc_data['breakout_pct']:.1f}%)
    成交量: {joc_data['volume_ratio']:.1f}x 均量{test_info}
+   回测质量: {joc_data.get('test_quality', 'N/A')} ({joc_data.get('test_score', 0):.0f}分)
    置信度: {confidence:.0f}%
-   趋势跟踪买入信号（等待缩量回测 JOC 位入场）
+   操作建议: {'🎯 质量极佳，可在回测确认后积极入场。' if joc_data.get('test_quality')=='HIGH' else '趋势跟踪买入信号（等待缩量回测 JOC 位入场）。'}
 """
 
         # 安全地获取FTI信息
@@ -127,5 +128,14 @@ class SignalSection(BaseSectionBuilder):
 波动收敛比: {boring_res.get('atr_contraction', 1.0)*100:.1f}%
 整理持续: {boring_res.get('duration', 0)} 天
 结论: {'🔥 检测到高价值枯燥区，系统已进入高能预警状态。' if boring_res.get('detected') else '暂未形成典型枯燥区。'}
+"""
+        # RVS Integration (P2 #5)
+        rvs = vsa.get('rvs', {})
+        if rvs and rvs.get('status') == 'ok':
+            report += f"""
+【成交量相对强度 (RVS)】
+强度等级: {rvs.get('label')}
+个股/指数比: {rvs.get('rvs_score')}
+核心解读: {rvs.get('meaning')}
 """
         return report

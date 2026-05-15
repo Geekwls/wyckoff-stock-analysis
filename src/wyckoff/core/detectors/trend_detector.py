@@ -171,7 +171,9 @@ class TrendDetector(BaseDetector):
         vol_ma = vol_ma.reindex(df.index)
         tr_window = min(60, len(df))
         tr_data = df.tail(tr_window)
-        ice_level = tr_data['Low'].quantile(self.thresholds.FTI_ICE_QUANTILE)
+        
+        # P1 优化：多点冰层检测 (Ice Area)
+        ice_level = self._calculate_dynamic_ice_level(tr_data)
 
         body_size = (df['Close'] - df['Open']).abs()
         total_range = (df['High'] - df['Low']).replace(0, float('nan'))
@@ -346,3 +348,29 @@ class TrendDetector(BaseDetector):
         except Exception as e:
             logger.warning(f"WeisWave verification for FTI failed: {e}")
             return True
+
+    def _calculate_dynamic_ice_level(self, tr_data: pd.DataFrame) -> float:
+        """
+        计算动态冰层水位
+        理论依据：孟洪涛强调冰层是由 AR 低点和多次测试低点连接而成的支撑区。
+        """
+        try:
+            from ..weis_wave import WeisWaveGenerator
+            generator = WeisWaveGenerator(tr_data)
+            waves = generator.generate()
+            
+            # 提取所有向下波段的低点
+            lows = [w.end_price for w in waves if w.direction == 'down']
+            if not lows:
+                return tr_data['Low'].quantile(self.thresholds.FTI_ICE_QUANTILE)
+            
+            # 过滤掉异常值，取最近 3-5 个低点的平均值作为冰层核心位
+            recent_lows = lows[-5:]
+            # 如果低点之间差异过大，说明尚未形成有效冰层，使用分位数降级
+            if np.std(recent_lows) / np.mean(recent_lows) > 0.05:
+                return tr_data['Low'].quantile(self.thresholds.FTI_ICE_QUANTILE)
+                
+            return float(np.mean(recent_lows))
+        except Exception as e:
+            logger.warning(f"Error calculating dynamic ice level: {e}")
+            return tr_data['Low'].quantile(self.thresholds.FTI_ICE_QUANTILE)

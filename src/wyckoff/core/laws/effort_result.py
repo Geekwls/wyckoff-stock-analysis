@@ -130,6 +130,9 @@ class EffortResultMixin:
                 "phase_context": current_phase,
             }
 
+        # 跨周期共振检查 (P1 #4)
+        self._add_weekly_resonance_to_evr(effort_result_analysis)
+
         interpretations = [tf['interpretation'] for tf in effort_result_analysis.values()]
         if all(interp == "CONFIRMATION" for interp in interpretations):
             overall_assessment = "STRONG_CONFIRMATION"
@@ -471,3 +474,47 @@ class EffortResultMixin:
         # 通过验证
         return True, 1.0, None
 
+    def _add_weekly_resonance_to_evr(self, daily_analysis: dict):
+        """
+        跨时间框架 (周线) EVR 共振检测 (P1 #4)
+        理论依据：David Weis 强调多周期一致性。
+        """
+        if self.data is None or len(self.data) < 40: # 至少需要几个月数据
+            return
+
+        try:
+            # 降采样获取周线数据
+            weekly_df = self.data.resample('W').agg({
+                'Open': 'first',
+                'High': 'max',
+                'Low': 'min',
+                'Close': 'last',
+                'Volume': 'sum'
+            }).dropna()
+            
+            if len(weekly_df) < 5:
+                return
+
+            # 对周线进行简单的 EVR 判定 (复用核心逻辑片段)
+            recent_w = weekly_df.tail(2) # 比较本周与上周
+            if len(recent_w) < 2: return
+            
+            w_curr, w_prev = recent_w.iloc[-1], recent_w.iloc[-2]
+            w_vol_ratio = w_curr['Volume'] / max(w_prev['Volume'], 1e-9)
+            w_spread = w_curr['High'] - w_curr['Low']
+            w_prev_spread = w_prev['High'] - w_prev['Low']
+            w_spread_ratio = w_spread / max(w_prev_spread, 1e-9)
+            
+            # 周线 EVR 定义: 巨量但窄幅 (典型的停止行为)
+            w_evr_detected = w_vol_ratio > 1.5 and w_spread_ratio < 0.8
+            
+            if w_evr_detected:
+                # 检查日线短期(short)是否也存在 EVR
+                short_tf = daily_analysis.get('short', {})
+                if 'EFFORT_WITHOUT_RESULT' in short_tf.get('interpretation', ''):
+                    # 触发共振
+                    short_tf['resonance_boost'] = True
+                    short_tf['meaning'] += " | 🌟 [跨周期共振] 周线同步触发 EVR，信号可靠性大幅提升 (Weight +50%)"
+                    
+        except Exception as e:
+            logger.warning(f"Weekly EVR resonance check failed: {e}")

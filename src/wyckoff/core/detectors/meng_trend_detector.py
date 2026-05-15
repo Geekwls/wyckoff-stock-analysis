@@ -60,12 +60,28 @@ class MengTrendDetector(BaseDetector):
                 hit_idx = np.where(hits)[0]
                 if len(hit_idx) > 0:
                     fh = hit_idx[0] + i + 1
-                    test_detected, test_date, test_vol_ratio = True, df.index[fh], float(volumes[fh] / vol_ma20) if vol_ma20 > 0 else 1.0
+                    test_detected = True
+                    test_date = df.index[fh]
+                    test_vol_ratio = float(volumes[fh] / vol_ma20) if vol_ma20 > 0 else 1.0
+                    
+                    # 细化回测质量评分 (P0 #2)
+                    prev_close = closes[fh-1] if fh > 0 else closes[fh]
+                    prev_open = opens[fh-1] if fh > 0 else opens[fh]
+                    prev_body_pct = abs(prev_close - prev_open) / prev_close * 100 if prev_close > 0 else 0
+                    
+                    t_score, t_quality = self._calculate_joc_test_quality(
+                        closes[fh], opens[fh], highs[fh], lows[fh], 
+                        volumes[fh], vol_ma20, creek_level, prev_body_pct
+                    )
+                    test_score = t_score
+                    test_quality = t_quality
             signals.append({
                 "date": df.index[i], "creek_level": float(creek_level), "close_price": float(closes[i]), "breakout_pct": round(float(price_changes[i]), 2),
                 "volume_ratio": round(float(volume_ratios[i]), 2), "close_position": round(float(close_positions[i]) * 100, 1),
                 "test_detected": test_detected, "test_date": test_date, "test_vol_ratio": round(test_vol_ratio, 2) if test_vol_ratio else None,
-                "confidence": self._calculate_joc_confidence(price_changes[i], volume_ratios[i], close_positions[i], test_detected)
+                "test_score": test_score if test_detected else 0,
+                "test_quality": test_quality if test_detected else None,
+                "confidence": self._calculate_joc_confidence(price_changes[i], volume_ratios[i], close_positions[i], test_detected, test_score if test_detected else 0)
             })
         if not signals: return {"detected": False, "reason": "no_valid_joc_found"}
         ls = signals[-1]
@@ -107,7 +123,7 @@ class MengTrendDetector(BaseDetector):
         ls["confidence"] = round(ls["confidence"], 2)
         return {"detected": True, "signals": signals, "latest": ls, "method": "meng_hongtao_joc", "description": "孟洪涛JOC检测"}
 
-    def _calculate_joc_confidence(self, breakout_pct, volume_ratio, close_position, has_test):
+    def _calculate_joc_confidence(self, breakout_pct, volume_ratio, close_position, has_test, test_score=0):
         score = 0
         if breakout_pct >= 5: score += 25
         elif breakout_pct >= 3: score += 20
@@ -117,8 +133,65 @@ class MengTrendDetector(BaseDetector):
         if close_position >= 0.9: score += 25
         elif close_position >= 0.8: score += 20
         elif close_position >= 0.75: score += 15
-        if has_test: score += 25
-        return score
+        
+        # 回测权重提升
+        if has_test:
+            score += 25
+            if test_score >= 80: score += 10 # 高质量回测额外加分
+            
+        return min(100, score)
+
+    def _calculate_joc_test_quality(self, close, open, high, low, vol, vol_ma20, creek_level, prev_body_pct=None):
+        """
+        计算 JOC 回测质量评分 (P0 #2)
+        评分维度：成交量(40)、价格行为(40)、位置(20)、下影线(奖励5)
+        """
+        score = 0
+        
+        # 1. 成交量评分 (40分)
+        vol_ratio = vol / vol_ma20 if vol_ma20 > 0 else 1.0
+        if vol_ratio < 0.6: score += 40
+        elif vol_ratio < 0.8: score += 30
+        elif vol_ratio < 1.0: score += 20
+        
+        # 2. 价格行为评分 (40分)
+        body = abs(close - open)
+        price = close
+        body_pct = (body / price) * 100
+        is_above_creek = close >= creek_level
+        
+        if body_pct < 1.5 and is_above_creek:
+            score += 30 # 基础分
+            # 实体趋势检测与容差处理 (P0 #2)
+            if prev_body_pct is not None:
+                # 如果 prev_body 极小 (十字星)，允许 1.2x 容差
+                is_shrinking = body_pct < prev_body_pct * 1.2 if prev_body_pct < 0.1 else body_pct < prev_body_pct
+                if is_shrinking: score += 10
+            else:
+                score += 5 # 无前日数据给中等分
+        elif body_pct < 3.0 and is_above_creek:
+            score += 20
+            
+        # 3. 位置评分 (20分)
+        # 最低价恰好触碰 Creek 或在 Creek 上方 2% 以内
+        dist_to_creek = (low - creek_level) / creek_level * 100
+        if 0 <= dist_to_creek <= 2.0:
+            score += 20
+        elif -2.0 <= dist_to_creek < 0: # 允许轻微跌破
+            score += 10
+            
+        # 4. 下影线奖励 (5分)
+        # 下影线 > 实体 * 2
+        shadow = close - low if close > open else open - low
+        if shadow > body * 2:
+            score += 5
+            
+        # 等级判定
+        if score >= 80: quality = "HIGH"
+        elif score >= 60: quality = "MEDIUM"
+        else: quality = "LOW"
+        
+        return score, quality
 
     def detect_dead_corner_breakout(self, vsa_detector=None) -> Dict:
         """检测死角突破"""
