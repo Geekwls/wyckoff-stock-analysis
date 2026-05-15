@@ -135,7 +135,7 @@ class WyckoffReportGenerator:
         report += self.conclusion_builder.build(
             phase_result, trading_range, cause_effect, conflict, quality_data,
             joc, spring, sos, lps, fti, upthrust, sow, lpsy, mtf,
-            boring_res, dead_corner, market_env, arbitration_result, breakout_analysis,
+            boring_res, dead_corner, market_env_res, arbitration_result, breakout_analysis,
             sos_sow_analysis  #  新增：传递SOS-SOW分析结果
         )
         

@@ -24,6 +24,7 @@ from .core.relative_strength_analyzer import RelativeStrengthAnalyzer
 from .core.report_generator import WyckoffReportGenerator
 from .core.point_and_figure import PointAndFigureCalculator, calculate_cause_effect_from_pnf
 from .core.sos_sow_analyzer import SOSSOWAnalyzer
+from .core.market_context_analyzer import MarketContextAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -337,81 +338,29 @@ class WyckoffAnalyzer:
 
     def _analyze_market_environment(self) -> Dict:
         """
-        分析市场环境
+        分析市场环境 (v2.6.0 专家级实现)
         
-        基于指数的均线排列判断大盘环境：
-        - BULLISH: MA20 > MA50 > MA200 (多头排列)
-        - BEARISH: MA20 < MA50 < MA200 (空头排列)
-        - NEUTRAL: 其他情况
+        基于指数的均线排列、成交量能量 (EVR) 判断大盘环境。
         """
         try:
             # 获取基准指数代码
             index_symbol = self._get_baseline_index_symbol()
             
-            # 获取指数分析器
+            # 获取指数数据
             idx_analyzer = self._get_cached_index_analyzer()
-            if not idx_analyzer or idx_analyzer.data is None or len(idx_analyzer.data) < 200:
-                # 数据不足，返回未知
+            if not idx_analyzer or idx_analyzer.data is None:
                 return {
                     "environment": MarketEnvironment.UNKNOWN,
-                    "reason": "指数数据不足200日",
+                    "reason": "无法获取大盘指数数据",
                     "index_symbol": index_symbol
                 }
             
-            data = idx_analyzer.data
-            
-            # 计算均线
-            close = data['Close']
-            ma20 = close.rolling(20).mean().iloc[-1]
-            ma50 = close.rolling(50).mean().iloc[-1]
-            ma200 = close.rolling(200).mean().iloc[-1]
-            current_price = close.iloc[-1]
-            
-            # 判断均线排列
-            # 多头排列：MA20 > MA50 > MA200 且价格在MA20之上
-            if ma20 > ma50 > ma200 and current_price > ma20:
-                environment = MarketEnvironment.STRONG_BULL
-                description = "多头排列：MA20>MA50>MA200，顺势做多"
-                trend_strength = "strong"
-            # 弱势多头：MA20 > MA50 但 MA50 < MA200
-            elif ma20 > ma50:
-                environment = MarketEnvironment.WEAK_BULL
-                description = "弱势多头：短期均线向上，中期均线承压"
-                trend_strength = "weak"
-            # 空头排列：MA20 < MA50 < MA200 且价格在MA20之下
-            elif ma20 < ma50 < ma200 and current_price < ma20:
-                environment = MarketEnvironment.STRONG_BEAR
-                description = "空头排列：MA20<MA50<MA200，顺势做空"
-                trend_strength = "strong"
-            # 弱势空头：MA20 < MA50 但 MA50 > MA200
-            elif ma20 < ma50:
-                environment = MarketEnvironment.BEAR
-                description = "弱势空头：短期均线向下，中期均线支撑"
-                trend_strength = "weak"
-            # 震荡/中性
-            else:
-                environment = MarketEnvironment.RANGE_BOUND
-                description = "震荡整理：均线交织，方向不明"
-                trend_strength = "neutral"
-            
-            # 计算价格相对MA200的位置（判断是否在牛熊分界线之上）
-            price_vs_ma200 = (current_price - ma200) / ma200 * 100
-            
-            return {
-                "environment": environment,
-                "description": description,
-                "trend_strength": trend_strength,
-                "index_symbol": index_symbol,
-                "current_price": round(float(current_price), 2),
-                "ma20": round(float(ma20), 2),
-                "ma50": round(float(ma50), 2),
-                "ma200": round(float(ma200), 2),
-                "price_vs_ma200_pct": round(float(price_vs_ma200), 2),
-                "ma_alignment": f"MA20={ma20:.2f}, MA50={ma50:.2f}, MA200={ma200:.2f}"
-            }
+            # 使用专家级分析器
+            context_analyzer = MarketContextAnalyzer(idx_analyzer.data, index_symbol)
+            return context_analyzer.analyze()
             
         except Exception as e:
-            logger.warning(f"市场环境分析失败: {e}")
+            logger.warning(f"专家级市场环境分析失败: {e}")
             return {
                 "environment": MarketEnvironment.UNKNOWN,
                 "reason": f"分析异常: {str(e)}",

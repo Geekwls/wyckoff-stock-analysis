@@ -10,7 +10,7 @@ class ConclusionSection(BaseSectionBuilder):
     def build(self, phase_result: dict, trading_range: dict, cause_effect: dict, conflict: dict,
               quality_data: dict, joc: dict, spring: dict, sos: dict, lps: dict, fti: dict,
               upthrust: dict, sow: dict, lpsy: dict, mtf: dict, boring_res: dict,
-              dead_corner: dict, market_env: str, arbitration_result: dict = None,
+              dead_corner: dict, market_env: dict, arbitration_result: dict = None,
               breakout_analysis: dict = None, sos_sow_analysis: dict = None) -> str:
 
         phase_str = phase_result.get('phase', 'Unknown')
@@ -59,6 +59,9 @@ class ConclusionSection(BaseSectionBuilder):
    日线: {conflict.get('daily_side')} | 周线: {conflict.get('weekly_trend')} | 月线: {conflict.get('monthly_trend')}
    仲裁动作: 延迟执行，等待跨周期一致后再开仓。
 """
+
+        # Market Context (P0 Optimization)
+        report += self._build_market_context_section(market_env)
 
         # Core Conclusion
         report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【核心结论】\n"
@@ -959,6 +962,50 @@ class ConclusionSection(BaseSectionBuilder):
         if confidence_adj < 1.0:
             report += f"⚠️ 置信度调整: ×{confidence_adj:.2f}（由于信号冲突）\n\n"
 
+        return report
+
+    def _build_market_context_section(self, market_env: dict) -> str:
+        """构建市场环境背景区块 (v2.6.0 P0)"""
+        if not market_env: return ""
+        
+        env_label = market_env.get('environment', 'Unknown')
+        desc = market_env.get('description', '未知环境')
+        index_symbol = market_env.get('index_symbol', '')
+        
+        # 获取量能信息
+        evr_info = market_env.get('volume_energy', {})
+        breadth_info = market_env.get('breadth', {})
+        pf_targets = market_env.get('pf_targets', {})
+        warning = market_env.get('warning')
+        vol_ratio = evr_info.get('vol_ratio', 1.0)
+        
+        report = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        report += "【🌍 市场环境背景】\n"
+        report += f"基准指数: {index_symbol}\n"
+        report += f"当前状态: **{env_label}**\n"
+        report += f"环境描述: {desc}\n"
+        
+        if evr_info:
+            report += f"量能状态: {evr_info.get('interpretation', 'NORMAL')} (波段量比: {vol_ratio:.2f}x)\n"
+
+        if breadth_info and breadth_info.get('status') != 'SKIPPED':
+            adr = breadth_info.get('adr', 1.0)
+            adv = breadth_info.get('advance_count', 0)
+            dec = breadth_info.get('decline_count', 0)
+            ratio = breadth_info.get('advance_ratio_pct', 0)
+            report += f"市场广度: ADR {adr:.2f} (上涨 {adv} | 下跌 {dec} | 占比 {ratio}%)\n"
+
+        if pf_targets and pf_targets.get('targets'):
+            targets = pf_targets['targets']
+            direction = "🚀 上涨目标" if pf_targets.get('breakout_direction') == 'up' else "📉 下跌目标"
+            t1 = targets.get('target_1', 0)
+            t2 = targets.get('target_2', 0)
+            report += f"指数因果预测: {direction} T1: {t1:.0f} | T2: {t2:.0f}\n"
+            
+        if warning:
+            report += f"\n⚠️ **大盘风险提示**: {warning}\n"
+            
+        report += "\n💡 威科夫提醒：优秀的交易者永远在大盘'顺风'时积极操作，在'逆风'时收紧仓位。\n"
         return report
 
     def _get_tr_value(self, trading_range, key: str, default=0):
