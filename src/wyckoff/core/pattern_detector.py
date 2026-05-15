@@ -210,7 +210,9 @@ class WyckoffPatternDetector:
         return self.classic_detector.detect_secondary_test(climax_res, ar_res)
 
     def detect_spring(self, lookback: int = None) -> Dict:
-        return self.classic_detector.detect_spring(lookback)
+        # ✅ 缺隗3修复：传递TR数据，让子检测器能用TR下沿作为Spring支撑位
+        tr = self.range_detector.detect()
+        return self.classic_detector.detect_spring(lookback, trading_range=tr)
 
     def detect_upthrust(self, lookback: int = None) -> Dict:
         return self.classic_detector.detect_upthrust(lookback)
@@ -240,7 +242,9 @@ class WyckoffPatternDetector:
                 'reason': 'suppressed_by_overbought_climax',
                 'channel_warning': ob_os['message']
             }
-        return self.classic_detector.detect_joc(lookback)
+        # ✅ 缺隗6修复：传递TR数据，让子检测器能用TR上沿作为Creek水位
+        tr = self.range_detector.detect()
+        return self.classic_detector.detect_joc(lookback, trading_range=tr)
 
     def detect_fti(self, lookback: int = 90) -> Dict:
         # 联动逻辑：如遇超卖刺穿+放量，则抑制普通 FTI，改报趋势耗尽

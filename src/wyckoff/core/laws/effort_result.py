@@ -33,9 +33,15 @@ class EffortResultMixin:
             if len(df) < days + 10:
                 continue
             recent_df = df.tail(days)
-            vol_end = recent_df['Volume'].iloc[-1]
-            vol_ma_ref = df['Volume_MA20'].iloc[-1]
-            volume_effort = vol_end / vol_ma_ref if vol_ma_ref > 0 else 1.0
+
+            # ✅ 缺隗8修复：Weis的“努力”是整个波段的累加量，不是末根K线量
+            # 改用窗口内总量 vs 历史同等长度窗口均量进行比较
+            recent_total_vol = recent_df['Volume'].sum()
+            hist_vol_data = df.tail(days * 4)
+            hist_rolling_sum = hist_vol_data['Volume'].rolling(days).sum().dropna()
+            hist_avg_vol = hist_rolling_sum.mean() if len(hist_rolling_sum) > 0 else recent_total_vol
+            volume_effort = recent_total_vol / hist_avg_vol if hist_avg_vol > 0 else 1.0
+
             price_start = recent_df['Close'].iloc[0]
             price_end = recent_df['Close'].iloc[-1]
             price_result_pct = ((price_end - price_start) / price_start) * 100
@@ -75,8 +81,22 @@ class EffortResultMixin:
                             meaning += self._phase_context_tail(current_phase, interpretation)
                 else:
                     if effort_magnitude > 0.8:
-                        interpretation = "EFFORT_WITHOUT_RESULT"
-                        meaning = f"大努力无结果，可能是拐点信号（相对强度{relative_strength:.1f}%）"
+                        # 修复：EFFORT_WITHOUT_RESULT区分高位和低位，赋予正确方向性
+                        tr_window = df.tail(60)
+                        range_high = tr_window['High'].max()
+                        range_low = tr_window['Low'].min()
+                        price_pos = (df['Close'].iloc[-1] - range_low) / max(range_high - range_low, 1e-9)
+                        if price_pos >= 0.7:
+                            # 高位放量横盘 = 需求被庞大派发供应吸收，为BC或分配前兆
+                            interpretation = "EFFORT_WITHOUT_RESULT_AT_HIGH"
+                            meaning = f"高位放量停滞：需求被大量派发供应吸收，BC/派发前兆（相对强度{relative_strength:.1f}%）"
+                        elif price_pos <= 0.3:
+                            # 低位放量横盘 = 供应被吸筎需求吸收，为SC或停止行为特征
+                            interpretation = "EFFORT_WITHOUT_RESULT_AT_LOW"
+                            meaning = f"低位放量停滞：供应被吸筎吸筎需求吸收，SC/停止行为确认（相对强度{relative_strength:.1f}%）"
+                        else:
+                            interpretation = "EFFORT_WITHOUT_RESULT"
+                            meaning = f"大努力无结果，可能是拐点信号（相对强度{relative_strength:.1f}%）"
                         meaning += self._phase_context_tail(current_phase, interpretation)
                     else:
                         interpretation = "WEAK_CONFIRMATION"

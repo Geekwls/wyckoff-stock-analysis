@@ -39,10 +39,12 @@ class ClassicPatternDetector(BaseDetector):
     def detect_climax(self) -> Dict: return self.reversal.detect_climax()
     def detect_automatic_reaction(self, climax_res: Dict) -> Dict: return self.reversal.detect_automatic_reaction(climax_res)
     def detect_secondary_test(self, climax_res: Dict, ar_res: Dict) -> Dict: return self.reversal.detect_secondary_test(climax_res, ar_res)
-    def detect_spring(self, lookback: int = None) -> Dict: return self.reversal.detect_spring(lookback)
+    def detect_spring(self, lookback: int = None, trading_range: dict = None) -> Dict:
+        return self.reversal.detect_spring(lookback, trading_range=trading_range)
     def detect_upthrust(self, lookback: int = None) -> Dict: return self.reversal.detect_upthrust(lookback)
     
-    def detect_joc(self, lookback: int = 90) -> Dict: return self.trend.detect_joc(lookback)
+    def detect_joc(self, lookback: int = 90, trading_range: dict = None) -> Dict:
+        return self.trend.detect_joc(lookback, trading_range=trading_range)
     def detect_fti(self, lookback: int = 90) -> Dict: return self.trend.detect_fti(lookback)
     
     def detect_vsa_signals(self, lookback: int = 20) -> Dict: return self.vsa.detect_vsa_signals(lookback)

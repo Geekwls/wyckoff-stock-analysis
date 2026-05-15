@@ -10,7 +10,7 @@ class WeisWave:
     end_idx: Any         # 结束时间的索引
     start_price: float   # 起始价格
     end_price: float     # 结束价格
-    thrust: float        # 绝对涨跌幅或点数 (abs(end_price - start_price))
+    thrust: float        # ✅ 缺陷2修复：百分比涨跌幅 abs(end-start)/start，跨价位可比
     volume: float        # 波段累加成交量
     duration: int        # 波段持续天数/K线数
 
@@ -58,6 +58,9 @@ class WeisWaveGenerator:
         extreme_idx = 0
         extreme_high = highs[0]
         extreme_low = lows[0]
+        # ✅ 缺陷1修复：独立跟踪极值高低点各自的真实索引
+        extreme_high_idx = 0
+        extreme_low_idx = 0
         
         for i in range(1, len(self.data)):
             current_high = highs[i]
@@ -73,41 +76,52 @@ class WeisWaveGenerator:
                 if current_high >= extreme_low + reversal_amount:
                     direction = 1
                     extreme_high = current_high
+                    extreme_high_idx = i
                     extreme_idx = i
-                    pivots.append({'idx': 0, 'price': extreme_low, 'type': 'low'})
+                    # ✅ 缺陷1修复：使用真实 extreme_low_idx 而非硬编码 0
+                    pivots.append({'idx': extreme_low_idx, 'price': extreme_low, 'type': 'low'})
                 elif current_low <= extreme_high - reversal_amount:
                     direction = -1
                     extreme_low = current_low
+                    extreme_low_idx = i
                     extreme_idx = i
-                    pivots.append({'idx': 0, 'price': extreme_high, 'type': 'high'})
+                    # ✅ 缺陷1修复：使用真实 extreme_high_idx 而非硬编码 0
+                    pivots.append({'idx': extreme_high_idx, 'price': extreme_high, 'type': 'high'})
                 else:
-                    extreme_high = max(extreme_high, current_high)
-                    extreme_low = min(extreme_low, current_low)
-                    if extreme_high == current_high:
+                    # 更新各自极值及其索引
+                    if current_high > extreme_high:
+                        extreme_high = current_high
+                        extreme_high_idx = i
                         extreme_idx = i
-                    elif extreme_low == current_low:
+                    if current_low < extreme_low:
+                        extreme_low = current_low
+                        extreme_low_idx = i
                         extreme_idx = i
                     
             elif direction == 1:
                 if current_high > extreme_high:
                     extreme_high = current_high
+                    extreme_high_idx = i
                     extreme_idx = i
                 elif current_low <= extreme_high - reversal_amount:
                     # 向下反转确认
                     pivots.append({'idx': extreme_idx, 'price': extreme_high, 'type': 'high'})
                     direction = -1
                     extreme_low = current_low
+                    extreme_low_idx = i
                     extreme_idx = i
                     
             elif direction == -1:
                 if current_low < extreme_low:
                     extreme_low = current_low
+                    extreme_low_idx = i
                     extreme_idx = i
                 elif current_high >= extreme_low + reversal_amount:
                     # 向上反转确认
                     pivots.append({'idx': extreme_idx, 'price': extreme_low, 'type': 'low'})
                     direction = 1
                     extreme_high = current_high
+                    extreme_high_idx = i
                     extreme_idx = i
                     
         # 处理最后一个未闭合的波段
@@ -148,7 +162,8 @@ class WeisWaveGenerator:
                 end_idx=indices[end_idx],
                 start_price=float(start_price),
                 end_price=float(end_price),
-                thrust=float(abs(end_price - start_price)),
+                # ✅ 缺陷2修复：改用百分比推力，使不同价位的波段推力可横向比较
+                thrust=float(abs(end_price - start_price) / start_price) if start_price > 0 else 0.0,
                 volume=vol_sum,
                 duration=int(end_idx - start_idx)
             ))

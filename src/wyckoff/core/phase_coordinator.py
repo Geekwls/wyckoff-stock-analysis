@@ -264,17 +264,23 @@ class PhaseCoordinator:
         is_ar = ar_res.get('detected')
         is_st = st_res.get('detected')
 
-        # 派发初步迹象：BC + AR/ST
-        if is_bc and (is_ar or is_st):
-            return 'Distribution Phase A'
+        # \u2705 \u7f3a\u965712\u4fee\u590d\uff1aPhase A\u5fc5\u987b\u8981SC+AR\u6700\u4f4e\u8981\u6c42\uff0c\u5355\u72ecSC\u4ec5\u662f\u201c\u505c\u6b62\u884c\u4e3a\u201d\u800c\u975e\u5b8c\u6574Phase A
+        # Weis\u539f\u8457\u8981\u6c42\uff1aPhase A\u5b8c\u6574\u94fe\u6761 = PS\u2192SC\u2192AR\u2192ST\u81f3\u5c11\u9700\u8981\u524d\u4e09\u8005\n
+        # \u6d3e\u53d1\u521d\u6b65\u8ff9\u8c61\uff1aBC + AR + ST\uff08\u81f3\u5c11BC+AR\uff09\u624d\u80fd\u786e\u8ba4Phase A\u7ed3\u6784
+        if is_bc and is_ar and is_st:
+            return 'Distribution Phase A'  # 置信度高：完整结构 BC+AR+ST
+        if is_bc and is_ar:
+            return 'Distribution Phase A'  # 置信度中：BC+AR，ST 待确认
 
-        # 吸筹初步迹象：SC + AR/ST
-        if is_sc and (is_ar or is_st):
-            return 'Accumulation Phase A'
+        # 吸筹初步迹象：SC + AR（至少两者）才确认 Phase A 结构启动
+        if is_sc and is_ar and is_st:
+            return 'Accumulation Phase A'  # 置信度高：完整结构 SC+AR+ST
+        if is_sc and is_ar:
+            return 'Accumulation Phase A'  # 置信度中：SC+AR，ST 待确认
 
-        # PS (初次支撑) 确认吸筹结构启动
+        # PS (初次支撑) + SC 确认吸筹结构启动（PS 存在时降低对 AR 的要求）
         if is_ps and is_sc:
-            return 'Accumulation Phase A'
+            return 'Accumulation Phase A'  # 置信度低：PS+SC，等待 AR 确认
 
         # 强信号覆盖
         if spring_res.get('detected'):

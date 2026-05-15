@@ -20,7 +20,7 @@ class TrendDetector(BaseDetector):
         self._analysis_cache = analysis_cache
         self.bayesian_model = bayesian_model
 
-    def detect_joc(self, lookback: int = 90) -> Dict:
+    def detect_joc(self, lookback: int = 90, trading_range: dict = None) -> Dict:
         """检测 JOC (Jump Over Creek)"""
         if self.data is None or len(self.data) < 60:
             return {'detected': False, 'reason': 'insufficient_data'}
@@ -30,7 +30,14 @@ class TrendDetector(BaseDetector):
         vol_ma = vol_ma.reindex(df.index)
         tr_window = min(60, len(df))
         tr_data = df.tail(tr_window)
-        creek_level = tr_data['High'].quantile(self.thresholds.JOC_CREEK_QUANTILE)
+
+        # ✅ 缺隗6修复：Creek水位优先使用传入的TR上沿，防止随价格漂移
+        if trading_range and trading_range.get('high', 0) > 0:
+            # TR上沿是Weis定义的“小溪”(Creek)正确边界
+            creek_level = float(trading_range['high'])
+        else:
+            # Fallback: 使用近60日High的较保守分位数
+            creek_level = tr_data['High'].quantile(self.thresholds.JOC_CREEK_QUANTILE)
 
         body_size = (df['Close'] - df['Open']).abs()
         total_range = (df['High'] - df['Low']).replace(0, float('nan'))
@@ -131,12 +138,28 @@ class TrendDetector(BaseDetector):
 
     def _classify_joc_strength(self, joc_signal: dict) -> dict:
         has_test, test_depth, test_count = joc_signal.get('test_detected', False), joc_signal.get('test_depth_pct', 0), joc_signal.get('test_count', 0)
+        # ✅ 缺隗7修复：Weis强调BUEC缩量回测才是高质量确认。无回测不代表“更强势”而是“尚未确认”
         if not has_test:
-            return {'strength': 'STRONG_JOC', 'description': '强势JOC（直接拉升，无需回测）', 'trading_implication': '激进追涨，止损设在JOC起点', 'confidence_boost': 0.3}
+            return {
+                'strength': 'JOC_UNCONFIRMED',
+                'description': 'JOC突破但尚无BUEC缩量回测确认，可能是真突破也可能是Upthrust（假突破）',
+                'trading_implication': 'Weis建议等待BUEC缩量回测小溪后再入场，直接追高风险/收益比差',
+                'confidence_boost': 0.0  # 中性，不加也不减
+            }
         elif test_depth < 0.03 and test_count <= 2:
-            return {'strength': 'STRONG_JOC_CONFIRMED', 'description': f'强势JOC（浅回测{test_depth*100:.1f}%，{test_count}次确认）', 'trading_implication': '稳健做多，回测介入', 'confidence_boost': 0.2}
+            return {
+                'strength': 'STRONG_JOC_CONFIRMED',
+                'description': f'优质JOC（浅回测{test_depth*100:.1f}%，{test_count}次BUEC缩量确认）',
+                'trading_implication': 'BUEC浅回测企稳，风险/收益比最佳，稳健做多为最佳入场时机',
+                'confidence_boost': 0.3
+            }
         else:
-            return {'strength': 'WEAK_JOC', 'description': f'弱势JOC（深回测{test_depth*100:.1f}%，{test_count}次试探）', 'trading_implication': '谨慎观望，等待明确方向', 'confidence_boost': -0.2}
+            return {
+                'strength': 'WEAK_JOC',
+                'description': f'弱势JOC（深回测{test_depth*100:.1f}%，{test_count}次试探）',
+                'trading_implication': '谨慎观望，等待明确方向',
+                'confidence_boost': -0.1
+            }
 
     def detect_fti(self, lookback: int = 90) -> Dict:
         """检测 FTI (Fall Through Ice)"""

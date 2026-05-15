@@ -222,17 +222,25 @@ class ReversalDetector(BaseDetector):
         climax_vol = climax_res.get('volume', 0)
         is_sc = climax_res['type'] == 'selling_climax'
 
+        # ✅ 缺陷5修复：ST价格容差改为固定5%（不再复用JOC参数）并加入下影线支撑验证
+        ST_PRICE_BAND = 0.05  # ST容差固定5%：Weis强调的是缩量而非绝对价格接近
+
         # 收集所有符合条件的ST (支持多次二次测试)
         all_tests = []
 
         for i in range(len(df_after)):
             row = df_after.iloc[i]
             if is_sc:
-                price_test = row['Low'] <= climax_price * (1 + self.thresholds.JOC_TEST_BAND)
+                price_test = row['Low'] <= climax_price * (1 + ST_PRICE_BAND)
             else:
-                price_test = row['High'] >= climax_price * (1 - self.thresholds.JOC_TEST_BAND)
+                price_test = row['High'] >= climax_price * (1 - ST_PRICE_BAND)
 
             vol_test = row['Volume'] < climax_vol * self.thresholds.VOLUME_CONFIRMATION['weak']
+
+            # ✅ 缺陷5修复：验证K线有下影线支撑（收盘位置 > 最低点1/3）
+            candle_range = max(row['High'] - row['Low'], 1e-9)
+            close_pct = (row['Close'] - row['Low']) / candle_range
+            has_lower_shadow_support = close_pct > 0.33 if is_sc else close_pct < 0.67
 
             if price_test and vol_test:
                 vol_ratio = row['Volume'] / climax_vol if climax_vol > 0 else 1.0
@@ -242,6 +250,7 @@ class ReversalDetector(BaseDetector):
                     'volume': float(row['Volume']),
                     'vol_ratio': round(vol_ratio, 3),
                     'test_number': len(all_tests) + 1,
+                    'has_shadow_support': bool(has_lower_shadow_support),
                 })
 
         if not all_tests:
@@ -281,21 +290,28 @@ class ReversalDetector(BaseDetector):
         }
 
     # --- Spring & Upthrust ---
-    def detect_spring(self, lookback: int = None) -> Dict:
+    def detect_spring(self, lookback: int = None, trading_range: dict = None) -> Dict:
         lookback = lookback or self.config.spring_lookback
+        # ✅ 缺陷3修复：传入TR时绕过缓存直接调用，防止旧缓存污染TR感知的支撑位计算
+        if trading_range:
+            return self._detect_spring_impl(lookback, trading_range=trading_range)
         cache_key = f"spring_{lookback}"
         return self._analysis_cache.get_or_compute(
             cache_key, self._detect_spring_impl, lookback
         )
 
-    def _detect_spring_impl(self, lookback: int) -> Dict:
+    def _detect_spring_impl(self, lookback: int, trading_range: dict = None) -> Dict:
         if self.data is None or len(self.data) < 30:
             return {'detected': False, 'reason': 'insufficient_data'}
         if PhaseAdapter.is_distribution(self._current_phase):
             return {'detected': False, 'reason': 'distribution_phase_no_spring'}
+        # ✅ 缺陷3修复：在明确下跌趋势中（Markdown）禁止误检Spring
+        if 'Markdown' in str(self._current_phase):
+            return {'detected': False, 'reason': 'markdown_phase_no_spring_without_confirmed_tr'}
 
         df = self.data.tail(lookback).copy()
-        support = self._calculate_support_level_spring(df)
+        # ✅ 缺陷3修复：支撑位优先使用TR下沿
+        support = self._calculate_support_level_spring(df, trading_range_low=trading_range.get('low') if trading_range else None)
         if support is None:
             return {'detected': False, 'reason': 'no_trading_range'}
         range_pct = (df['High'].max() - df['Low'].min()) / max(df['Low'].min(), 1e-9)
@@ -328,7 +344,10 @@ class ReversalDetector(BaseDetector):
             return {'detected': False, 'reason': 'all_spring_signals_stale'}
         return {'detected': False, 'reason': 'no_spring_found'}
 
-    def _calculate_support_level_spring(self, df: pd.DataFrame) -> Optional[float]:
+    def _calculate_support_level_spring(self, df: pd.DataFrame, trading_range_low: float = None) -> Optional[float]:
+        # ✅ 缺陷3修复：优先使用确认的TR下沿作为Spring支撑位
+        if trading_range_low is not None and trading_range_low > 0:
+            return round(float(trading_range_low), 2)
         if len(df) < 20: return None
         lows = df['Low'].values
         sorted_lows = sorted(lows)
@@ -412,6 +431,9 @@ class ReversalDetector(BaseDetector):
 
             if is_valid:
                 springs.append({
+                    # ✅ 缺陷4修复：向量化路径补全 date 字段，防止下游时序分析拿到 None
+                    'date': recent.index[nxt_idx],
+                    'breakdown_date': recent.index[cur_idx],
                     'breakdown_price': {
                         "value": round(float(lows[cur_idx]), 2),
                         "derivation": "lowest_in_breakdown_bar",

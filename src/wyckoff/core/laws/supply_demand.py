@@ -56,8 +56,18 @@ class SupplyDemandMixin:
                 stage = "Phase B-C (积累震荡)"
                 supply_demand_balance = "供求平衡，主力吸筹中"
             else:
-                stage = "Phase A (初步支撑)"
-                supply_demand_balance = "需求开始出现，但未确立"
+                # ✅ 缺陷11修复：加入趋势过滤，避免在下跌趋势中错误归类为 Phase A
+                _df = self.data
+                _recent_high = _df['High'].tail(30).max()
+                _current_price = _df['Close'].iloc[-1]
+                _decline_pct = (_recent_high - _current_price) / _recent_high if _recent_high > 0 else 0
+                if _decline_pct > 0.15:
+                    # 从近期高点下跌超过15%，仍处于下跌趋势而非 Phase A
+                    stage = "Markdown (下跌趋势中)"
+                    supply_demand_balance = "供应主导，尚未形成支撑区间"
+                else:
+                    stage = "Phase A (初步支撑)"
+                    supply_demand_balance = "需求开始出现，但未确立"
             supply_demand_analysis["accumulation_analysis"] = {
                 "current_stage": stage,
                 "supply_demand_balance": supply_demand_balance,
@@ -160,16 +170,29 @@ class SupplyDemandMixin:
         down_days = df[df['Close'] < df['Close'].shift(1)]
         if up_days.empty or down_days.empty:
             return {"pattern": "insufficient_data", "strength": "unknown"}
+
         avg_up_vol = up_days['Volume'].mean()
         avg_down_vol = down_days['Volume'].mean()
-        ratio = avg_up_vol / avg_down_vol if avg_down_vol > 0 else 1.0
-        if ratio > 1.4:
+        vol_ratio = avg_up_vol / avg_down_vol if avg_down_vol > 0 else 1.0
+
+        # ✅ 缺陗10修复：加入价差(spread)同向分析
+        # 真正的吸筎：上涨日量大且价差大（需求主导）+ 下跌日量小且价差小（供应耗尽）
+        avg_up_spread = (up_days['High'] - up_days['Low']).mean() if len(up_days) > 0 else 1.0
+        avg_down_spread = (down_days['High'] - down_days['Low']).mean() if len(down_days) > 0 else 1.0
+        spread_ratio = avg_up_spread / avg_down_spread if avg_down_spread > 0 else 1.0
+
+        # 双重确认：量和价差都需要同时满足才是真正的吸筎
+        if vol_ratio > 1.3 and spread_ratio > 1.2:
             pattern, strength = "absorption", "strong"
-        elif ratio > 1.1:
+        elif vol_ratio > 1.1 or spread_ratio > 1.1:
             pattern, strength = "mild_absorption", "medium"
         else:
             pattern, strength = "no_absorption", "weak"
-        return {"pattern": pattern, "strength": strength, "up_down_vol_ratio": round(ratio, 2)}
+        return {
+            "pattern": pattern, "strength": strength,
+            "up_down_vol_ratio": round(vol_ratio, 2),
+            "up_down_spread_ratio": round(spread_ratio, 2)
+        }
 
     def _analyze_exhaustion_pattern(self) -> dict:
         if self.data is None or len(self.data) < 40:
