@@ -1,161 +1,52 @@
-# Wyckoff Analysis Quick Reference
+# 威科夫分析快速索引 (v2.6.0 专家版)
 
-## Phase Identification Guide
+## 1. 核心相位识别 (Phase Identification)
 
-### Accumulation - Quick Identification
-- **Context**: After a significant downtrend
-- **Price Action**: Ranging/sideways movement
-- **Volume**: High on panic selling, then diminishing
-- **Key Pattern**: PS → CL → AR → ST → Spring → SOS → LPS → Breakout
-- **Trading Bias**: Bullish (look for long entries)
+### 吸筹相位 (Accumulation)
+- **背景**: 长期下跌后的震荡区间。
+- **关键序列**: PS (初步支撑) → SC (高潮) → AR (反弹) → ST (测试) → **Spring (震仓)** → JOC (突破) → LPS (回测)。
+- **交易倾向**: 看多 (找入场点)。
 
-### Distribution - Quick Identification
-- **Context**: After a significant uptrend
-- **Price Action**: Ranging/sideways movement at top
-- **Volume**: High on buying frenzy, then diminishing
-- **Key Pattern**: PSY → CL → AR → ST → Upthrust → SOW → LPSY → Breakdown
-- **Trading Bias**: Bearish (look for short entries)
+### 派发相位 (Distribution)
+- **背景**: 长期上涨后的震荡区间。
+- **关键序列**: PSY (初步供应) → BC (高潮) → AR (回跌) → ST (测试) → **Upthrust (假突破)** → SOW (转弱) → LPSY (回抽)。
+- **交易倾向**: 看空 (减仓或反手)。
 
-## Key Wyckoff Events
+---
 
-| Abbreviation | Full Name | Description | Market Position |
-|-------------|-----------|-------------|-----------------|
-| PS | Preliminary Support | First support after decline | Near potential bottom |
-| CL | Climax | Extreme price movement on high volume | End of trend (A) |
-| AR | Automatic Rally | Quick rebound from CL | Counter-move to CL |
-| ST | Secondary Test | Re-test of CL extreme | Supply/demand absorption |
-| SOS | Sign of Strength | Strong breakout from accumulation | Start of markup |
-| LPS | Last Point of Support | Final pullback before markup | Last good entry |
-| PSY | Preliminary Supply | First supply after rally | Near potential top |
-| SOW | Sign of Weakness | Strong breakdown from distribution | Start of markdown |
-| LPSY | Last Point of Supply | Final rally before markdown | Last good short entry |
+## 2. v2.6.0 量化信号速查表 (Signal Dictionary)
 
-## Volume-Price Relationship Matrix
+| 缩写 | 全称 | 核心逻辑 | 信号分级 |
+| :--- | :--- | :--- | :--- |
+| **PS** | Preliminary Support | 主跌中首次放量止跌 | Phase A 证据 |
+| **PSY** | Preliminary Supply | 主升中首次巨量滞涨 | Phase A 证据 |
+| **SC/BC** | Climax | 趋势末端极度放量且 K 线变长 | Phase A 确认 |
+| **Spring** | Spring (震仓) | 跌破支撑位后 3 日内收回 | Phase C 强力买入 |
+| **UT** | Upthrust (上冲) | 突破压力位后 3 日内跌回 | Phase C 强力卖出 |
+| **JOC** | Jump Across the Creek | 放量长阳突破区间上沿 | Phase D 趋势启动 |
+| **FTI** | Fall Through the Ice | 放量长阴跌破区间下沿 | Phase D 趋势确认 |
+| **SOT** | Stopping of Transient | 价格波动率在趋势末端收窄 | 预警信号 |
 
-| Price | Volume | Interpretation | Implication |
-|-------|--------|----------------|-------------|
-| Up | Up | Strong demand | Bullish continuation |
-| Up | Down | Weak demand | Potential reversal |
-| Down | Up | Strong supply | Bearish continuation |
-| Down | Down | Weak supply | Potential support |
+---
 
-## Visual Patterns
+## 3. 专家级决策逻辑
 
-### Spring Pattern
-```
-Resistance    ─────────────────────────────────
-               │         ┌─┐
-               │        ╱   ╲
-               │       ╱     ╲
-Support   ─────┼──────╱       ╲─╲────
-               │     ╱          ╲
-               │    ╱            ╲
-               │   ╱              ╲
-               ↓  Spring           ↑ Breakout
-```
+### Spring 3 号模型 (生命周期)
+1. **活跃 (Active)**: 刚刚收回，正在进行 LPS 测试。
+2. **确认 (Confirmed)**: LPS 回测不破低点并再次放量上涨。
+3. **失败 (Failed)**: 5 日内跌破 Spring 低点，判定为真跌破。
 
-### Upthrust Pattern
-```
-Resistance    ────────────╱────────────
-                   ╱     ╲  ╱
-                  ╱       ╲╱
-                 ╱         ╲
-                ╱           ╲
-               ╱             ╲
-Support   ─────┼──────────────────────
-                   ↑Upthrust    ↓ Breakdown
-```
+### 努力与结果 (EVR) 共振
+- **日线/周线一致**: 权重评分 90+。
+- **日线/周线背离**: 触发“逻辑证伪”，提示观望。
 
-## Trading Decision Tree
+---
 
-```
-1. Identify Overall Trend
-   ├─ Uptrend → Look for Distribution
-   └─ Downtrend → Look for Accumulation
+## 4. AI Agent 分析建议
+- **优先调用**: `detect_wyckoff_phase` 以获取宏观位置。
+- **深度挖掘**: 使用 `get_trading_levels` 确定精准的止损位。
+- **矛盾处理**: 若出现 SOS 与 SOW 并存，调用 `analyze_signal_conflict`。
 
-2. Determine Current Phase
-   ├─ Ranging after decline? → Accumulation
-   ├─ Ranging after rally? → Distribution
-   ├─ Strong uptrend → Markup (wait for distribution signs)
-   └─ Strong downtrend → Markdown (wait for accumulation signs)
+---
 
-3. Find Entry Points
-   ├─ Accumulation: Enter on LPS after SOS
-   ├─ Distribution: Enter on LPSY after SOW
-   ├─ Re-accumulation: LPS during uptrend correction
-   └─ Re-distribution: LPSY during downtrend rally
-
-4. Set Stop Loss
-   ├─ Long: Below Spring or recent swing low
-   └─ Short: Above Upthrust or recent swing high
-
-5. Set Targets
-   ├─ Measure cause (trading range height)
-   └─ Project equal distance from breakout point
-```
-
-## Cause and Effect Projection
-
-```
-Calculation: Target = Breakout Price + (Resistance - Support)
-
-Example:
-- Trading Range: $40 to $50
-- Cause Size: $10
-- Breakout: $51
-- Target: $51 + $10 = $61
-
-Distribution:
-- Trading Range: $80 to $90
-- Cause Size: $10
-- Breakdown: $79
-- Target: $79 - $10 = $69
-```
-
-## Timeframes
-
-| Timeframe | Use Case | Typical Pattern Duration |
-|-----------|----------|-------------------------|
-| Weekly/Monthly | Major trend identification | Months to years |
-| Daily | Swing trading decisions | Weeks to months |
-| Hourly | Day trading entries | Days to weeks |
-| 5-15 Minute | Intraday scalping | Hours to days |
-
-## Common Mistakes to Avoid
-
-1. **Forcing the Pattern**: Not every trading range is accumulation/distribution
-2. **Ignoring Volume**: Volume must confirm price action
-3. **Early Entry**: Entering before phase confirmation (before SOS/SOW)
-4. **Missing Context**: Ignoring overall market and sector trends
-5. **Poor Stop Placement**: Placing stops too tight or too wide
-6. **Ignoring Timeframes**: Trading against higher timeframe trends
-7. **No Patience**: Exiting too early before target is reached
-
-## Best Practices
-
-1. **Multi-Timeframe Analysis**: Confirm phases across timeframes
-2. **Wait for Confirmation**: SOS/SOW with proper volume
-3. **Trade with the Trend**: Don't fight the Composite Man
-4. **Proper Risk Management**: 1-2% risk per trade
-5. **Keep Trading Journal**: Document all trades and lessons learned
-6. **Continuous Learning**: Study past charts and patterns
-7. **Market Context**: Consider overall market conditions
-
-## Recommended Resources
-
-### Books
-- "The Wyckoff Method" by Richard D. Wyckoff
-- "Studies in Tape Reading" by Richard D. Wyckoff
-- "Wyckoff Strategies and Techniques" by David Weis
-
-### Chart Patterns to Study
-- 1930-1932 Dow Jones Accumulation
-- 2009 Market Bottom Post-Financial Crisis
-- Individual stock accumulation/distribution examples
-
-### Practice Routine
-1. Daily chart review using Wyckoff principles
-2. Identify current phases on watchlist stocks
-3. Document predictions and review accuracy
-4. Track volume-price relationships
-5. Practice identifying springs and upthrusts
+*“永远不要在没有证据的情况下交易，威科夫方法就是关于证据的收集。”*
