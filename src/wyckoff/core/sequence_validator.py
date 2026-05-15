@@ -51,9 +51,9 @@ class SequenceValidator:
 
     @staticmethod
     def _to_ts(v: Any) -> Any:
-        if v is None:
-            return None
-        return pd.Timestamp(v) if not isinstance(v, pd.Timestamp) else v
+        """统一日期解析 — 委托至共享 TypeConverter"""
+        from .utils import TypeConverter
+        return TypeConverter.parse_date_naive(v)
 
     @staticmethod
     def _safe_get(raw: Any, key: str, default: Any = None) -> Any:

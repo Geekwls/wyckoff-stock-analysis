@@ -469,11 +469,11 @@ class StrengthWeaknessDetector(BaseDetector):
             }
         return {'detected': False}
 
-    def detect_lps(self, window: int = 30, spring_res: Dict = None) -> Dict:
+    def detect_lps(self, window: int = 30, spring_res: Dict = None, trading_range: Dict = None) -> Dict:
         """
         检测 LPS (Last Point of Support)
 
-        阶段约束（新增修复）：
+        阶段约束：
         - 仅在 Accumulation / Reaccumulation 阶段才标记为正式 LPS
         - Markup 阶段降级为 "pullback"（缩量回踩）
         - 阶段不明或 Distribution 降级为 "pullback_weak"（缩量回调，支撑测试）
@@ -481,6 +481,7 @@ class StrengthWeaknessDetector(BaseDetector):
         Args:
             window: 检测窗口
             spring_res: Spring检测结果，用于验证LPS低点>Spring低点
+            trading_range: 交易区间字典（需包含low字段），用于验证LPS靠近TR支撑位
         """
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
@@ -494,6 +495,11 @@ class StrengthWeaknessDetector(BaseDetector):
             spring_low = sl.get('breakdown_price') if isinstance(sl, dict) else (
                 getattr(sl, 'breakdown_price', None) if hasattr(sl, 'breakdown_price') else None
             )
+
+        # 提取 TR 支撑位（威科夫 LPS 应在 TR 下沿附近）
+        tr_support = None
+        if trading_range and 'low' in trading_range:
+            tr_support = trading_range['low']
 
         # 判断阶段上下文
         is_accumulation = self._is_accumulation_phase()
@@ -552,22 +558,36 @@ class StrengthWeaknessDetector(BaseDetector):
             if spring_low is not None and current['Low'] <= spring_low:
                 continue
 
-            if is_pullback and low_volume and higher_low:
+            # 威科夫 LPS：必须在 TR 下沿支撑位附近（+5% 容差）
+            # 孟洪涛书中定义：LPS 是"最后支撑点"，应在 TR 下沿受支撑后缩量
+            near_tr_support = True
+            if tr_support is not None:
+                # LPS 低点必须在 TR 下沿的 5% 范围内
+                low_pct_from_support = (current['Low'] - tr_support) / max(tr_support, 1e-9)
+                near_tr_support = -0.03 <= low_pct_from_support <= 0.08
+
+            if is_pullback and low_volume and higher_low and near_tr_support:
                 signal = {
                     'date': df.index[i],
                     'price': current['Close'],
                     'volume_ratio': round(current['Volume'] / vol_ma.iloc[i], 2),
-                    'support_level': df['MA20'].iloc[i]
+                    'support_level': tr_support if tr_support is not None else df['MA20'].iloc[i],
                 }
+
+                # 记录 TR 支撑关系
+                if tr_support is not None:
+                    low_pct = (current['Low'] - tr_support) / max(tr_support, 1e-9) * 100
+                    signal['tr_support'] = tr_support
+                    signal['tr_support_deviation_pct'] = round(float(low_pct), 2)
 
                 # 阶段约束：只有 Accumulation 阶段且具备完整Phase A结构才叫 LPS
                 if is_accumulation:
                     if has_complete_phase_a_structure:
-                        #  完整的吸筹结构 + LPS = 正式LPS
                         signal['signal_type'] = 'lps'
                         note = '吸筹阶段最后支撑点（LPS）| ✅ 具备完整Phase A结构（SC→AR→ST）'
+                        if tr_support is not None:
+                            note += f' | 靠近TR下沿{tr_support:.2f} ✓'
                     else:
-                        # ⚠️ 吸筹阶段但缺少完整Phase A结构 → 降级为支撑测试
                         signal['signal_type'] = 'support_test'
                         missing = ', '.join(phase_a_validation['missing_events'])
                         note = (f'⚠️ 降级为支撑测试（非正式LPS）| '
@@ -597,6 +617,7 @@ class StrengthWeaknessDetector(BaseDetector):
                 'signals': lps_signals,
                 'latest': lps_signals[-1],
                 'spring_low': spring_low,
+                'tr_support': tr_support,
                 'phase_context': {
                     'phase': self._current_phase or 'unknown',
                     'is_accumulation': is_accumulation,
@@ -605,7 +626,6 @@ class StrengthWeaknessDetector(BaseDetector):
                              '信号已按阶段上下文重新定性为"缩量回踩"而非正式LPS'
                              if not is_accumulation else None),
                 },
-                #  P1-1修复：包含Phase A验证信息
                 'phase_a_validation': phase_a_validation if is_accumulation else None
             }
         return {'detected': False}
@@ -683,44 +703,78 @@ class StrengthWeaknessDetector(BaseDetector):
         return self._detect_variants(is_bullish=False)
 
     def _detect_variants(self, is_bullish: bool) -> Dict:
-        """参数化变体检测，合并 SOS/SOW 逻辑 (P2 #8)"""
+        """参数化变体检测，合并 SOS/SOW 逻辑 (P2 #8)
+
+        修复：增加阶段上下文判断，避免在派发期将跳空上涨误判为 SOS、
+        或在吸筹期将跳空下跌误判为 SOW。
+        """
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
-            
+
+        # 检查阶段上下文
+        is_distribution = self._is_distribution_phase()
+        is_accumulation = self._is_accumulation_phase()
+
         df = self.data.copy()
         df['Volume_MA20'] = df['Volume'].rolling(20).mean()
         df['Price_Change'] = df['Close'].pct_change()
-        
+
         variants = []
         vol_ratio = self.thresholds.VOLUME_CONFIRMATION['strong']
-        
+
         if is_bullish:
-            # 1. 跳空缺口 SOS
+            # 在派发期，向上跳空应归类为 UT/UTAD 而非 SOS
+            type_prefix = 'gap_upthrust' if is_distribution else 'gap_sos'
+            # 1. 跳空缺口
             gap_mask = (df['Open'] > df['High'].shift(1) * (1 + self.thresholds.JOC_TEST_BAND)) & (df['Volume'] > df['Volume_MA20'] * vol_ratio)
             for idx in df[gap_mask].tail(3).index:
-                variants.append({'type': 'gap_sos', 'date': idx, 'price': df.loc[idx, 'Close'], 'strength': 'strong'})
-            
-            # 2. 涨停 SOS (LIMIT_UP_THRESHOLD)
+                variants.append({
+                    'type': type_prefix, 'date': idx, 'price': df.loc[idx, 'Close'],
+                    'strength': 'strong',
+                    'phase_context': 'distribution' if is_distribution else 'accumulation_or_uptrend'
+                })
+
+            # 2. 涨停
+            limit_type = 'limit_up_upthrust' if is_distribution else 'limit_up_sos'
             limit_mask = (df['Price_Change'] >= self.thresholds.LIMIT_UP_THRESHOLD) & (df['Volume'] > df['Volume_MA20'] * 1.2)
             for idx in df[limit_mask].tail(2).index:
-                variants.append({'type': 'limit_up_sos', 'date': idx, 'price': df.loc[idx, 'Close'], 'strength': 'very_strong'})
+                variants.append({
+                    'type': limit_type, 'date': idx, 'price': df.loc[idx, 'Close'],
+                    'strength': 'very_strong',
+                    'phase_context': 'distribution' if is_distribution else 'accumulation_or_uptrend'
+                })
         else:
+            # 在吸筹期，向下跳空应归类为 Spring 而非 SOW
+            type_prefix = 'gap_spring' if is_accumulation else 'gap_sow'
             # 1. 跳空缺口 SOW
             gap_mask = (df['Open'] < df['Low'].shift(1) * (1 - self.thresholds.JOC_TEST_BAND)) & (df['Volume'] > df['Volume_MA20'] * vol_ratio)
             for idx in df[gap_mask].tail(3).index:
-                variants.append({'type': 'gap_sow', 'date': idx, 'price': df.loc[idx, 'Close'], 'strength': 'strong'})
-                
-            # 2. 跌停 SOW
+                variants.append({
+                    'type': type_prefix, 'date': idx, 'price': df.loc[idx, 'Close'],
+                    'strength': 'strong',
+                    'phase_context': 'accumulation' if is_accumulation else 'distribution_or_downtrend'
+                })
+
+            # 2. 跌停
+            limit_type = 'limit_down_spring' if is_accumulation else 'limit_down_sow'
             limit_mask = (df['Price_Change'] <= self.thresholds.LIMIT_DOWN_THRESHOLD) & (df['Volume'] > df['Volume_MA20'] * 1.2)
             for idx in df[limit_mask].tail(2).index:
-                variants.append({'type': 'limit_down_sow', 'date': idx, 'price': df.loc[idx, 'Close'], 'strength': 'very_strong'})
+                variants.append({
+                    'type': limit_type, 'date': idx, 'price': df.loc[idx, 'Close'],
+                    'strength': 'very_strong',
+                    'phase_context': 'accumulation' if is_accumulation else 'distribution_or_downtrend'
+                })
 
         if variants:
             return {
-                'detected': True, 
-                'variants': variants, 
-                'latest_variant': variants[-1], 
-                'overall_strength': self._calculate_strength(variants)
+                'detected': True,
+                'variants': variants,
+                'latest_variant': variants[-1],
+                'overall_strength': self._calculate_strength(variants),
+                'phase_context': {
+                    'is_distribution': is_distribution,
+                    'is_accumulation': is_accumulation
+                }
             }
         return {'detected': False}
 

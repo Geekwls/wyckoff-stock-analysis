@@ -592,3 +592,111 @@ class ReversalDetector(BaseDetector):
                         'classification_note': ut_note  #  新增：分类说明
                     })
         return upthrusts
+
+    # ── UTAD 检测 (Upthrust After Distribution) ──────────────
+    def detect_utad(self, lookback: int = 120) -> Dict:
+        """
+        检测 UTAD（Upthrust After Distribution — 派发后的上冲回落）
+
+        孟洪涛《新威科夫操盘法》定义：
+        UTAD 是派发 Phase E 的标志性事件，与吸筹区的 Spring 相对应。
+        特征：
+        1. 价格在长期上涨后创出新高
+        2. 突破量巨大（量比 > 2.0），但收盘疲软（长上影线）
+        3. 突破后 1-5 天内价格迅速回落到派发区间内
+        4. 后续无法再创新高（需求枯竭）
+        """
+        if self.data is None or len(self.data) < 60:
+            return {'detected': False, 'reason': 'insufficient_data'}
+
+        is_dist = PhaseAdapter.is_distribution(self._current_phase) if self._current_phase else False
+        is_markdown = 'Markdown' in str(self._current_phase) if self._current_phase else False
+
+        df = self.data.tail(lookback).copy()
+        if len(df) < 60:
+            return {'detected': False, 'reason': 'insufficient_data_for_utad'}
+
+        recent = df.tail(30)
+        current_price = recent['Close'].iloc[-1]
+        lookback_high = df['High'].max()
+        lookback_high_idx = df['High'].idxmax()
+
+        recent_high = recent['High'].max()
+        recent_high_idx = recent['High'].idxmax()
+        is_near_high = recent_high >= lookback_high * 0.98
+
+        if not is_near_high:
+            return {'detected': False, 'reason': 'price_not_near_high'}
+
+        breakout_row = df.loc[recent_high_idx]
+        vol_ma = df['Volume'].tail(60).mean()
+        breakout_vol_ratio = breakout_row['Volume'] / vol_ma if vol_ma > 0 else 1.0
+
+        range_val = max(breakout_row['High'] - breakout_row['Low'], 1e-9)
+        upper_shadow = breakout_row['High'] - max(breakout_row['Open'], breakout_row['Close'])
+        upper_shadow_ratio = upper_shadow / range_val
+
+        has_climax_volume = breakout_vol_ratio > 2.0
+        has_long_upper_shadow = upper_shadow_ratio > 0.4
+
+        if not (has_climax_volume and has_long_upper_shadow):
+            return {'detected': False, 'reason': 'no_climax_volume_or_upper_shadow'}
+
+        after_breakout = df[df.index > recent_high_idx].head(5)
+        if len(after_breakout) < 2:
+            return {'detected': False, 'reason': 'insufficient_data_after_breakout'}
+
+        resistance_level = lookback_high
+        fallback_detected = False
+        confirmation_days = 0
+        for i in range(len(after_breakout)):
+            if after_breakout.iloc[i]['Close'] < resistance_level * 0.98:
+                fallback_detected = True
+                confirmation_days = i + 1
+                break
+
+        if not fallback_detected:
+            return {'detected': False, 'reason': 'no_fallback_after_breakout'}
+
+        distribution_detected = is_dist or is_markdown
+
+        confidence = 0.5
+        if has_climax_volume:
+            confidence += 0.2
+        if has_long_upper_shadow:
+            confidence += 0.15
+        if confirmation_days <= 3:
+            confidence += 0.15
+        if distribution_detected:
+            confidence += 0.15
+        if current_price < resistance_level * 0.95:
+            confidence += 0.1
+        confidence = min(confidence, 1.0)
+
+        if confirmation_days <= 2 and breakout_vol_ratio > 2.5:
+            utad_type = 'classic_utad'
+        elif confirmation_days <= 5:
+            utad_type = 'failed_breakout'
+        else:
+            utad_type = 'double_top'
+
+        return {
+            'detected': True,
+            'utad_type': utad_type,
+            'date': after_breakout.index[min(confirmation_days, len(after_breakout) - 1)],
+            'breakout_date': recent_high_idx,
+            'breakout_price': float(breakout_row['High']),
+            'resistance_level': float(resistance_level),
+            'volume_ratio': round(float(breakout_vol_ratio), 2),
+            'upper_shadow_ratio': round(float(upper_shadow_ratio), 2),
+            'penetration_depth': round(float((breakout_row['High'] - resistance_level) / max(resistance_level, 1e-9) * 100), 2),
+            'confirmation_days': confirmation_days,
+            'distribution_detected': distribution_detected,
+            'confidence': round(confidence, 2),
+            'description': (
+                f"UTAD（派发后的上冲回落）：价格突破派发区间上沿{resistance_level:.2f}元后，"
+                f"在{confirmation_days}天内回落至区间内。量比{breakout_vol_ratio:.1f}倍，"
+                f"上影线占比{upper_shadow_ratio:.0%}。"
+                f"{'有前置派发结构 ✓' if distribution_detected else '无前置派发结构 ⚠️'}"
+            )
+        }

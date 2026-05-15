@@ -152,3 +152,28 @@ class TypeConverter:
         except (ValueError, TypeError, Exception) as e:
             logger.debug(f"safe_to_timestamp: 转换失败 [value={value}, type={type(value).__name__}]: {e}")
             return default
+
+    @staticmethod
+    def parse_date_naive(value: Any) -> Optional[pd.Timestamp]:
+        """
+        将日期值统一转换为 tz-naive pd.Timestamp（用于日期比较）
+
+        代码中存在多个 _parse_date 的重复实现，此方法统一替换：
+        - pattern_detector.py:_parse_date
+        - event_arbitrator.py:_parse_date
+        - sos_sow_analyzer.py:_parse_date
+        - sequence_validator.py:_to_ts
+        """
+        from typing import Optional
+        if value is None:
+            return None
+        try:
+            ts = pd.to_datetime(value)
+            if isinstance(ts, pd.DatetimeIndex):
+                ts = ts[0]
+            # 统一转为 tz-naive 避免时区比较错误
+            if hasattr(ts, 'tz') and ts.tz is not None:
+                return ts.tz_localize(None)
+            return ts
+        except (ValueError, TypeError, Exception):
+            return None

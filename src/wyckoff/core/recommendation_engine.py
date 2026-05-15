@@ -165,10 +165,10 @@ class RecommendationEngine:
                 supply_exhausted = self._get_attr(info, 'supply_exhausted', False)
                 if supply_exhausted:
                     quality_factor += 0.3
-                    reasons.append(f"ST确认需求耗尽（量比{st_vol_ratio:.1%}）")
+                    reasons.append(f"ST确认需求耗尽（量为高潮量的{st_vol_ratio:.0%}）")
                 elif st_vol_ratio and st_vol_ratio < 0.6:
                     quality_factor += 0.1
-                    reasons.append(f"ST接近确认（量比{st_vol_ratio:.1%}）")
+                    reasons.append(f"ST接近确认（量为高潮量的{st_vol_ratio:.0%}）")
             elif key == 'automatic_reaction':
                 rebound_pct = self._get_attr(info, 'rebound_pct', None)
                 decline_pct = self._get_attr(info, 'decline_pct', None)

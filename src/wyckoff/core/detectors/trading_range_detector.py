@@ -124,16 +124,19 @@ class TradingRangeDetector(BaseDetector):
         position = (current_price - low) / (high - low) if high > low else 0.5
 
         # 检测 TR 是否已被价格突破而失效 (P2 #2.2)
-        # 威科夫理论：有效 TR 的前提是价格停留在区间内。当价格超出边界超过显著阈值时，该TR失效。
+        # 威科夫理论：有效 TR 的前提是价格停留在区间内。
+        # 但 TR 高/低位数据仍然有用（为 JOC 回测、LPS/LPSY 支撑提供参考基准）
         breakout_margin = atr_pct * 2.0 if atr_pct else 0.05
         above_range = current_price > high * (1 + breakout_margin)
         below_range = current_price < low * (1 - breakout_margin)
         is_broken = above_range or below_range
         
-        #  修复：如果 TR 已失效，强制标记为 EXPIRED
+        #  修复：TR 失效时保留 high/low 数据，仅标记状态变化
+        # 孟洪涛书中强调：TR 突破后其边界仍是 JOC 回测 / FTI 反抽的重要参考位
         if is_broken:
-            is_consolidation = False
-            method = f"{method} (EXPIRED)"
+            method = f"{method} (BROKEN)"
+            # 注意：保留 is_consolidation 的原始值以便上游判断
+            # 但增加 broken 标记让调用方知道 TR 已失效
         
         breakout_direction = "up" if above_range else ("down" if below_range else None)
 

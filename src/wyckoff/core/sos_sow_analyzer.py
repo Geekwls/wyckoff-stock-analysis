@@ -71,19 +71,12 @@ class SOSSOWAnalyzer:
             result['reasons'].append('SOS或SOW日期缺失，无法分析')
             return result
 
-        # 解析日期
-        try:
-            if isinstance(sos_date_str, str):
-                sos_date = datetime.strptime(sos_date_str, '%Y-%m-%d %H:%M:%S')
-            else:
-                sos_date = sos_date_str
-
-            if isinstance(sow_date_str, str):
-                sow_date = datetime.strptime(sow_date_str, '%Y-%m-%d %H:%M:%S')
-            else:
-                sow_date = sow_date_str
-        except Exception as e:
-            logger.warning(f"Failed to parse SOS/SOW dates: {e}")
+        # 解析日期（使用统一工具类）
+        from ..core.utils import TypeConverter
+        sos_date = TypeConverter.parse_date_naive(sos_date_str)
+        sow_date = TypeConverter.parse_date_naive(sow_date_str)
+        if sos_date is None or sow_date is None:
+            logger.warning(f"Failed to parse SOS/SOW dates: sos={sos_date_str}, sow={sow_date_str}")
             result['interpretation'] = 'no_conflict'
             result['reasons'].append('日期解析失败')
             return result

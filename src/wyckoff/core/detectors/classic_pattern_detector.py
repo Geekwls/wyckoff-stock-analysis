@@ -51,6 +51,7 @@ class ClassicPatternDetector(BaseDetector):
     def detect_divergence(self, window: int = 30) -> Dict: return self.vsa.detect_divergence(window)
     def detect_bag_holding(self) -> Dict: return self.vsa.detect_bag_holding()
     def detect_shakeout(self) -> Dict: return self.vsa.detect_shakeout(self.reversal)
+    def detect_utad(self, lookback: int = 120) -> Dict: return self.reversal.detect_utad(lookback)
 
     @staticmethod
     def validate_spring_with_phase(spring_result: Dict, phase_analysis: Dict) -> Dict:

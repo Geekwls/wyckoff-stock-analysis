@@ -317,8 +317,8 @@ class WyckoffAnalyzer:
             if code.startswith(('8', '4')) and prefix == 'BJ':
                 return "bj.899050"  # 北证50
             
-            # 科创板：688开头
-            if code.startswith('688'):
+            # 科创板：688/689开头
+            if code.startswith(('688', '689')):
                 return "sh.000688"  # 科创50
             
             # 创业板：300/301开头
@@ -543,8 +543,19 @@ class WyckoffAnalyzer:
 
             base_price = tr['high']
             price_range = tr['high'] - tr['low']
-            contraction_factor = max(0.5, 1 + volatility_contraction * 2)
-            potential_move = price_range * contraction_factor * (cause_bars / 30)
+
+            # 威科夫因果法则：水平积累宽度 → 垂直目标幅度
+            # 波动率收缩越大 → 积累越充分 → 突破后的爆发力越强
+            # 但当无收缩时，使用基础水平计数
+            if volatility_contraction > 0.1:
+                # 有显著波动率收缩：收缩越多，蓄力越强
+                contraction_factor = 1 + volatility_contraction * 1.5
+            else:
+                # 无显著收缩：使用标准水平计数法
+                contraction_factor = 1.0
+
+            time_factor = cause_bars / 30
+            potential_move = price_range * contraction_factor * time_factor
 
             return {
                 'method': 'volatility_contraction',
@@ -558,7 +569,7 @@ class WyckoffAnalyzer:
                     'target_2': round(base_price + potential_move, 2),
                     'target_3': round(base_price + potential_move * 1.618, 2),
                 },
-                'theory': '改进估算：基于波动率收缩和时间积累'
+                'theory': '威科夫因果法则：水平积累宽度 × 波动率收缩 → 垂直目标'
             }
 
         except Exception as e:

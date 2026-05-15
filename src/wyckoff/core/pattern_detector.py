@@ -15,6 +15,7 @@ from ..schemas import (
     JocModel, FtiModel
 )
 from ..exceptions import PatternDetectionError, AnalysisError
+from .utils import TypeConverter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -261,6 +262,10 @@ class WyckoffPatternDetector:
     def detect_vsa_signals(self, lookback: int = 20) -> Dict:
         return self.classic_detector.detect_vsa_signals(lookback)
 
+    def detect_utad(self, lookback: int = 120) -> Dict:
+        """检测 UTAD（派发后的上冲回落）"""
+        return self.classic_detector.detect_utad(lookback)
+
     def detect_divergence(self, window: int = 30) -> Dict:
         return self.classic_detector.detect_divergence(window)
 
@@ -321,9 +326,9 @@ class WyckoffPatternDetector:
             trading_range = self.detect_trading_range()
         return self.sw_detector.detect_sow(trading_range=trading_range)
 
-    def detect_lps(self, sos_result: Dict = None, spring_res: Dict = None) -> Dict:
+    def detect_lps(self, sos_result: Dict = None, spring_res: Dict = None, trading_range: Dict = None) -> Dict:
         """检测 LPS (Last Point of Support)"""
-        return self.sw_detector.detect_lps(spring_res=spring_res)
+        return self.sw_detector.detect_lps(spring_res=spring_res, trading_range=trading_range)
 
     def detect_lpsy(self, sow_result: Dict = None, trading_range: Dict = None) -> Dict:
         """检测 LPSY (Last Point of Supply)"""
@@ -536,9 +541,14 @@ class WyckoffPatternDetector:
     def detect_automatic_rally(self, lookback_days: int = 60) -> Dict:
         """
         检测自然反弹（Automatic Rally, AR）
+        
+        孟洪涛《新威科夫操盘法》定义：
+        - AR 是 SC 后 **立即** 发生的剧烈反弹（1-3 根K线内）
+        - 不是数周后任意时间点的最高价
+        - AR 极值通常形成 TR 上沿
         """
         try:
-            sc_res = self.detect_climax_panic_selling(60) # 复用 SC 检测结果
+            sc_res = self.detect_climax_panic_selling(60)
             if not sc_res['detected']:
                 return {"detected": False, "reason": "No SC found to baseline AR"}
             
@@ -549,27 +559,45 @@ class WyckoffPatternDetector:
             if len(after_sc) < 2:
                 return {"detected": False, "reason": "Insufficient data after SC"}
 
-            ar_high = after_sc['High'].max()
-            ar_idx = after_sc['High'].idxmax()
+            # 威科夫 AR：只在 SC 后 1-3 根K线内寻找反弹高点
+            ar_window = after_sc.head(3)
+            
+            # 放宽条件：如果前3根没有明显反弹，扩展到5根
+            ar_high = ar_window['High'].max()
+            ar_idx = ar_window['High'].idxmax()
 
             # 修正：反弹起点应为 SC 当日的收盘价或实体中位值，而非最低价 (P1 #2.1)
             sc_bar = self.data.loc[sc_date]
             baseline = (sc_bar['Open'] + sc_bar['Close']) / 2
             
             rebound_pct = (ar_high - baseline) / baseline * 100
-            # 威科夫理论中，AR 通常非常剧烈
-            is_ar = rebound_pct > 5 
+            
+            # 威科夫理论中，AR 是剧烈反弹（通常 > 3%）
+            is_ar = rebound_pct > 3
+
+            # 扩展搜索：如果 3 根K线内未找到充分反弹，扩展到 5 根
+            if not is_ar:
+                ar_window_5 = after_sc.head(5)
+                ar_high_5 = ar_window_5['High'].max()
+                ar_idx_5 = ar_window_5['High'].idxmax()
+                rebound_pct_5 = (ar_high_5 - baseline) / baseline * 100
+                if rebound_pct_5 > 3:
+                    ar_high = ar_high_5
+                    ar_idx = ar_idx_5
+                    rebound_pct = rebound_pct_5
+                    is_ar = True
 
             return {
                 "detected": is_ar,
                 "sc_date": sc_date,
                 "sc_low": float(sc_low),
                 "ar_date": ar_idx,
-                "date": ar_idx, # 兼容性
-                "price": float(ar_high), # 兼容性
+                "date": ar_idx,
+                "price": float(ar_high),
                 "ar_high": float(ar_high),
                 "rebound_pct": float(rebound_pct),
-                "confidence": min(100, (rebound_pct - 3) * 10) if is_ar else 0
+                "ar_window_bars": 3 if ar_idx in after_sc.head(3).index else 5,
+                "confidence": min(100, max(0, (rebound_pct - 1) * 12)) if is_ar else 0
             }
         except (KeyError, ValueError, TypeError) as e:
             logger.exception(f"AR检测失败: {e}")
@@ -754,20 +782,8 @@ class WyckoffPatternDetector:
         return True, "PS与SC时序一致"
 
     def _parse_date(self, date_val):
-        """
-        解析日期为Timestamp，统一转换为tz-naive以避免比较错误
-        """
-        if date_val is None:
-            return None
-        if isinstance(date_val, pd.Timestamp):
-            # 转换为tz-naive以避免时区比较问题
-            return date_val.tz_localize(None) if date_val.tzinfo is not None else date_val
-        try:
-            dt = pd.to_datetime(date_val)
-            # 转换为tz-naive
-            return dt.tz_localize(None) if hasattr(dt, 'tzinfo') and dt.tzinfo is not None else dt
-        except Exception:
-            return None
+        """统一日期解析 — 委托至共享 TypeConverter"""
+        return TypeConverter.parse_date_naive(date_val)
 
     def analyze_phase_a_evidence(self) -> Dict:
         """
@@ -788,40 +804,30 @@ class WyckoffPatternDetector:
             def _check_detected(res: dict, required_fields: list) -> bool:
                 return bool(res.get("detected")) and all(k in res for k in required_fields)
 
-            #  修复：只有在PS/SC时序有效时，才计入PS和SC
+            #  修复：PS 和 SC 独立检测，时序验证作为质量修正而非开关
+            # 威科夫理论：PS 和 SC 是独立事件，时序异常时各自仍可能有效
             checks = []
 
-            # PS：只有在PS/SC时序有效时才计入
-            if ps_sc_valid:
-                checks.append({
-                    'id': 'PS',
-                    'detected': _check_detected(ps_res, ['ps_price']),
-                    'weight': 1,
-                    'note': 'PS与SC时序一致'
-                })
-            else:
-                checks.append({
-                    'id': 'PS',
-                    'detected': False,
-                    'weight': 1,
-                    'note': ps_sc_reason
-                })
+            ps_detected = _check_detected(ps_res, ['ps_price'])
+            sc_detected = _check_detected(sc_res, ['date', 'price', 'volume_ratio'])
 
-            # SC：只有在PS/SC时序有效时才计入
-            if ps_sc_valid:
-                checks.append({
-                    'id': 'SC',
-                    'detected': _check_detected(sc_res, ['date', 'price', 'volume_ratio']),
-                    'weight': 2,
-                    'note': 'SC与PS时序一致'
-                })
-            else:
-                checks.append({
-                    'id': 'SC',
-                    'detected': False,
-                    'weight': 2,
-                    'note': ps_sc_reason
-                })
+            # PS：独立检测，时序验证影响权重而非否决
+            checks.append({
+                'id': 'PS',
+                'detected': ps_detected,
+                'weight': 2 if ps_sc_valid else 1,  # 时序有效则权重加倍
+                'note': 'PS与SC时序一致' if ps_sc_valid and ps_detected else
+                        ('PS已检测到（时序异常）' if ps_detected else ps_sc_reason)
+            })
+
+            # SC：独立检测，时序验证影响权重而非否决
+            checks.append({
+                'id': 'SC',
+                'detected': sc_detected,
+                'weight': 3 if ps_sc_valid else 2,  # 时序有效则权重更高
+                'note': 'SC与PS时序一致' if ps_sc_valid and sc_detected else
+                        ('SC已检测到（时序异常）' if sc_detected else ps_sc_reason)
+            })
 
             # AR和ST：独立验证
             checks.append({

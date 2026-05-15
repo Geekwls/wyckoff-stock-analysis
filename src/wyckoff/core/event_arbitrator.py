@@ -495,22 +495,11 @@ class EventArbitrator:
         return max(adjustment, 0.5)  # 最低不低于0.5
 
     def _parse_date(self, date_val: Any) -> Optional[datetime]:
-        """解析日期"""
-        if date_val is None:
-            return None
-
-        if isinstance(date_val, datetime):
-            return date_val
-
-        if isinstance(date_val, pd.Timestamp):
-            return date_val.to_pydatetime()
-
-        if isinstance(date_val, str):
-            try:
-                return pd.to_datetime(date_val).to_pydatetime()
-            except Exception:
-                return None
-
+        """统一日期解析 — 委托至共享 TypeConverter"""
+        from .utils import TypeConverter
+        ts = TypeConverter.parse_date_naive(date_val)
+        if ts is not None:
+            return ts.to_pydatetime()
         return None
 
     def get_arbitration_summary(self, result: ArbitrationResult) -> str:

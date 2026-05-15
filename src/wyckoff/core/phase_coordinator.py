@@ -129,10 +129,13 @@ class PhaseCoordinator:
         sow_res = self.detector.detect_sow()
 
         tr_res = self.detector.detect_trading_range()
-        lps_res = self.detector.detect_lps(sos_res, spring_res)
+        lps_res = self.detector.detect_lps(sos_res, spring_res, trading_range=tr_res)
         lpsy_res = self.detector.detect_lpsy(trading_range=tr_res)
         joc_res = self.detector.detect_joc()
         fti_res = self.detector.detect_fti()
+
+        #  UTAD 检测：仅在派发阶段或价格高位时触发
+        utad_res = self.detector.detect_utad()
 
         # 5. 运行事件序列验证（在原始dict上，模型封装前）
         raw_events = {
@@ -148,6 +151,7 @@ class PhaseCoordinator:
             "lpsy": lpsy_res,
             "joc": joc_res,
             "fti": fti_res,
+            "utad": utad_res,
         }
         sequence_validation = SequenceValidator(raw_events, self.detector.data).validate_all()
 
@@ -175,6 +179,7 @@ class PhaseCoordinator:
             'secondary_test': st_res,
             'automatic_reaction': ar_res,
             'preliminary_support': ps_res,
+            'utad': utad_res,
         }
         # 5.6. 分析突破质量（在tr_res和trading_range创建后调用）
         trading_range_model = _safe_model(TradingRangeModel, tr_res)
@@ -210,6 +215,23 @@ class PhaseCoordinator:
             events['sos_sow'] = {'_type': 'sos', 'data': SosModel(**sos_res)}
         elif sow_res.get('detected'):
             events['sos_sow'] = {'_type': 'sow', 'data': SowModel(**sow_res)}
+
+        # 6.6. 应用 Phase 转换标准（孟洪涛《新威科夫操盘法》Phase A→B→C→D→E）
+        # 打通此前未接入主线的 transition_phase_with_criteria 逻辑
+        if preliminary_phase and 'Unknown' not in preliminary_phase:
+            transitioned_phase, trans_confidence = self.transition_phase_with_criteria(preliminary_phase, events)
+            if transitioned_phase != preliminary_phase:
+                logger.info(
+                    f"[Phase Transition] {preliminary_phase} → {transitioned_phase} "
+                    f"(置信度: {trans_confidence:.2f})"
+                )
+                events.setdefault('phase_revision_log', []).append(
+                    f"[Phase Transition] {preliminary_phase} → {transitioned_phase} (置信度:{trans_confidence:.0%})"
+                )
+                preliminary_phase = transitioned_phase
+
+        # 6.7. 将最终阶段传播到所有子检测器
+        self.detector._update_all_detectors_context(preliminary_phase)
 
         # 7. 执行证伪验证（考虑仲裁结果和突破分析）
         final_phase, revision_logs = self.validate_phase_consistency(
@@ -293,12 +315,37 @@ class PhaseCoordinator:
 
 
     def _replace_phase_type(self, phase: Optional[str], new_type: str) -> str:
-        """替换阶段类型（保持 Phase X 部分）"""
+        """替换阶段类型或阶段字母。
+
+        根据 new_type 判断操作：
+        - new_type='Phase X' → 替换 Phase 字母（保留前缀类型 Accumulation/Distribution）
+        - new_type='Accumulation'/'Distribution' → 替换前缀类型（保留 Phase 字母）
+        """
         if not phase or 'Phase' not in phase:
             return f"{new_type} Unknown"
+
         parts = phase.split()
-        phase_letter = parts[-1]
-        return f"{new_type} Phase {phase_letter}"
+        # 定位 'Phase' 关键词
+        phase_idx = next((i for i, p in enumerate(parts) if p == 'Phase'), None)
+        if phase_idx is None:
+            return f"{new_type} Unknown"
+
+        phase_type = parts[0]  # Accumulation / Distribution / Markup / Markdown / Trending
+        phase_letter = parts[phase_idx + 1] if phase_idx + 1 < len(parts) else ''
+        description = ' '.join(parts[phase_idx + 2:])  # 括号中的描述部分
+
+        if new_type.startswith('Phase'):
+            # 替换 Phase 字母：e.g. "Accumulation Phase A (desc)" → "Accumulation Phase C (desc)"
+            result = f"{phase_type} {new_type}"
+            if description:
+                result += f" {description}"
+            return result
+        else:
+            # 替换类型名：e.g. "Accumulation Phase A (desc)" → "Distribution Phase A (desc)"
+            result = f"{new_type} Phase {phase_letter}"
+            if description:
+                result += f" {description}"
+            return result
 
     def transition_phase_with_criteria(self, current_phase: str, events: Dict) -> Tuple[str, float]:
         """
@@ -397,19 +444,17 @@ class PhaseCoordinator:
     def _identify_initial_phase(self, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """识别初始阶段"""
         climax_res = events.get('climax', {})
-        ar_res = events.get('automatic_reaction', {})
-        st_res = events.get('secondary_test', {})
+        spring_res = events.get('spring_upthrust', {})
 
         # 检查Phase A
         if self._has_complete_phase_a(events):
-            if climax_res.get('type') == 'selling_climax':
+            if self._event_get(climax_res, 'type') == 'selling_climax':
                 return 'Accumulation Phase A', 0.7
-            elif climax_res.get('type') == 'buying_climax':
+            elif self._event_get(climax_res, 'type') == 'buying_climax':
                 return 'Distribution Phase A', 0.7
 
         # 检查Spring/Upthrust直接进入Phase C
-        spring_res = events.get('spring_upthrust', {})
-        if spring_res.get('detected'):
+        if spring_res and isinstance(spring_res, dict):
             if spring_res.get('_type') == 'spring':
                 return 'Accumulation Phase C', 0.8
             elif spring_res.get('_type') == 'upthrust':
@@ -417,25 +462,76 @@ class PhaseCoordinator:
 
         return 'Unknown', 0.5
 
+    @staticmethod
+    def _event_detected(obj) -> bool:
+        """兼容 Pydantic Model 和 dict 的 detected 字段读取"""
+        if isinstance(obj, dict):
+            return obj.get('detected', False)
+        return getattr(obj, 'detected', False)
+
+    @staticmethod
+    def _event_get(obj, key: str, default=None):
+        """兼容 Pydantic Model 和 dict 的通用字段读取"""
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
     def _has_complete_phase_a(self, events: Dict) -> bool:
         """检查是否有完整的Phase A结构（SC/AR + ST）"""
         climax_res = events.get('climax', {})
         ar_res = events.get('automatic_reaction', {})
         st_res = events.get('secondary_test', {})
 
-        has_climax = climax_res.get('detected', False)
-        has_ar = ar_res.get('detected', False)
-        has_st = st_res.get('detected', False)
+        has_climax = self._event_detected(climax_res)
+        has_ar = self._event_detected(ar_res)
+        has_st = self._event_detected(st_res)
 
         return has_climax and (has_ar or has_st)
 
     def _calculate_consolidation_duration(self, events: Dict) -> int:
-        """计算震荡持续时间"""
-        # 尝试从数据中计算实际震荡时间
+        """计算震荡持续时间（从 ST 完成后开始计数）
+
+        威科夫理论：震荡期应从 Phase A 结构完成后（SC/BC → AR → ST 序列结束）
+        开始计算，而非包含 SC 之前的下跌段。这符合孟洪涛书中
+        "Phase A 确认 → Phase B 震荡测试"的时序。
+        """
         try:
             if hasattr(self.detector, 'data') and self.detector.data is not None:
                 df = self.detector.data
-                # 简单计算：在TR内的天数
+
+                # 优先从 ST 日期开始计算
+                st = events.get('secondary_test', {})
+                if self._event_detected(st):
+                    st_date = self._event_get(st, 'date')
+                    if st_date is not None:
+                        df_after_st = df[df.index >= pd.Timestamp(st_date)]
+                        tr = self.detector.detect_trading_range()
+                        if tr and 'low' in tr and 'high' in tr:
+                            in_tr = df_after_st[
+                                (df_after_st['Close'] >= tr['low']) &
+                                (df_after_st['Close'] <= tr['high'])
+                            ]
+                            days = len(in_tr)
+                            if days >= 5:
+                                return days
+
+                # 降级：从 AR 日期开始
+                ar = events.get('automatic_reaction', {})
+                if isinstance(ar, dict) and ar.get('detected'):
+                    ar_date = ar.get('date')
+                    if ar_date is not None:
+                        df_after_ar = df[df.index >= pd.Timestamp(ar_date)]
+                        tr = self.detector.detect_trading_range()
+                        if tr and 'low' in tr and 'high' in tr:
+                            in_tr = df_after_ar[
+                                (df_after_ar['Close'] >= tr['low']) &
+                                (df_after_ar['Close'] <= tr['high'])
+                            ]
+                            days = len(in_tr)
+                            if days >= 5:
+                                return days
+
+                # 兜底：全区间计数
                 tr = self.detector.detect_trading_range()
                 if tr and 'low' in tr and 'high' in tr:
                     in_tr = df[
@@ -445,21 +541,19 @@ class PhaseCoordinator:
                     return len(in_tr)
         except Exception as e:
             logger.debug(f"Failed to calculate consolidation duration: {e}")
-            pass
 
-        # 备用估算
         return 30
 
     def _check_phase_triggers(self, events: Dict, trigger_types: List[str]) -> bool:
         """检查Phase转换触发信号"""
         for trigger_type in trigger_types:
             if trigger_type == 'spring':
-                event = events.get('spring_upthrust', {})
-                if event.get('detected') and event.get('_type') == 'spring':
+                event = events.get('spring_upthrust')
+                if event and isinstance(event, dict) and event.get('_type') == 'spring':
                     return True
             elif trigger_type == 'upthrust':
-                event = events.get('spring_upthrust', {})
-                if event.get('detected') and event.get('_type') == 'upthrust':
+                event = events.get('spring_upthrust')
+                if event and isinstance(event, dict) and event.get('_type') == 'upthrust':
                     return True
             elif trigger_type == 'sos':
                 event = events.get('sos_sow', {})
@@ -471,13 +565,13 @@ class PhaseCoordinator:
                     return True
             elif trigger_type == 'lps':
                 event = events.get('lps_lpsy', {})
-                lps = event.get('lps', {})
-                if lps.get('detected'):
+                lps = event.get('lps', {}) if isinstance(event, dict) else {}
+                if self._event_detected(lps):
                     return True
             elif trigger_type == 'lpsy':
                 event = events.get('lps_lpsy', {})
-                lpsy = event.get('lpsy', {})
-                if lpsy.get('detected'):
+                lpsy = event.get('lpsy', {}) if isinstance(event, dict) else {}
+                if self._event_detected(lpsy):
                     return True
             elif trigger_type == 'joc':
                 # 需要单独检查JOC
@@ -765,7 +859,10 @@ class PhaseTransitionCriteria:
     A_TO_B_COMPLETE_STRUCTURE = True  # 必须有完整SC/AR/ST
 
     # Phase B → C 转换标准
-    B_TO_C_SIGNALS = ['spring', 'upthrust', 'sos', 'sow']
+    # 威科夫理论：B→C 的触发信号因方向而异
+    # - 吸筹 B→C：Spring（震仓）或 SOS（强势突破） → Phase C/D
+    # - 派发 B→C：Upthrust（诱多）或 SOW（弱势信号） → Phase C/D
+    B_TO_C_SIGNALS = ['spring', 'upthrust']
 
     # Phase C → D 转换标准
     C_TO_D_SIGNALS = ['lps', 'lpsy', 'joc', 'fti']
