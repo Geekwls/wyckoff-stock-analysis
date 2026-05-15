@@ -166,7 +166,7 @@ class ReversalDetector(BaseDetector):
             return {'detected': False}
 
         climax_date = climax_res['date']
-        df_after = self.data[self.data.index > climax_date].head(20)
+        df_after = self.data[self.data.index > climax_date].head(3)
         if len(df_after) == 0:
             return {'detected': False}
 

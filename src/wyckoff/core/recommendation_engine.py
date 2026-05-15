@@ -285,6 +285,18 @@ class RecommendationEngine:
             skip_conflict_penalty = True
             reasons.append("🎯 发现“死角突破”信号！从枯燥区放量跃起，极具爆发力，豁免历史冲突惩罚")
 
+        # SOS/Upthrust 交叉验证（模糊区间）
+        has_sos = 'sos' in detected_keys
+        has_upthrust = 'upthrust' in detected_keys
+        if has_sos and has_upthrust and not skip_conflict_penalty:
+            is_uncertain = market_env in (MarketEnvironment.NEUTRAL, MarketEnvironment.MIXED)
+            if is_uncertain:
+                base_score -= 15
+                reasons.append("模糊区间内SOS与Upthrust同时出现，信号冲突 (-15分)")
+            else:
+                base_score -= 8
+                reasons.append("SOS与Upthrust信号冲突 (-8分)")
+
         # --- 冲突惩罚 (v2.1校准) ---
         if bullish_count > 0 and bearish_count > 0 and not skip_conflict_penalty:
             phase_str = pattern_results.get('phase', 'Unknown')
@@ -775,6 +787,27 @@ class RecommendationEngine:
         sot_detected, sot_desc = RecommendationEngine._detect_sot(data, direction)
         if sot_detected:
             exit_signals.append(sot_desc)
+
+        # 4. UTAD (终极推力) 检测 — Phase E 耗尽信号
+        raw_events = pattern_results.get('_raw_events', {})
+        utad = raw_events.get('utad', {})
+        utad_detected = utad.get('detected', False) if isinstance(utad, dict) else False
+        if utad_detected:
+            utad_type = utad.get('type', '')
+            if direction == '做多' and utad_type == 'buying_climax':
+                exit_signals.append("检测到UTAD(买入高潮)：最后的追高需求，上升动能耗尽，建议止盈")
+            elif direction == '做空' and utad_type == 'selling_climax':
+                exit_signals.append("检测到UTAD(抛售高潮)：最后的恐慌供应，下跌动能耗尽，建议止盈")
+
+        # 5. LPSY/PSY 检测 — Phase A 反转信号
+        lps_lpsy = pattern_results.get('lps_lpsy', {})
+        lpsy = lps_lpsy.get('lpsy', {}) if isinstance(lps_lpsy, dict) else {}
+        if lpsy.get('detected', False):
+            exit_signals.append("检测到LPSY(最后供应点)：供应重新出现，趋势面临反转风险，建议减仓")
+        ps = raw_events.get('preliminary_support', {})
+        ps_detected = ps.get('detected', False) if isinstance(ps, dict) else False
+        if direction == '做空' and ps_detected:
+            exit_signals.append("检测到PSY(初次支撑)：需求开始进入，下跌趋势可能终结，建议止盈")
 
         return {
             'exit_signals': exit_signals,
