@@ -48,12 +48,12 @@ class WyckoffReportGenerator:
         spring = self.pattern_detector.detect_spring_menhongtao()
         upthrust = self.pattern_detector.detect_upthrust()
         sos = self.pattern_detector.detect_sos()
-        # 🔧 修复：传递trading_range参数给SOW检测
+        #  修复：传递trading_range参数给SOW检测
         sow = self.pattern_detector.detect_sow(trading_range=trading_range)
         lps = self.pattern_detector.detect_lps()
         lpsy = self.pattern_detector.detect_lpsy()
 
-        # 🔧 新增：SOS-SOW矛盾分析
+        #  新增：SOS-SOW矛盾分析
         sos_sow_analysis = None
         if sos.get('detected') and sow.get('detected'):
             from .sos_sow_analyzer import SOSSOWAnalyzer
@@ -84,7 +84,7 @@ class WyckoffReportGenerator:
         mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
         conflict = self._analyze_conflict(phase_result.get('phase'), mtf)
 
-        # 🔧 终极逻辑自检 (Final Sanity Check): 解决"诊断与处方打架"问题
+        #  终极逻辑自检 (Final Sanity Check): 解决"诊断与处方打架"问题
         is_distribution = 'Distribution' in phase_result.get('phase', '')
 
         # 获取事件仲裁结果和突破分析（在组装报告前）
@@ -98,7 +98,7 @@ class WyckoffReportGenerator:
         except Exception as e:
             logger.debug(f"Failed to get arbitration/breakout analysis: {e}")
 
-        # 🔧 修复：检查突破覆盖规则 - 如果有向上突破，覆盖派发判断
+        #  修复：检查突破覆盖规则 - 如果有向上突破，覆盖派发判断
         should_suppress_bullish = is_distribution
         if is_distribution and breakout_analysis:
             is_broken = trading_range.get('is_broken', False) if isinstance(trading_range, dict) else getattr(trading_range, 'is_broken', False)
@@ -128,7 +128,7 @@ class WyckoffReportGenerator:
             phase_result, trading_range, cause_effect, conflict, quality_data,
             joc, spring, sos, lps, fti, upthrust, sow, lpsy, mtf,
             boring_res, dead_corner, market_env, arbitration_result, breakout_analysis,
-            sos_sow_analysis  # 🔧 新增：传递SOS-SOW分析结果
+            sos_sow_analysis  #  新增：传递SOS-SOW分析结果
         )
         
         return report
@@ -148,7 +148,7 @@ class WyckoffReportGenerator:
         spring = self.pattern_detector.detect_spring_menhongtao()
         upthrust = self.pattern_detector.detect_upthrust()
         sos = self.pattern_detector.detect_sos()
-        # 🔧 修复：传递trading_range参数给SOW检测
+        #  修复：传递trading_range参数给SOW检测
         sow = self.pattern_detector.detect_sow(trading_range=trading_range)
         lps = self.pattern_detector.detect_lps()
         lpsy = self.pattern_detector.detect_lpsy()

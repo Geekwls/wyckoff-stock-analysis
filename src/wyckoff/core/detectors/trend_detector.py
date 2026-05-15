@@ -31,7 +31,7 @@ class TrendDetector(BaseDetector):
         tr_window = min(60, len(df))
         tr_data = df.tail(tr_window)
 
-        # ✅ 缺隗6修复：Creek水位优先使用传入的TR上沿，防止随价格漂移
+        #  缺隗6修复：Creek水位优先使用传入的TR上沿，防止随价格漂移
         if trading_range and trading_range.get('high', 0) > 0:
             # TR上沿是Weis定义的“小溪”(Creek)正确边界
             creek_level = float(trading_range['high'])
@@ -138,7 +138,7 @@ class TrendDetector(BaseDetector):
 
     def _classify_joc_strength(self, joc_signal: dict) -> dict:
         has_test, test_depth, test_count = joc_signal.get('test_detected', False), joc_signal.get('test_depth_pct', 0), joc_signal.get('test_count', 0)
-        # ✅ 缺隗7修复：Weis强调BUEC缩量回测才是高质量确认。无回测不代表“更强势”而是“尚未确认”
+        #  缺隗7修复：Weis强调BUEC缩量回测才是高质量确认。无回测不代表“更强势”而是“尚未确认”
         if not has_test:
             return {
                 'strength': 'JOC_UNCONFIRMED',

@@ -43,7 +43,7 @@ class WyckoffThresholds(BaseModel):
     SOW_PRICE_CHANGE_DEFAULT: float = Field(-0.02)
     
     # ── 成交量确认阈值 ──────────────────────────────────────
-    # 🔧 修复 P0-1: BC/SC 需要 true 巨量确认（量比 2.5+），避免低量比突破被误判
+    #  修复 P0-1: BC/SC 需要 true 巨量确认（量比 2.5+），避免低量比突破被误判
     VOLUME_CONFIRMATION: Dict[str, float] = Field(
         default={
             'strong': 2.5,      # BC/SC: 真正的买入/抛售高潮需要 2.5x+ 巨量
@@ -182,7 +182,7 @@ class WyckoffConfig(BaseModel):
     atr_multiplier: float = Field(1.5, ge=0.5, le=5.0)
     volume_ma_period: int = Field(20, ge=5, le=100)
 
-    # 🔧 v1.3新增：动态阈值系统
+    #  v1.3新增：动态阈值系统
     enable_adaptive_thresholds: bool = Field(True, description="启用动态阈值自适应系统")
     adaptive_thresholds_atr_period: int = Field(14, ge=5, le=50, description="动态阈值ATR计算周期")
     

@@ -38,7 +38,7 @@ class MengVsaDetector(BaseDetector):
             if pr <= 0: continue
             body_pct, vol_r = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / pr, df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
             
-            # 🔧 修复#6a: No Supply 检测 - 量比<0.5，收盘位置>60%
+            #  修复#6a: No Supply 检测 - 量比<0.5，收盘位置>60%
             if df['Close'].iloc[i] > df.get('MA20', df['Close'].rolling(20).mean()).iloc[i]:
                 if body_pct < t.MENG_VSA_BODY_RATIO:
                     cp = (df['Close'].iloc[i] - df['Low'].iloc[i]) / pr
@@ -46,7 +46,7 @@ class MengVsaDetector(BaseDetector):
                     if cp > 0.6 and vol_r < 0.5:
                         ns.append({"date": df.index[i], "vol_ratio": round(vol_r, 2), "close_position": round(cp * 100, 1)})
             
-            # 🔧 修复#6b: No Demand 检测 - 添加位置约束和趋势判断
+            #  修复#6b: No Demand 检测 - 添加位置约束和趋势判断
             if df['Close'].iloc[i] < df.get('MA20', df['Close'].rolling(20).mean()).iloc[i]:
                 if body_pct < 0.3 and vol_r < 0.5:
                     cp = (df['Close'].iloc[i] - df['Low'].iloc[i]) / pr
@@ -54,7 +54,7 @@ class MengVsaDetector(BaseDetector):
                     if cp < 0.4:
                         nd.append({"date": df.index[i], "vol_ratio": round(vol_r, 2), "close_position": round(cp * 100, 1)})
             
-            # 🔧 修复#6c: Stopping Volume 检测 - 量比>2.0
+            #  修复#6c: Stopping Volume 检测 - 量比>2.0
             if df['Close'].iloc[i] < df.get('MA50', df['Close'].rolling(50).mean()).iloc[i]:
                 # 孟洪涛要求：成交量显著放大（>2.0 倍）
                 if vol_r > 2.0 and (abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / pr < 0.3):

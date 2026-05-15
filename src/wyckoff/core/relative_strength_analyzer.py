@@ -39,7 +39,7 @@ class RelativeStrengthAnalyzer:
 
             rs_change_20d = (rs.iloc[-1] / rs.iloc[-20] - 1) * 100 if len(rs) >= 20 else 0
 
-            # 🔧 问题三修复：检测RS异常值
+            #  问题三修复：检测RS异常值
             # 对于成熟股票，20日RS变化超过±30%极其罕见
             # 可能原因：除权除息未调整、数据断点、极端行情
             rs_anomaly_warning = None

@@ -34,7 +34,7 @@ class EffortResultMixin:
                 continue
             recent_df = df.tail(days)
 
-            # ✅ 缺隗8修复：Weis的“努力”是整个波段的累加量，不是末根K线量
+            #  缺隗8修复：Weis的“努力”是整个波段的累加量，不是末根K线量
             # 改用窗口内总量 vs 历史同等长度窗口均量进行比较
             recent_total_vol = recent_df['Volume'].sum()
             hist_vol_data = df.tail(days * 4)

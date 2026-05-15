@@ -56,7 +56,7 @@ class SupplyDemandMixin:
                 stage = "Phase B-C (积累震荡)"
                 supply_demand_balance = "供求平衡，主力吸筹中"
             else:
-                # ✅ 缺陷11修复：加入趋势过滤，避免在下跌趋势中错误归类为 Phase A
+                #  缺陷11修复：加入趋势过滤，避免在下跌趋势中错误归类为 Phase A
                 _df = self.data
                 _recent_high = _df['High'].tail(30).max()
                 _current_price = _df['Close'].iloc[-1]
@@ -175,7 +175,7 @@ class SupplyDemandMixin:
         avg_down_vol = down_days['Volume'].mean()
         vol_ratio = avg_up_vol / avg_down_vol if avg_down_vol > 0 else 1.0
 
-        # ✅ 缺陗10修复：加入价差(spread)同向分析
+        #  缺陗10修复：加入价差(spread)同向分析
         # 真正的吸筎：上涨日量大且价差大（需求主导）+ 下跌日量小且价差小（供应耗尽）
         avg_up_spread = (up_days['High'] - up_days['Low']).mean() if len(up_days) > 0 else 1.0
         avg_down_spread = (down_days['High'] - down_days['Low']).mean() if len(down_days) > 0 else 1.0

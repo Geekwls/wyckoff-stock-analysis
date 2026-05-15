@@ -130,7 +130,7 @@ class TradingRangeDetector(BaseDetector):
         below_range = current_price < low * (1 - breakout_margin)
         is_broken = above_range or below_range
         
-        # 🔧 修复：如果 TR 已失效，强制标记为 EXPIRED
+        #  修复：如果 TR 已失效，强制标记为 EXPIRED
         if is_broken:
             is_consolidation = False
             method = f"{method} (EXPIRED)"

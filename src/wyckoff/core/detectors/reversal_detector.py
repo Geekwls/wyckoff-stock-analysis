@@ -222,7 +222,7 @@ class ReversalDetector(BaseDetector):
         climax_vol = climax_res.get('volume', 0)
         is_sc = climax_res['type'] == 'selling_climax'
 
-        # ✅ 缺陷5修复：ST价格容差改为固定5%（不再复用JOC参数）并加入下影线支撑验证
+        #  缺陷5修复：ST价格容差改为固定5%（不再复用JOC参数）并加入下影线支撑验证
         ST_PRICE_BAND = 0.05  # ST容差固定5%：Weis强调的是缩量而非绝对价格接近
 
         # 收集所有符合条件的ST (支持多次二次测试)
@@ -237,7 +237,7 @@ class ReversalDetector(BaseDetector):
 
             vol_test = row['Volume'] < climax_vol * self.thresholds.VOLUME_CONFIRMATION['weak']
 
-            # ✅ 缺陷5修复：验证K线有下影线支撑（收盘位置 > 最低点1/3）
+            #  缺陷5修复：验证K线有下影线支撑（收盘位置 > 最低点1/3）
             candle_range = max(row['High'] - row['Low'], 1e-9)
             close_pct = (row['Close'] - row['Low']) / candle_range
             has_lower_shadow_support = close_pct > 0.33 if is_sc else close_pct < 0.67
@@ -292,7 +292,7 @@ class ReversalDetector(BaseDetector):
     # --- Spring & Upthrust ---
     def detect_spring(self, lookback: int = None, trading_range: dict = None) -> Dict:
         lookback = lookback or self.config.spring_lookback
-        # ✅ 缺陷3修复：传入TR时绕过缓存直接调用，防止旧缓存污染TR感知的支撑位计算
+        #  缺陷3修复：传入TR时绕过缓存直接调用，防止旧缓存污染TR感知的支撑位计算
         if trading_range:
             return self._detect_spring_impl(lookback, trading_range=trading_range)
         cache_key = f"spring_{lookback}"
@@ -305,12 +305,12 @@ class ReversalDetector(BaseDetector):
             return {'detected': False, 'reason': 'insufficient_data'}
         if PhaseAdapter.is_distribution(self._current_phase):
             return {'detected': False, 'reason': 'distribution_phase_no_spring'}
-        # ✅ 缺陷3修复：在明确下跌趋势中（Markdown）禁止误检Spring
+        #  缺陷3修复：在明确下跌趋势中（Markdown）禁止误检Spring
         if 'Markdown' in str(self._current_phase):
             return {'detected': False, 'reason': 'markdown_phase_no_spring_without_confirmed_tr'}
 
         df = self.data.tail(lookback).copy()
-        # ✅ 缺陷3修复：支撑位优先使用TR下沿
+        #  缺陷3修复：支撑位优先使用TR下沿
         support = self._calculate_support_level_spring(df, trading_range_low=trading_range.get('low') if trading_range else None)
         if support is None:
             return {'detected': False, 'reason': 'no_trading_range'}
@@ -345,7 +345,7 @@ class ReversalDetector(BaseDetector):
         return {'detected': False, 'reason': 'no_spring_found'}
 
     def _calculate_support_level_spring(self, df: pd.DataFrame, trading_range_low: float = None) -> Optional[float]:
-        # ✅ 缺陷3修复：优先使用确认的TR下沿作为Spring支撑位
+        #  缺陷3修复：优先使用确认的TR下沿作为Spring支撑位
         if trading_range_low is not None and trading_range_low > 0:
             return round(float(trading_range_low), 2)
         if len(df) < 20: return None
@@ -431,7 +431,7 @@ class ReversalDetector(BaseDetector):
 
             if is_valid:
                 springs.append({
-                    # ✅ 缺陷4修复：向量化路径补全 date 字段，防止下游时序分析拿到 None
+                    #  缺陷4修复：向量化路径补全 date 字段，防止下游时序分析拿到 None
                     'date': recent.index[nxt_idx],
                     'breakdown_date': recent.index[cur_idx],
                     'breakdown_price': {
@@ -549,7 +549,7 @@ class ReversalDetector(BaseDetector):
 
         mean_vol = df['Volume'].mean()
 
-        # 🔧 修复 P1-2: 检测市场环境，用于动态调整 UT 分类
+        #  修复 P1-2: 检测市场环境，用于动态调整 UT 分类
         market_env = self._detect_market_environment()
 
         for b_idx in breakout_indices[-3:]:
@@ -568,7 +568,7 @@ class ReversalDetector(BaseDetector):
                     follow_through = df[df.index > r_idx].head(3)
                     ft_quality = (follow_through['Low'] < df.loc[r_idx, 'Low']).sum() / len(follow_through) * 100 if len(follow_through) > 0 else 0
 
-                    # 🔧 修复 P1-2: 使用市场环境加权的 UT 分类
+                    #  修复 P1-2: 使用市场环境加权的 UT 分类
                     upthrust_type, is_valid, needs_secondary_test, ut_note = self._classify_upthrust_with_context(
                         breakout_vol_ratio, penetration_depth, market_env
                     )
@@ -588,7 +588,7 @@ class ReversalDetector(BaseDetector):
                         'upthrust_type': upthrust_type,
                         'needs_secondary_test': needs_secondary_test,
                         'is_valid': is_valid,
-                        'market_environment': market_env,  # 🔧 新增：记录市场环境
-                        'classification_note': ut_note  # 🔧 新增：分类说明
+                        'market_environment': market_env,  #  新增：记录市场环境
+                        'classification_note': ut_note  #  新增：分类说明
                     })
         return upthrusts

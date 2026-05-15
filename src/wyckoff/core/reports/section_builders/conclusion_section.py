@@ -19,11 +19,11 @@ class ConclusionSection(BaseSectionBuilder):
 
         report = ""
 
-        # 🔧 新增：计算健康回测区间（用于后续推荐）
+        #  新增：计算健康回测区间（用于后续推荐）
         retest_zone = None
         if trading_range and trading_range.get('is_broken'):
             breakout_level = self._get_tr_value(trading_range, 'high', current_price * 0.9)
-            # 🔧 修复：LPS返回结构中price字段在latest里
+            #  修复：LPS返回结构中price字段在latest里
             lps_price = 0
             if lps:
                 latest = lps.get('latest', {}) if isinstance(lps, dict) else lps
@@ -38,11 +38,11 @@ class ConclusionSection(BaseSectionBuilder):
         if sos_sow_analysis and sos_sow_analysis.get('has_conflict'):
             report += SOSSOWAnalyzer.format_conflict_report(sos_sow_analysis)
 
-        # 🔧 新增：TR突破后的重新评估
+        #  新增：TR突破后的重新评估
         if trading_range and trading_range.get('is_broken'):
             report += self._build_tr_breakdown_reassessment(trading_range, phase_result, breakout_analysis)
 
-            # 🔧 新增：显示突破质量分析
+            #  新增：显示突破质量分析
             if breakout_analysis and breakout_analysis.get('is_breakout'):
                 report += self._build_breakout_quality_section(breakout_analysis, trading_range)
 
@@ -69,7 +69,7 @@ class ConclusionSection(BaseSectionBuilder):
         
         post_breakout = self._check_post_breakout_state(trading_range, joc, current_price)
 
-        # 🔧 修复矛盾三：检查突破覆盖 - 向上突破应该否决派发判断
+        #  修复矛盾三：检查突破覆盖 - 向上突破应该否决派发判断
         breakout_override = False
         if breakout_analysis and trading_range:
             is_broken = False
@@ -86,7 +86,7 @@ class ConclusionSection(BaseSectionBuilder):
                     breakout_override = True
                     logger.info(f"Conclusion: Using breakout override - upward breakout negates Distribution phase")
 
-        # 🔧 基于高时间框架优先原则的仲裁逻辑
+        #  基于高时间框架优先原则的仲裁逻辑
         is_weekly_bullish = conflict.get('weekly_trend') == 'bullish'
         # 安全地检查fti是否为模型对象或dict
         fti_detected = False
@@ -97,7 +97,7 @@ class ConclusionSection(BaseSectionBuilder):
                 fti_detected = fti.get('detected', False)
         is_daily_bearish = ('Distribution' in phase_str or 'Markdown' in phase_str or fti_detected) and not breakout_override
 
-        # 🔧 新增：检查SOW信号，判断区间是否被破坏
+        #  新增：检查SOW信号，判断区间是否被破坏
         sow_detected = False
         sow_broke_tr = False
         if sow is not None:
@@ -154,7 +154,7 @@ class ConclusionSection(BaseSectionBuilder):
             return report
 
         if conflict.get('has_conflict') and is_weekly_bullish and is_daily_bearish:
-            # 🔧 修复：严格派发逻辑 - 绝不在派发阶段建议做多
+            #  修复：严格派发逻辑 - 绝不在派发阶段建议做多
             if ('Distribution' in phase_str or '派发' in phase_str) and not breakout_override:
                 report += f"""
 ⏸️ 严格观望（派发阶段确认）:
@@ -178,7 +178,7 @@ class ConclusionSection(BaseSectionBuilder):
    当前状态: 日线出现{phase_str}信号，但周/月线大趋势仍然看多。
    建议: 等待日线止跌迹象或跨周期趋势一致后再做决策。
 """
-        # 🔧 新增：优先检查突破质量和JOC测试状态（连接突破质量与交易决策）
+        #  新增：优先检查突破质量和JOC测试状态（连接突破质量与交易决策）
         # 如果有STRONG突破，优先使用突破决策逻辑，即使整体信号质量低
         if breakout_analysis and breakout_analysis.get('is_breakout'):
             # 检查突破质量是否为STRONG
@@ -202,7 +202,7 @@ class ConclusionSection(BaseSectionBuilder):
 
         # 原有逻辑
         if conflict.get('has_conflict') and is_weekly_bullish and is_daily_bearish:
-            # 🔧 修复：严格派发逻辑 - 绝不在派发阶段建议做多
+            #  修复：严格派发逻辑 - 绝不在派发阶段建议做多
             if 'Distribution' in phase_str or '派发' in phase_str:
                 report += f"""
 ⏸️ 严格观望（派发阶段确认）:
@@ -239,7 +239,7 @@ class ConclusionSection(BaseSectionBuilder):
                 target2 = cause_effect.get('targets', {}).get('target_2', current_price * 1.15)
                 report += f"🚀 趋势跟踪买入（JOC 突破确认）:\n   参考入场区间: {joc_entry:.2f} ~ {joc_entry * 1.02:.2f}\n   止损: {joc_entry * 0.96:.2f} | 目标2: {target2:.2f}\n"
             elif lps.get('detected') and not is_distribution:
-                # 🔧 修复：LPS返回结构中price字段在latest里，且需要检查signal_type
+                #  修复：LPS返回结构中price字段在latest里，且需要检查signal_type
                 latest = lps.get('latest', {}) if isinstance(lps, dict) else lps
                 signal_type = latest.get('signal_type', 'unknown') if isinstance(latest, dict) else 'unknown'
                 lp = latest.get('price', current_price) if isinstance(latest, dict) else current_price
@@ -288,7 +288,7 @@ class ConclusionSection(BaseSectionBuilder):
             test_status = joc_test.get('interpretation', 'unknown')
 
             if test_status == 'healthy_test':
-                # ✅ STRONG突破 + 已确认Test of JOC → 做多信号
+                #  STRONG突破 + 已确认Test of JOC → 做多信号
                 test_price = joc_test.get('test_price', 0)
                 report += f"""✅ 强势突破 + 回测确认 → 做多信号:
    【交易路径】
@@ -309,7 +309,7 @@ class ConclusionSection(BaseSectionBuilder):
                 # ⏳ STRONG突破 + 未回测 → 策略选择
                 distance_pct = joc_test.get('current_distance_from_breakout', 0)
 
-                # 🔧 修复：计算策略B的合理止损位（基于次级支撑）
+                #  修复：计算策略B的合理止损位（基于次级支撑）
                 # 威科夫风控原则：止损应基于最近的支撑结构
                 rally_range = current_price - breakout_level
                 secondary_support = current_price - (rally_range * 0.382)  # 斐波那契38.2%回调
@@ -380,7 +380,7 @@ class ConclusionSection(BaseSectionBuilder):
    若选择策略B：必须严格执行{stop_loss_b:.2f}元止损，不可放宽！
 """
             elif test_status == 'approaching_test':
-                # 🔔 正在接近回测区间
+                #  正在接近回测区间
                 target_zone = joc_test.get('target_zone', '')
                 report += f"""🔔 价格接近回测区间，准备入场:
    【当前状态】
@@ -457,7 +457,7 @@ class ConclusionSection(BaseSectionBuilder):
                 quality = breakout_analysis.get('quality', 'unknown')
                 report += f"突破质量：{quality.upper()}（{breakout_analysis.get('quality_score', 0)}/100）\n\n"
 
-            # 🔧 新增：计算并显示健康回测区间
+            #  新增：计算并显示健康回测区间
             breakout_level = tr_high
             lps_price = 0  # We don't have LPS info here, could be passed as parameter
             retest_zone = self._calculate_healthy_retest_zone(current_price, breakout_level, lps_price)
@@ -479,7 +479,7 @@ class ConclusionSection(BaseSectionBuilder):
             report += "3. **策略调整**：\n"
             report += "   ❌ 撤销基于'派发阶段'的所有交易建议\n"
 
-            # 🔧 新增：显示健康回测区间（基于威科夫理论）
+            #  新增：显示健康回测区间（基于威科夫理论）
             if retest_zone:
                 explanation = retest_zone.get('explanation', '')
                 target_range = retest_zone.get('target_range', f"{retest_zone['healthy_low']:.2f} - {retest_zone['healthy_high']:.2f}")
@@ -501,7 +501,7 @@ class ConclusionSection(BaseSectionBuilder):
         elif direction == 'down':
             report += f"原交易区间（{tr_low:.2f}-{tr_high:.2f}）已向下突破\n\n"
 
-            # 🔧 新增：判断当前价格是否反弹回区间内
+            #  新增：判断当前价格是否反弹回区间内
             has_reentered = tr_low < current_price < tr_high
 
             if has_reentered:
@@ -511,7 +511,7 @@ class ConclusionSection(BaseSectionBuilder):
                 if breakout_analysis:
                     quality = breakout_analysis.get('quality', 'unknown')
                     quality_score = breakout_analysis.get('quality_score', 0)
-                    # 🔧 修复：quality_score可能是int或dict
+                    #  修复：quality_score可能是int或dict
                     if isinstance(quality_score, dict):
                         score_val = quality_score.get('score', 0)
                     else:
@@ -564,7 +564,7 @@ class ConclusionSection(BaseSectionBuilder):
                 if breakout_analysis:
                     quality = breakout_analysis.get('quality', 'unknown')
                     quality_score = breakout_analysis.get('quality_score', 0)
-                    # 🔧 修复：quality_score可能是int或dict
+                    #  修复：quality_score可能是int或dict
                     if isinstance(quality_score, dict):
                         score_val = quality_score.get('score', 0)
                     else:
@@ -605,7 +605,7 @@ class ConclusionSection(BaseSectionBuilder):
         if direction == 'up':
             is_upthrust = breakout_analysis.get('is_upthrust', False)
             report += f"突破方向: 向上突破\n"
-            # 🔧 修复：quality_score可能是int或dict
+            #  修复：quality_score可能是int或dict
             if isinstance(quality_score, dict):
                 score_val = quality_score.get('score', 0)
             else:
@@ -639,7 +639,7 @@ class ConclusionSection(BaseSectionBuilder):
 
         elif direction == 'down':
             report += f"突破方向: 向下突破\n"
-            # 🔧 修复：quality_score可能是int或dict
+            #  修复：quality_score可能是int或dict
             if isinstance(quality_score, dict):
                 score_val = quality_score.get('score', 0)
             else:
@@ -677,7 +677,7 @@ class ConclusionSection(BaseSectionBuilder):
         breakout_dir = cause_effect.get('breakout_direction', 'up')
         cause_bars = cause_effect.get('cause_bars', 0)
 
-        # 🔧 修复：根据当前价格位置计算正确的上涨/下跌目标
+        #  修复：根据当前价格位置计算正确的上涨/下跌目标
         if is_above_range or breakout_dir == 'up':
             # 价格在区间上方或向上突破 → 计算上涨目标
             # 使用保守的上涨目标计算（避免base_effect过大导致不合理）
@@ -706,14 +706,14 @@ class ConclusionSection(BaseSectionBuilder):
             t2_down = targets.get('target_2', 0)
             t3_down = targets.get('target_3', 0)
 
-        # 🔧 修改：根据当前价格位置和SOS-SOW分析，决定展示顺序
+        #  修改：根据当前价格位置和SOS-SOW分析，决定展示顺序
         report = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         report += "【📈 因果法则目标预测】\n\n"
 
         # 判断当前状态
         if is_above_range or breakout_dir == 'up':
             # 情景A：当前价格在区间上方或突破方向向上 → 优先显示上涨目标
-            report += "### ✅ 上涨情景（当前突破有效）\n\n"
+            report += "###  上涨情景（当前突破有效）\n\n"
             report += f"基于{cause_bars}列水平积累，若**有效站稳{tr_high:.2f}上方**：\n\n"
 
             # 计算更合理的触发条件
@@ -788,7 +788,7 @@ class ConclusionSection(BaseSectionBuilder):
 
         report = f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【逻辑证伪点】\n💡 顶级交易计划不仅告诉你什么情况下你对了，更明确告诉你什么情况下你判断错了。\n"
 
-        # 🔧 新增：如果已突破，显示更相关的支撑位（基于威科夫理论）
+        #  新增：如果已突破，显示更相关的支撑位（基于威科夫理论）
         if trading_range.get('is_broken'):
             breakout_level = tr_high if trading_range.get('breakout_direction') == 'up' else tr_low
             retest_zone = self._calculate_healthy_retest_zone(current_price, breakout_level, 0)
@@ -805,10 +805,10 @@ class ConclusionSection(BaseSectionBuilder):
             else:
                 report += f"[!] 关键观察点位:\n   • 突破位: {breakout_level:.2f}元\n   • 原TR上沿: {tr_high:.2f}元\n"
         else:
-            # 🔧 修复格式化bug：使用f-string正确格式化
+            #  修复格式化bug：使用f-string正确格式化
             report += f"[!] 观察要点:\n   • 关键阻力位: {tr_high:.2f}元\n   • 关键支撑位: {tr_low:.2f}元\n"
 
-        # 🔧 新增：BC警示下的特殊止损纪律
+        #  新增：BC警示下的特殊止损纪律
         try:
             # 尝试从phase_coordinator获取climax信息
             bc_detected = False
@@ -1001,7 +1001,7 @@ class ConclusionSection(BaseSectionBuilder):
         Returns:
             健康回测区间字典
         """
-        # 🔧 修复：基于威科夫理论的Test of JOC回测目标
+        #  修复：基于威科夫理论的Test of JOC回测目标
         # 主目标：原TR上沿（突破位）
         # 威科夫逻辑：原最强阻力转为支撑，价格应回测验证
         primary_target_high = breakout_level * 1.05  # 突破位上方5%

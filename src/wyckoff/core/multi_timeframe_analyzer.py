@@ -118,15 +118,15 @@ class MultiTimeframeAnalyzer:
         weekly_trend = self.get_weekly_trend()
         monthly_trend = self.get_monthly_trend()
 
-        # 🔧 v1.3增强：更精确的趋势一致性计算
+        #  v1.3增强：更精确的趋势一致性计算
         trend_alignment_score = self._calculate_trend_alignment_enhanced(
             daily_analysis.get('phase', 'unknown'), weekly_trend, monthly_trend
         )
 
-        # 🔧 v1.3新增：量能共振检测
+        #  v1.3新增：量能共振检测
         volume_resonance = self._detect_volume_resonance_enhanced()
 
-        # 🔧 v1.3增强：综合评分（考虑趋势一致性和量能共振）
+        #  v1.3增强：综合评分（考虑趋势一致性和量能共振）
         resonance_strength = resonance_strength * 0.7 + trend_alignment_score * 0.2 + volume_resonance * 0.1
 
         if trend_alignment_score >= 0.8:
@@ -146,7 +146,7 @@ class MultiTimeframeAnalyzer:
         elif resonance_strength >= 2: resonance_level = 'weak_resonance'
         else: resonance_level = 'no_resonance'
 
-        # 🔧 v1.3新增：生成交易建议
+        #  v1.3新增：生成交易建议
         trading_implication = self._generate_mtf_trading_advice(
             resonance_level, resonance_strength, trend_alignment_score
         )

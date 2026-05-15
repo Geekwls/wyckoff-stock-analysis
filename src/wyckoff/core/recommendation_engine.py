@@ -77,14 +77,14 @@ class RecommendationEngine:
             # 计算价格上涨幅度
             price_gain_pct = (current_price / signal_price) - 1
 
-            # 🔧 修复：降低阈值，15%上涨即认为信号已被吸收
+            #  修复：降低阈值，15%上涨即认为信号已被吸收
             if price_gain_pct > 0.15:  # 上涨超过15%
                 # 进一步检查：是否真正突破（不仅仅是短暂上冲）
                 # 检查最近N天的收盘价，大部分维持在信号价格上方即可
                 lookback = min(20, len(data))
                 recent_closes = data['Close'].iloc[-lookback:]
 
-                # 🔧 修复：改为80%的天数在信号价格上方即可（更宽松）
+                #  修复：改为80%的天数在信号价格上方即可（更宽松）
                 days_above = (recent_closes > signal_price * 1.02).sum()  # 102%信号价格以上
                 pct_above = days_above / len(recent_closes)
 
@@ -584,7 +584,7 @@ class RecommendationEngine:
         score = quality.score
         direction = plan.direction
 
-        # 🔧 新增：检查方向与环境的冲突
+        #  新增：检查方向与环境的冲突
         direction_env_conflict = False
         direction_env_match = False
         if market_env:
@@ -601,7 +601,7 @@ class RecommendationEngine:
                 direction_env_match = True  # 做空 + 强空头 = 匹配
 
         def get_item(mode: str) -> RiskAdviceItem:
-            # 🔧 问题二修复：方向与环境冲突时，强制观望
+            #  问题二修复：方向与环境冲突时，强制观望
             if direction_env_conflict:
                 env_name = market_env.value if hasattr(market_env, 'value') else str(market_env)
                 if mode == "conservative":
@@ -627,7 +627,7 @@ class RecommendationEngine:
                 elif mode == "moderate":
                     return RiskAdviceItem(action="观望", reason=f"跨周期冲突：{conflict_details}")
                 else:  # aggressive
-                    # ✅ 修复：跨周期冲突下激进仓位上限从15-20%严格降至5-10%
+                    #  修复：跨周期冲突下激进仓位上限从15-20%严格降至5-10%
                     # 理论依据：周月线双空头压制下，日线吸笹结构失败概率显著增加
                     # 可能是下跌中继，而非真正吸笹。轻仓仅适合极短线快进快出。
                     return RiskAdviceItem(
@@ -642,7 +642,7 @@ class RecommendationEngine:
             if direction == "观望":
                 return RiskAdviceItem(action="观望", reason="无清晰信号")
 
-            # 🔧 问题二修复：方向与环境匹配时，降低观望阈值
+            #  问题二修复：方向与环境匹配时，降低观望阈值
             if direction_env_match:
                 if mode == "conservative":
                     # 原本需要>=70分，现在降低到>=60分

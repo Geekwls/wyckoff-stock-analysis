@@ -210,7 +210,7 @@ class WyckoffPatternDetector:
         return self.classic_detector.detect_secondary_test(climax_res, ar_res)
 
     def detect_spring(self, lookback: int = None) -> Dict:
-        # ✅ 缺隗3修复：传递TR数据，让子检测器能用TR下沿作为Spring支撑位
+        #  缺隗3修复：传递TR数据，让子检测器能用TR下沿作为Spring支撑位
         tr = self.range_detector.detect()
         return self.classic_detector.detect_spring(lookback, trading_range=tr)
 
@@ -242,7 +242,7 @@ class WyckoffPatternDetector:
                 'reason': 'suppressed_by_overbought_climax',
                 'channel_warning': ob_os['message']
             }
-        # ✅ 缺隗6修复：传递TR数据，让子检测器能用TR上沿作为Creek水位
+        #  缺隗6修复：传递TR数据，让子检测器能用TR上沿作为Creek水位
         tr = self.range_detector.detect()
         return self.classic_detector.detect_joc(lookback, trading_range=tr)
 
@@ -397,10 +397,10 @@ class WyckoffPatternDetector:
             
             # 动态阈值：基于ATR适配
             # 威科夫理论：SC必须伴随巨幅放量，通常为均量2倍以上
-            # 🔧 修复 P0-1: SC 至少需要 2.5x 巨量，fallback 也需要 2.5x
+            #  修复 P0-1: SC 至少需要 2.5x 巨量，fallback 也需要 2.5x
             climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
             climax_range_threshold = self._get_dynamic_volume_threshold(1.8)
-            fallback_vol_threshold = self._get_dynamic_volume_threshold(2.5)  # 🔧 取消低量 fallback，强制 2.5x
+            fallback_vol_threshold = self._get_dynamic_volume_threshold(2.5)  #  取消低量 fallback，强制 2.5x
             
             # 高潮候选者：成交量 > 动态阈值倍均量 且 价差 > 动态阈值倍均价差
             candidates = recent_data[
@@ -427,11 +427,11 @@ class WyckoffPatternDetector:
             sc_row = recent_data.loc[sc_idx]
             vol_ratio = sc_row['Volume'] / vol_ma.loc[sc_idx]
 
-            # 🔧 修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
+            #  修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
             sc_close_pos = (sc_row['Close'] - sc_row['Low']) / max(sc_row['High'] - sc_row['Low'], 1e-9)
             base_confidence = self._calculate_climax_confidence(vol_ratio, sc_close_pos)
 
-            # 🔧 修复 P2-1: Effort vs Result 验证
+            #  修复 P2-1: Effort vs Result 验证
             price_progress = (sc_row['Close'] - sc_row['Open']) / sc_row['Open']
             is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, sc_close_pos)
 
@@ -467,9 +467,9 @@ class WyckoffPatternDetector:
             vol_ma = recent_data['Volume_MA20'] if 'Volume_MA20' in recent_data.columns else recent_data['Volume'].rolling(20).mean()
             
             # 动态阈值
-            # 🔧 修复 P0-1: BC 至少需要 2.5x 巨量，fallback 也需要 2.5x
+            #  修复 P0-1: BC 至少需要 2.5x 巨量，fallback 也需要 2.5x
             climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
-            fallback_vol_threshold = self._get_dynamic_volume_threshold(2.5)  # 🔧 取消低量 fallback，强制 2.5x
+            fallback_vol_threshold = self._get_dynamic_volume_threshold(2.5)  #  取消低量 fallback，强制 2.5x
             
             # 计算收盘位置分位和上影线比例
             range_size = recent_data['High'] - recent_data['Low']
@@ -504,11 +504,11 @@ class WyckoffPatternDetector:
 
             bc_row = recent_data.loc[bc_idx]
             vol_ratio = bc_row['Volume'] / vol_ma.loc[bc_idx]
-            # 🔧 修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
+            #  修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
             bc_close_pos = (bc_row['Close'] - bc_row['Low']) / max(bc_row['High'] - bc_row['Low'], 1e-9)
             base_confidence = self._calculate_climax_confidence(vol_ratio, bc_close_pos)
 
-            # 🔧 修复 P2-1: Effort vs Result 验证
+            #  修复 P2-1: Effort vs Result 验证
             price_progress = (bc_row['Close'] - bc_row['Open']) / bc_row['Open']
             is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, bc_close_pos)
 
@@ -781,14 +781,14 @@ class WyckoffPatternDetector:
             sot_res = self.detect_stopping_of_transient()
             spring_res = self.detect_spring_menhongtao()
 
-            # 🔧 新增：PS/SC时序验证
+            #  新增：PS/SC时序验证
             ps_sc_valid, ps_sc_reason = self._validate_ps_sc_sequence(ps_res, sc_res)
 
             # 检测+必要字段双重验证，确保与报告层显示一致
             def _check_detected(res: dict, required_fields: list) -> bool:
                 return bool(res.get("detected")) and all(k in res for k in required_fields)
 
-            # 🔧 修复：只有在PS/SC时序有效时，才计入PS和SC
+            #  修复：只有在PS/SC时序有效时，才计入PS和SC
             checks = []
 
             # PS：只有在PS/SC时序有效时才计入
@@ -839,7 +839,7 @@ class WyckoffPatternDetector:
             evidence_count = sum(1 for c in checks if c['detected'])
             detected_weight = sum(c['weight'] for c in checks if c['detected'])
 
-            # 🔧 修复：基于有效证据重新计算强度
+            #  修复：基于有效证据重新计算强度
             if detected_weight >= 4 and ps_sc_valid:
                 strength = "strong"
                 phase_a_confirmed = True
@@ -864,7 +864,7 @@ class WyckoffPatternDetector:
                     "sot": sot_res,
                     "spring": spring_res
                 },
-                # 🔧 新增：时序验证信息
+                #  新增：时序验证信息
                 "sequence_validation": {
                     "ps_sc_valid": ps_sc_valid,
                     "ps_sc_reason": ps_sc_reason,

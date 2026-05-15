@@ -104,7 +104,7 @@ class BreakoutAnalyzer:
         # 5. 判断是否为Upthrust（假突破）
         is_upthrust = self._is_upthrust(vol_analysis, pullback_analysis, quality_score)
 
-        # 🔧 新增：检测Test of JOC（突破后的回测确认）
+        #  新增：检测Test of JOC（突破后的回测确认）
         joc_test_status = self._detect_joc_test(
             breakout_point, tr_high, current_price, pullback_analysis
         )
@@ -121,7 +121,7 @@ class BreakoutAnalyzer:
             'volume_analysis': vol_analysis,
             'pullback_analysis': pullback_analysis,
             'post_breakout_analysis': post_breakout_analysis,
-            'joc_test_status': joc_test_status,  # 🔧 新增：JOC测试状态
+            'joc_test_status': joc_test_status,  #  新增：JOC测试状态
             'conclusion': self._format_upside_conclusion(
                 quality_score, is_upthrust, vol_analysis, pullback_analysis
             )

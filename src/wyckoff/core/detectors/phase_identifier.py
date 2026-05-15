@@ -21,19 +21,19 @@ class PhaseIdentifier(BaseDetector):
         if self.data is None:
             return {'phase': 'Unknown', 'confidence': 0.0, 'phase_enum': WyckoffPhase.UNKNOWN}
 
-        # 🔧 修复信号穿越：只分析相关时间窗口内的事件
+        #  修复信号穿越：只分析相关时间窗口内的事件
         events = self.filter_relevant_events(raw_events)
 
         phase_str, phase_enum, confidence = self._determine_phase_from_events(events)
         if phase_enum == WyckoffPhase.UNKNOWN:
             phase_str, phase_enum, confidence = self._fallback_logic(events)
         
-        # 🔧 评分修正：如果 Phase A 结构不完整，大幅扣减置信度
+        #  评分修正：如果 Phase A 结构不完整，大幅扣减置信度
         if phase_enum != WyckoffPhase.UNKNOWN:
             completeness_factor = self._calculate_structural_integrity(events, phase_enum)
             confidence *= completeness_factor
 
-            # 🔧 新增：Phase A结构不完整时的额外惩罚
+            #  新增：Phase A结构不完整时的额外惩罚
             if phase_enum == WyckoffPhase.PHASE_A:
                 has_complete_structure = self._check_phase_a_completeness(events)
                 if not has_complete_structure:
@@ -56,7 +56,7 @@ class PhaseIdentifier(BaseDetector):
         quality_factor = self._analyze_phase_a_evidence(events)
         final_conf *= quality_factor
 
-        # 🔧 修复矛盾二：增加相位一致性互斥校验
+        #  修复矛盾二：增加相位一致性互斥校验
         phase_str, phase_enum, final_conf = self._check_logical_consistency(events, phase_str, phase_enum, final_conf)
 
         return {
@@ -126,7 +126,7 @@ class PhaseIdentifier(BaseDetector):
     def _determine_phase_from_events(self, events: Dict) -> Tuple[str, WyckoffPhase, float]:
         """从事件序列中判定阶段 - 优化版（方案B）"""
 
-        # 🔧 方案B优化：首先检查是否为"BC强但AR/ST缺失"的模糊结构
+        #  方案B优化：首先检查是否为"BC强但AR/ST缺失"的模糊结构
         ambiguous_phase = self._check_ambiguous_phase_structure(events)
         if ambiguous_phase:
             return ambiguous_phase  # 返回更精确的阶段标签
@@ -185,15 +185,15 @@ class PhaseIdentifier(BaseDetector):
             if hasattr(climax, 'detected'):
                 has_strong_climax = climax.detected
                 climax_type = getattr(climax, 'type', None)
-                # 🔧 修复 P1-1: 降低默认置信度，避免低质量信号被误判为高置信度
+                #  修复 P1-1: 降低默认置信度，避免低质量信号被误判为高置信度
                 climax_confidence = getattr(climax, 'confidence', 0.5)
             elif isinstance(climax, dict):
                 has_strong_climax = climax.get('detected', False)
                 climax_type = climax.get('type')
-                # 🔧 修复 P1-1: 降低默认置信度，避免低质量信号被误判为高置信度
+                #  修复 P1-1: 降低默认置信度，避免低质量信号被误判为高置信度
                 climax_confidence = climax.get('confidence', 0.5)
 
-        # 🔧 方案B增强：设置BC强度阈值（只处理高置信度BC）
+        #  方案B增强：设置BC强度阈值（只处理高置信度BC）
         if not has_strong_climax or climax_confidence < 0.85:
             return None  # BC不够强或不存在，不是模糊结构
 
@@ -204,11 +204,11 @@ class PhaseIdentifier(BaseDetector):
         has_ar = self._safe_check_detected(ar)
         has_st = self._safe_check_detected(st)
 
-        # 🔧 方案B核心：BC强但AR/ST缺失
+        #  方案B核心：BC强但AR/ST缺失
         if has_strong_climax and not (has_ar or has_st):
             logger.info(f"[方案B] 检测到模糊结构: {climax_type} (置信度: {climax_confidence:.2f}), 缺失AR/ST确认")
 
-            # 🔧 动态灵敏度调整：尝试检测"准AR"和"准ST"
+            #  动态灵敏度调整：尝试检测"准AR"和"准ST"
             weak_ar = self._detect_weak_automatic_reaction(events, climax)
             weak_st = self._detect_weak_secondary_test(events, climax)
 
@@ -219,7 +219,7 @@ class PhaseIdentifier(BaseDetector):
 
             # 根据技术趋势和BC类型给出更精确的标签
             if current_price > ma20 > ma50 > ma200:
-                # 🟢 技术面完美多头排列 + Buying Climax
+                #  技术面完美多头排列 + Buying Climax
                 if climax_type == 'buying_climax':
                     if weak_ar or weak_st:
                         logger.info(f"[方案B] 判定为: Markup Phase E (上涨末期，潜在派发初期)")
@@ -232,7 +232,7 @@ class PhaseIdentifier(BaseDetector):
                     return 'Markup Phase E (强势上涨，但出现恐慌性抛售)', WyckoffPhase.PHASE_E, 0.55
 
             elif current_price < ma20 < ma50:
-                # 🔴 技术面转弱
+                #  技术面转弱
                 if climax_type == 'buying_climax':
                     logger.info(f"[方案B] 判定为: Distribution Phase A (买入高潮，等待回落确认)")
                     return 'Distribution Phase A (买入高潮，等待回落确认)', WyckoffPhase.PHASE_A, 0.70
@@ -241,7 +241,7 @@ class PhaseIdentifier(BaseDetector):
                     return 'Accumulation Phase A (恐慌抛售，等待反弹确认)', WyckoffPhase.PHASE_A, 0.70
 
             else:
-                # 🟡 技术面震荡不明
+                #  技术面震荡不明
                 if climax_type == 'buying_climax':
                     logger.info(f"[方案B] 判定为: Trending with BC Warning (趋势推进中，买入高潮警示)")
                     return 'Trending with BC Warning (趋势推进中，买入高潮警示)', WyckoffPhase.UNKNOWN, 0.50
@@ -277,7 +277,7 @@ class PhaseIdentifier(BaseDetector):
             return False
 
         try:
-            # 🔧 降低AR检测阈值：正常AR需要明显反向运动，这里寻找微弱反应
+            #  降低AR检测阈值：正常AR需要明显反向运动，这里寻找微弱反应
             df_after = self.data[self.data.index > climax_date].head(30)
             if len(df_after) < 3:
                 return False
@@ -378,7 +378,7 @@ class PhaseIdentifier(BaseDetector):
         ma50 = get_ma(50)
         ma200 = get_ma(200)
         
-        # 🔧 新增：利用交易区间内的吸收特征提前判定再积累
+        #  新增：利用交易区间内的吸收特征提前判定再积累
         if events:
             tr = events.get('trading_range', {})
             if hasattr(tr, 'model_dump'): tr = tr.model_dump()

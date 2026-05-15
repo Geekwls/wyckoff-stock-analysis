@@ -45,7 +45,7 @@ class MengTrendDetector(BaseDetector):
         daily_ranges = highs - lows
         close_positions = np.where(daily_ranges > 0, (closes - lows) / daily_ranges, 0.5)
         
-        # 🔧 修复#4: 突破力度标准从 3% 提高到 5%（孟洪涛要求长阳线）
+        #  修复#4: 突破力度标准从 3% 提高到 5%（孟洪涛要求长阳线）
         valid_joc = is_breakout & (price_changes >= 5) & (volume_ratios >= 1.5) & (close_positions >= 0.75)
         indices = np.where(valid_joc)[0]
         signals, n = [], len(df)
@@ -54,7 +54,7 @@ class MengTrendDetector(BaseDetector):
             end = min(i + 11, n)
             if end > i + 1:
                 t_lows, t_closes, t_vols = lows[i+1:end], closes[i+1:end], volumes[i+1:end]
-                # 🔧 修复#5: 回测检测逻辑优化 - 允许短暂跌破后收回
+                #  修复#5: 回测检测逻辑优化 - 允许短暂跌破后收回
                 # 孟洪涛理论：回测可以短暂跌破小溪，只要快速收回即可
                 hits = (t_lows < creek_level * 1.02) & ((t_vols / vol_ma20) < 1.0 if vol_ma20 > 0 else False)
                 hit_idx = np.where(hits)[0]
@@ -82,7 +82,7 @@ class MengTrendDetector(BaseDetector):
         for i in range(20, len(df)):
             if df['Close'].iloc[i] > creek_level and df['Close'].iloc[i-1] <= creek_level:
                 price_change = (df['Close'].iloc[i] - df['Open'].iloc[i]) / df['Open'].iloc[i] * 100
-                # 🔧 修复#4: 突破力度标准从 3% 提高到 5%
+                #  修复#4: 突破力度标准从 3% 提高到 5%
                 if price_change < 5: continue
                 vol_ratio = df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
                 if vol_ratio < 1.5: continue
@@ -91,7 +91,7 @@ class MengTrendDetector(BaseDetector):
                 if close_pos < 0.75: continue
                 td, tdt, tvr = False, None, None
                 for j in range(i+1, min(i+10, len(df))):
-                    # 🔧 修复#5: 回测检测逻辑优化 - 允许短暂跌破后收回
+                    #  修复#5: 回测检测逻辑优化 - 允许短暂跌破后收回
                     if df['Low'].iloc[j] < creek_level * 1.02:
                         tvr_curr = df['Volume'].iloc[j] / vol_ma20 if vol_ma20 > 0 else 1
                         if tvr_curr < 1.0:

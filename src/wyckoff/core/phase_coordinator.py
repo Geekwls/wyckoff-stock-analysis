@@ -62,12 +62,12 @@ class PhaseCoordinator:
         Returns:
             包含所有检测到的事件的字典
         """
-        # 🔧 P0-2修复步骤1：在每次分析开始时重置屏蔽状态，避免污染
+        #  P0-2修复步骤1：在每次分析开始时重置屏蔽状态，避免污染
         if hasattr(self.detector, 'sw_detector'):
             self.detector.sw_detector.reset_blocked_signals()
 
         # 1. 收集基础价格形态（不依赖全局阶段）
-        # 🔧 P3修复：弃用旧的基于固定百分比的 detect_climax，全面拥抱动态 ATR 的 SC/BC
+        #  P3修复：弃用旧的基于固定百分比的 detect_climax，全面拥抱动态 ATR 的 SC/BC
         sc_res = self.detector.detect_climax_panic_selling()
         bc_res = self.detector.detect_climax_buying()
         
@@ -107,7 +107,7 @@ class PhaseCoordinator:
             climax_res, ar_res, st_res, spring_res, upthrust_res, ps_res
         )
 
-        # 🔧 P0-2修复步骤2：初步阶段识别后立即屏蔽矛盾信号（从源头杜绝信号污染）
+        #  P0-2修复步骤2：初步阶段识别后立即屏蔽矛盾信号（从源头杜绝信号污染）
         if hasattr(self.detector, 'sw_detector'):
             if 'Distribution' in preliminary_phase:
                 # 派发期的向上突破一律归为UT，禁用SOS检测
@@ -634,7 +634,7 @@ class PhaseCoordinator:
 
         if spring_upthrust:
             event_type = spring_upthrust.get('_type')
-            # ✅ 修复问题1：Phase A 与 Spring 时序矛盾
+            #  修复问题1：Phase A 与 Spring 时序矛盾
             # Wyckoff 理论：Spring 只能发生在 Phase C（吸筹区积累完成后的震仓测试）
             # 如果阶段仍在 Phase A，但已检测到 Spring，必须强制升级为 Phase C
             if 'Phase A' in preliminary_phase and 'Accumulation' in preliminary_phase and event_type == 'spring':

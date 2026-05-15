@@ -21,7 +21,7 @@ class StrengthWeaknessDetector(BaseDetector):
         self.data = data
         self.config = config
         self.thresholds = thresholds
-        # 🔧 P0-2修复：初始化信号屏蔽集合
+        #  P0-2修复：初始化信号屏蔽集合
         self._blocked_signals = set()
     
     def _ensure_columns(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
@@ -197,7 +197,7 @@ class StrengthWeaknessDetector(BaseDetector):
         """
         检测标准 SOS (Sign of Strength) - 迭代/Pandas 版
         """
-        # 🔧 P0-2修复：检查信号是否被屏蔽
+        #  P0-2修复：检查信号是否被屏蔽
         if self._is_signal_blocked('sos'):
             return {
                 'detected': False,
@@ -348,7 +348,7 @@ class StrengthWeaknessDetector(BaseDetector):
             sow_price = float(closes[idx_pos])
             sow_low = float(lows[idx_pos])
 
-            # 🔧 新增：验证是否跌破交易区间下沿
+            #  新增：验证是否跌破交易区间下沿
             tr_low = trading_range.get('low') if trading_range else None
             breakdown_level = df['Low'].rolling(20).min().iloc[-1]
 
@@ -398,7 +398,7 @@ class StrengthWeaknessDetector(BaseDetector):
             window: 检测窗口
             trading_range: 当前交易区间（用于验证是否跌破区间下沿）
         """
-        # 🔧 P0-2修复：检查信号是否被屏蔽
+        #  P0-2修复：检查信号是否被屏蔽
         if self._is_signal_blocked('sow'):
             return {
                 'detected': False,
@@ -432,7 +432,7 @@ class StrengthWeaknessDetector(BaseDetector):
             sow_price = df.loc[idx, 'Close']
             sow_low = df.loc[idx, 'Low']
 
-            # 🔧 新增：获取交易区间下沿
+            #  新增：获取交易区间下沿
             tr_low = trading_range.get('low') if trading_range else None
             breakdown_level = {
                 "value": float(df['Low'].rolling(20).min().iloc[-1]),
@@ -440,7 +440,7 @@ class StrengthWeaknessDetector(BaseDetector):
                 "note": "近期支撑测试位"
             }
 
-            # 🔧 新增：判断SOW类型
+            #  新增：判断SOW类型
             if tr_low is not None:
                 if sow_low < tr_low:
                     # 跌破区间下沿 → 真正的SOW
@@ -501,7 +501,7 @@ class StrengthWeaknessDetector(BaseDetector):
                      and ('Markup' in self._current_phase or '上涨' in self._current_phase))
         is_distribution = self._is_distribution_phase()
 
-        # 🔧 P1-1修复：验证Phase A前置结构完整性（SC→AR→ST）
+        #  P1-1修复：验证Phase A前置结构完整性（SC→AR→ST）
         phase_a_events = self.get_phase_a_events()
         has_complete_phase_a_structure = False
         phase_a_validation = {
@@ -563,7 +563,7 @@ class StrengthWeaknessDetector(BaseDetector):
                 # 阶段约束：只有 Accumulation 阶段且具备完整Phase A结构才叫 LPS
                 if is_accumulation:
                     if has_complete_phase_a_structure:
-                        # ✅ 完整的吸筹结构 + LPS = 正式LPS
+                        #  完整的吸筹结构 + LPS = 正式LPS
                         signal['signal_type'] = 'lps'
                         note = '吸筹阶段最后支撑点（LPS）| ✅ 具备完整Phase A结构（SC→AR→ST）'
                     else:
@@ -605,7 +605,7 @@ class StrengthWeaknessDetector(BaseDetector):
                              '信号已按阶段上下文重新定性为"缩量回踩"而非正式LPS'
                              if not is_accumulation else None),
                 },
-                # 🔧 P1-1修复：包含Phase A验证信息
+                #  P1-1修复：包含Phase A验证信息
                 'phase_a_validation': phase_a_validation if is_accumulation else None
             }
         return {'detected': False}

@@ -16,9 +16,9 @@ class BaseDetector(ABC):
     """
     def __init__(self, indicator_cache=None):
         self._current_phase = ""
-        # 🔧 P1-1修复：存储Phase A事件检测结果，供LPS等信号验证前置结构
+        #  P1-1修复：存储Phase A事件检测结果，供LPS等信号验证前置结构
         self._phase_a_events = {}
-        # 🔧 v1.2新增：信号有效期配置（天数）
+        #  v1.2新增：信号有效期配置（天数）
         self._signal_decay_days = 60  # 默认信号有效期60天
         self._indicator_cache = indicator_cache
         self._signal_decay_config = {

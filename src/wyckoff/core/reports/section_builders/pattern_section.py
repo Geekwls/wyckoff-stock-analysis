@@ -126,7 +126,7 @@ class PatternSection(BaseSectionBuilder):
 """
 
     def _fmt_sow(self, sow) -> str:
-        # 🔧 修复：SOW检测返回的是单个信号对象，包含signal_type字段
+        #  修复：SOW检测返回的是单个信号对象，包含signal_type字段
         if isinstance(sow, dict):
             signal_type = sow.get('signal_type', 'unknown')
             interpretation = sow.get('interpretation', '')
@@ -166,7 +166,7 @@ class PatternSection(BaseSectionBuilder):
 """
 
     def _fmt_lps(self, lps) -> str:
-        # 🔧 修复：LPS返回结构中price字段在latest里
+        #  修复：LPS返回结构中price字段在latest里
         latest = lps.get('latest', {}) if isinstance(lps, dict) else lps
         price = latest.get('price', 0) if isinstance(latest, dict) else 0
         signal_type = latest.get('signal_type', 'unknown') if isinstance(latest, dict) else 'unknown'

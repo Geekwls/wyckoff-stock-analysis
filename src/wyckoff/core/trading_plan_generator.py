@@ -82,7 +82,7 @@ class TradingPlanGenerator:
             current_price, atr, high, low, is_bullish
         )
         
-        # 🔧 核心修复：执行方向锁逻辑 (修复矛盾：派发区不买入)
+        #  核心修复：执行方向锁逻辑 (修复矛盾：派发区不买入)
         if is_distribution:
             direction = "减仓/对冲" if self.is_a_stock else "做空"
             # 将“入场区”修改为“风险减持区/阻力位”

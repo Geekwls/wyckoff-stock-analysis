@@ -36,7 +36,7 @@ class MengReversalDetector(BaseDetector):
         last_close = df['Close'].iloc[-1]
         atr_pct = (atr_series.iloc[-1] / last_close * 100) if last_close > 0 else 0
 
-        # 🔧 修复#1: 收回天数逻辑优化 - 根据波动率动态调整
+        #  修复#1: 收回天数逻辑优化 - 根据波动率动态调整
         # 孟洪涛理论：低波动 1-3 天，中等波动 2-4 天，高波动 3-5 天
         if atr_pct < 1.5:
             max_recovery_days = 3  # 低波动：最多 3 天
@@ -52,7 +52,7 @@ class MengReversalDetector(BaseDetector):
         breakdown_pcts = (safe_support - lows) / safe_support * 100
         t = self.thresholds
         
-        # 🔧 修复#1: 跌破幅度根据波动率动态调整
+        #  修复#1: 跌破幅度根据波动率动态调整
         # 低波动：1-3%，中等波动：1-4%，高波动：1-6%
         dynamic_max_breakdown = 3.0 if atr_pct < 1.5 else 4.0 if atr_pct < 3.0 else 6.0
         valid_breakdown = (lows < support_levels) & (breakdown_pcts >= t.MENG_SPRING_BREAKDOWN_MIN) & (breakdown_pcts <= dynamic_max_breakdown)
@@ -66,7 +66,7 @@ class MengReversalDetector(BaseDetector):
             for j in range(i + 1, min(i + max_recovery_days + 1, n)):
                 if closes[j] > support_level:
                     recovery_days, recovery_vol = j - i, volumes[j]
-                    # 🔧 修复#2: 成交量比较逻辑 - 量比阈值提高到 1.2
+                    #  修复#2: 成交量比较逻辑 - 量比阈值提高到 1.2
                     vol_ratio = recovery_vol / breakdown_vol if breakdown_vol > 0 else 1.0
                     if vol_ratio < 1.2: continue  # 孟洪涛要求：收回时成交量必须明显放大（>1.2 倍）
                     daily_range = highs[j] - lows[j]

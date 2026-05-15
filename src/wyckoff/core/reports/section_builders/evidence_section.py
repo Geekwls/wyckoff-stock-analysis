@@ -12,14 +12,14 @@ class EvidenceSection(BaseSectionBuilder):
         total_checks = core_evidence.get('total_checks', 4)
         strength = core_evidence.get('strength', 'none')
 
-        # 🔧 新增：获取时序验证信息
+        #  新增：获取时序验证信息
         seq_validation = core_evidence.get('sequence_validation', {})
         ps_sc_valid = seq_validation.get('ps_sc_valid', True)
 
         text = f"\n【核心证据清单】（孟洪涛方法）\n   Phase A 确认度: {evidence_count}/{total_checks} ({strength.upper()})\n"
         text += "   注意：Phase A 标准事件为 PS → SC → AR → ST\n"
 
-        # 🔧 新增：显示时序验证警告
+        #  新增：显示时序验证警告
         if not ps_sc_valid:
             text += f"   ⚠️ 时序验证失败：{seq_validation.get('ps_sc_reason', 'PS与SC时序不一致')}\n"
             if 'ps_date' in seq_validation and 'sc_date' in seq_validation:
