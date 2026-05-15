@@ -76,29 +76,37 @@ class TradingPlanGenerator:
         
         is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
         is_distribution = "Distribution" in phase_str or "Markdown" in phase_str
-        
-        # 计算入场、止损、目标
+        is_accumulation = "Accumulation" in phase_str
+
         entry_zone, stop_loss, targets = self._calculate_levels(
             current_price, atr, high, low, is_bullish
         )
-        
-        #  核心修复：执行方向锁逻辑 (修复矛盾：派发区不买入)
-        if is_distribution:
+
+        # 威科夫方向锁：积累期只多不空，派发期只空不多
+        if is_accumulation:
+            direction = "做多"
+            pos_sizing, _ = self._adjust_position_with_sentiment(
+                sentiment_data, phase_str, True
+            )
+            scale_in_triggers = self._calculate_scale_in_triggers(
+                current_price, high, low, atr, True
+            )
+            dynamic_warning = "当前处于吸筹阶段。威科夫原则：吸筹区只买不卖，利用 Spring/LPS 信号分仓低吸。"
+            entry_zone = f"支撑区: {round(low, 2)} 附近 (利用回调分批建仓)"
+        elif is_distribution:
             direction = "减仓/对冲" if self.is_a_stock else "做空"
-            # 将“入场区”修改为“风险减持区/阻力位”
-            entry_zone = f"阻力位: {round(high, 2)} (当前不建议任何买入)"
+            pos_sizing = {"status": "空仓/减持"}
             scale_in_triggers = {
                 "exit_1": {"condition": "跌破区间下沿 (确认派发)", "price": round(low, 2)},
                 "exit_2": {"condition": "反抽阻力位无力", "price": round(high, 2)}
             }
-            dynamic_warning = "⚠️ 警告：当前处于派发阶段。威科夫第一原则：出货区只卖不买。任何回调均视为离场机会，严禁接刀。"
+            dynamic_warning = "当前处于派发阶段。威科夫第一原则：出货区只卖不买。任何回调均视为离场机会，严禁接刀。"
+            entry_zone = f"阻力位: {round(high, 2)} (当前不建议任何买入)"
         else:
             direction = "做多" if is_bullish else "观望"
-            # 情绪调整仓位
             pos_sizing, dynamic_warning = self._adjust_position_with_sentiment(
                 sentiment_data, phase_str, is_bullish
             )
-            # 计算分批建仓触发条件
             scale_in_triggers = self._calculate_scale_in_triggers(
                 current_price, high, low, atr, is_bullish
             )
@@ -111,13 +119,13 @@ class TradingPlanGenerator:
             "entry_zone": entry_zone,
             "stop_loss": stop_loss,
             "targets": targets,
-            "position_sizing": pos_sizing if not is_distribution else {"status": "空仓/减持"},
+            "position_sizing": pos_sizing,
             "scale_in_triggers": scale_in_triggers,
             "exit_rules": exit_rules,
             "holding_period": "中期（2-8周）" if "Markup" in phase_str or "Markdown" in phase_str else "短期（1-3周）",
             "atr_value": round(atr, 2),
             "dynamic_warning": dynamic_warning,
-            "market_constraint": "A股无法直接做空，建议以减仓或对冲替代" if self.is_a_stock and is_distribution else None
+            "market_constraint": "A股无法直接做空，建议以减仓或对冲替代" if self.is_a_stock and is_distribution and not is_accumulation else None
         }
     
     def _calculate_levels(self, current_price: float, atr: float, 

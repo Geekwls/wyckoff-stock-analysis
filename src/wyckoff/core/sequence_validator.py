@@ -20,6 +20,7 @@ class SequenceValidator:
 
     def validate_all(self) -> Dict[str, Any]:
         spring_val = self._validate_spring_context()
+        upthrust_val = self._validate_upthrust_context()
         lps_val = self._validate_lps_vs_spring()
         sos_val = self._validate_sos_context()
         joc_val = self._validate_joc_context()
@@ -28,6 +29,7 @@ class SequenceValidator:
 
         return {
             "spring": spring_val,
+            "upthrust": upthrust_val,
             "lps": lps_val,
             "sos": sos_val,
             "joc": joc_val,
@@ -101,6 +103,63 @@ class SequenceValidator:
             notes.append("前置结构时序不完整，但存在部分吸筹证据 ⚠️")
         else:
             notes.append("缺少 SC/AR/ST 吸筹前置结构 ❌")
+
+        if pc >= 3 and order_ok:
+            q = "high"
+        elif pc >= 2:
+            q = "medium"
+        elif pc >= 1:
+            q = "low"
+        else:
+            q = "none"
+
+        return {
+            "valid": pc >= 1,
+            "quality": q,
+            "precursor_count": pc,
+            "sequence_ordered": order_ok,
+            "notes": notes,
+        }
+
+    # ── Upthrust context (distribution mirror of Spring) ───
+    def _validate_upthrust_context(self) -> Dict[str, Any]:
+        upthrust = self.e.get("upthrust", {})
+        if not upthrust.get("detected"):
+            return {"valid": False, "reason": "no_upthrust", "quality": "none"}
+
+        climax = self.e.get("climax", {})
+        ar = self.e.get("automatic_reaction", {})
+        st = self.e.get("secondary_test", {})
+
+        has_bc = climax.get("detected") and climax.get("type") == "buying_climax"
+        has_ar = ar.get("detected")
+        has_st = st.get("detected")
+        pc = sum([has_bc, has_ar, has_st])
+
+        upthrust_date = self._get_date(upthrust.get("latest_upthrust", {}), "date")
+        if upthrust_date is None:
+            upthrusts = upthrust.get("upthrusts", [])
+            upthrust_date = self._get_date(upthrusts[-1], "date") if upthrusts else None
+        upthrust_ts = self._to_ts(upthrust_date)
+
+        bc_ts = self._to_ts(self._get_date(climax, "date")) if has_bc else None
+        ar_ts = self._to_ts(self._get_date(ar, "date")) if has_ar else None
+        st_ts = self._to_ts(self._get_date(st, "date")) if has_st else None
+
+        order_ok = False
+        if bc_ts and ar_ts and st_ts and upthrust_ts:
+            order_ok = bc_ts < ar_ts < st_ts < upthrust_ts
+        elif (has_bc + has_ar + has_st) >= 2 and upthrust_ts:
+            avail = [t for t in [bc_ts, ar_ts, st_ts] if t is not None]
+            order_ok = all(t < upthrust_ts for t in avail)
+
+        notes = []
+        if order_ok:
+            notes.append("BC->AR->ST->Upthrust 时序正确")
+        elif pc >= 2:
+            notes.append("派发前置结构时序不完整，但存在部分派发证据")
+        else:
+            notes.append("缺少 BC/AR/ST 派发前置结构")
 
         if pc >= 3 and order_ok:
             q = "high"

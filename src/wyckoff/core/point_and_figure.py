@@ -32,93 +32,107 @@ class PointAndFigureCalculator:
     
     def calculate_pnf(self, data: pd.DataFrame) -> Dict:
         """
-        计算点数图数据
-        
+        计算点数图数据（使用 High/Low 逐笔构造）
+
+        传统 PnF 方法：每根 K 线，在 X 列中尝试向上画到 High，
+        在 O 列中尝试向下画到 Low。仅当无法沿当前方向前进时
+        才检查三格反转。
+
         Args:
             data: 包含OHLCV的DataFrame
-            
+
         Returns:
             点数图分析结果
         """
         if data is None or len(data) < 20:
             return {'columns': [], 'horizontal_count': 0}
-        
-        closes = data['Close'].values
+
         highs = data['High'].values
         lows = data['Low'].values
-        
-        # 初始化第一个格子
-        current_box = self._get_box_level(closes[0])
-        direction = 'up'  # 'up' for X, 'down' for O
-        
+
+        # 初始化：用第一根 K 线的 midpoint 决定初始箱体
+        mid = (highs[0] + lows[0]) / 2.0
+        current_box = self._get_box_level(mid)
+        direction = 'up'
+
         columns = []
         current_column = {
             'direction': direction,
             'start_idx': 0,
-            'start_price': closes[0],
             'boxes': [current_box],
             'high': current_box,
-            'low': current_box
+            'low': current_box,
         }
-        
-        for i in range(1, len(closes)):
-            price = closes[i]
+
+        for i in range(1, len(highs)):
             high = highs[i]
             low = lows[i]
-            new_box = self._get_box_level(price)
-            
+
             if direction == 'up':
-                # 当前是X列（上涨）
-                if new_box > current_box:
-                    # 继续上涨
-                    current_column['boxes'].append(new_box)
-                    current_column['high'] = new_box
-                    current_column['end_idx'] = i
-                    current_box = new_box
-                elif self._check_reversal_down(current_box, low):
-                    # 反转为O列
+                # 尝试向上画 X
+                target_box = self._get_box_level(high)
+                if target_box > current_column['high']:
+                    self._add_boxes_up(current_column, current_column['high'], target_box)
+                    current_column['high'] = target_box
+                    current_box = target_box
+                # 检查向下反转
+                elif self._check_reversal_down(current_column['high'], low):
+                    rev_level = current_column['high'] - self.reversal_boxes * self._get_box_size(current_column['high'])
+                    rev_box = self._get_box_level(rev_level)
                     columns.append(current_column)
                     direction = 'down'
-                    reversal_box = current_box - self.reversal_boxes * self._get_box_size(current_box)
                     current_column = {
                         'direction': 'down',
                         'start_idx': i,
-                        'start_price': price,
-                        'boxes': [reversal_box],
-                        'high': reversal_box,
-                        'low': reversal_box
+                        'boxes': [rev_box],
+                        'high': rev_box,
+                        'low': rev_box,
                     }
-                    current_box = reversal_box
+                    current_box = rev_box
             else:
-                # 当前是O列（下跌）
-                if new_box < current_box:
-                    # 继续下跌
-                    current_column['boxes'].append(new_box)
-                    current_column['low'] = new_box
-                    current_column['end_idx'] = i
-                    current_box = new_box
-                elif self._check_reversal_up(current_box, high):
-                    # 反转为X列
+                # 尝试向下画 O
+                target_box = self._get_box_level(low)
+                if target_box < current_column['low']:
+                    self._add_boxes_down(current_column, current_column['low'], target_box)
+                    current_column['low'] = target_box
+                    current_box = target_box
+                # 检查向上反转
+                elif self._check_reversal_up(current_column['low'], high):
+                    rev_level = current_column['low'] + self.reversal_boxes * self._get_box_size(current_column['low'])
+                    rev_box = self._get_box_level(rev_level)
                     columns.append(current_column)
                     direction = 'up'
-                    reversal_box = current_box + self.reversal_boxes * self._get_box_size(current_box)
                     current_column = {
                         'direction': 'up',
                         'start_idx': i,
-                        'start_price': price,
-                        'boxes': [reversal_box],
-                        'high': reversal_box,
-                        'low': reversal_box
+                        'boxes': [rev_box],
+                        'high': rev_box,
+                        'low': rev_box,
                     }
-                    current_box = reversal_box
-        
-        # 添加最后一列
+                    current_box = rev_box
+
         columns.append(current_column)
-        
+
         return {
             'columns': columns,
-            'total_columns': len(columns)
+            'total_columns': len(columns),
         }
+
+    def _add_boxes_up(self, col: Dict, from_box: float, to_box: float) -> None:
+        """在 X 列中追加从 from_box 到 to_box 的中间箱体"""
+        step = self._get_box_size(from_box)
+        cur = from_box + step
+        while cur <= to_box - 0.001:
+            col['boxes'].append(round(cur, 2))
+            cur += step
+
+    def _add_boxes_down(self, col: Dict, from_box: float, to_box: float) -> None:
+        """在 O 列中追加从 from_box 到 to_box 的中间箱体"""
+        step = self._get_box_size(from_box)
+        cur = from_box - step
+        while cur >= to_box + 0.001:
+            col['boxes'].append(round(cur, 2))
+            cur -= step
     
     def calculate_horizontal_count(self, pnf_data: Dict, 
                                    accumulation_start: int = None,

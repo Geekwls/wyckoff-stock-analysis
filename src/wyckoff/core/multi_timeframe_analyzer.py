@@ -16,50 +16,77 @@ class MultiTimeframeAnalyzer:
         self.pattern_detector = pattern_detector
 
     def get_weekly_trend(self) -> str:
-        """获取周线趋势"""
+        """获取周线趋势（Wyckoff-aware：关注结构而非仅均线）"""
         if self.data is None or len(self.data) < 40:
             return 'unknown'
-            
-        # 简单采样 (Friday resample)
+
         weekly = self.data.resample('W-FRI').agg({
             'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
         }).ffill().dropna()
-        
-        if len(weekly) < 20:
+
+        if len(weekly) < 12:
             return 'unknown'
-            
+
         weekly['MA10'] = weekly['Close'].rolling(10).mean()
-        weekly['MA20'] = weekly['Close'].rolling(20).mean()
-        
+
+        # 威科夫结构判断：higher highs/lows + 量能确认
+        recent = weekly.tail(8)
+        half = len(recent) // 2
+        first_half = recent.iloc[:half]
+        second_half = recent.iloc[half:]
+
+        higher_high = second_half['High'].max() > first_half['High'].max()
+        higher_low = second_half['Low'].min() > first_half['Low'].min()
+        lower_high = second_half['High'].max() < first_half['High'].max()
+        lower_low = second_half['Low'].min() < first_half['Low'].min()
+
+        vol_trend = second_half['Volume'].mean() < first_half['Volume'].mean() * 0.85
         current_close = weekly['Close'].iloc[-1]
-        ma10 = weekly['MA10'].iloc[-1]
-        ma20 = weekly['MA20'].iloc[-1]
-        
-        if current_close > ma10 > ma20: return 'bullish'
-        elif current_close < ma10 < ma20: return 'bearish'
+        above_ma10 = current_close > weekly['MA10'].iloc[-1]
+
+        if higher_high and higher_low and above_ma10:
+            return 'bullish'
+        elif lower_high and lower_low and not above_ma10:
+            return 'bearish'
+        elif higher_high and not higher_low and vol_trend:
+            # 创新高但缩量 - UTAD 风险
+            return 'neutral'
+        elif higher_low and not higher_high and vol_trend:
+            # 缩量不创新低 - LPS 特征
+            return 'neutral'
         return 'neutral'
 
     def get_monthly_trend(self) -> str:
-        """获取月线趋势"""
+        """获取月线趋势（Wyckoff-aware）"""
         if self.data is None or len(self.data) < 120:
             return 'unknown'
-            
+
         monthly = self.data.resample('ME').agg({
             'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
         }).ffill().dropna()
-        
-        if len(monthly) < 12:
+
+        if len(monthly) < 8:
             return 'unknown'
-            
+
         monthly['MA6'] = monthly['Close'].rolling(6).mean()
-        monthly['MA12'] = monthly['Close'].rolling(12).mean()
-        
-        current_close = monthly['Close'].iloc[-1]
-        ma6 = monthly['MA6'].iloc[-1]
-        ma12 = monthly['MA12'].iloc[-1]
-        
-        if current_close > ma6 > ma12: return 'bullish'
-        elif current_close < ma6 < ma12: return 'bearish'
+
+        recent = monthly.tail(6)
+        half = len(recent) // 2
+        first_half = recent.iloc[:half]
+        second_half = recent.iloc[half:]
+
+        higher_high = second_half['High'].max() > first_half['High'].max()
+        higher_low = second_half['Low'].min() > first_half['Low'].min()
+        lower_high = second_half['High'].max() < first_half['High'].max()
+        lower_low = second_half['Low'].min() < first_half['Low'].min()
+
+        vol_shrink = second_half['Volume'].mean() < first_half['Volume'].mean() * 0.8
+        above_ma6 = monthly['Close'].iloc[-1] > monthly['MA6'].iloc[-1]
+
+        if higher_high and higher_low and above_ma6:
+            return 'bullish'
+        elif lower_high and lower_low and not above_ma6:
+            return 'bearish'
         return 'neutral'
 
     def analyze_resonance(self) -> Dict:
@@ -300,35 +327,51 @@ class MultiTimeframeAnalyzer:
             return -0.2  # 无共振降低置信度
 
     def _check_signal_resonance(self, timeframe: str) -> Dict:
-        """检查特定时间框架的信号"""
+        """检查特定时间框架的信号（Wyckoff-aware 检测）"""
         if self.data is None or len(self.data) < 60: return {}
         try:
             if timeframe == 'weekly':
                 resampled = self.data.resample('W-FRI').agg({
                     'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
                 }).ffill().dropna()
-                min_periods = 20
+                min_periods = 15
             else:
                 resampled = self.data.resample('ME').agg({
                     'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
                 }).ffill().dropna()
-                min_periods = 12
+                min_periods = 8
 
             if len(resampled) < min_periods: return {'insufficient_data': True}
 
-            recent_data = resampled.tail(10).copy()
-            low_min = recent_data['Low'].min()
-            recent_low = recent_data['Low'].iloc[-1]
-            has_spring = (recent_low <= low_min * 1.02) and (recent_data['Close'].iloc[-1] > recent_data['Open'].iloc[-1])
+            recent_data = resampled.tail(12).copy()
+            recent_data['Vol_MA5'] = recent_data['Volume'].rolling(5, min_periods=1).mean()
 
-            recent_data['Volume_MA'] = recent_data['Volume'].rolling(5, min_periods=1).mean()
-            vol_ma_val = recent_data['Volume_MA'].iloc[-1]
-            latest_vol_ratio = recent_data['Volume'].iloc[-1] / vol_ma_val if vol_ma_val > 0 else 1.0
-            price_change = recent_data['Close'].pct_change().iloc[-1]
-            has_sos = (latest_vol_ratio > 1.3) and (price_change > 0.03)
-            
-            high_max = recent_data['High'].max()
-            has_upthrust = (recent_data['High'].iloc[-1] >= high_max * 0.98) and (recent_data['Close'].iloc[-1] < recent_data['Open'].iloc[-1])
+            # Spring: 价格创N期低点后快速收回，伴随缩量或停止量
+            lookback_low = recent_data['Low'].min()
+            lookback_high = recent_data['High'].max()
+            current_close = recent_data['Close'].iloc[-1]
+            current_low = recent_data['Low'].iloc[-1]
+            current_vol = recent_data['Volume'].iloc[-1]
+            vol_ma = recent_data['Vol_MA5'].iloc[-1]
+            current_open = recent_data['Open'].iloc[-1]
+
+            spring_test = current_low <= lookback_low * 1.02
+            spring_recovery = current_close > current_open
+            low_vol_spring = current_vol < vol_ma * 1.1 if vol_ma > 0 else True
+            has_spring = spring_test and spring_recovery and low_vol_spring
+
+            # SOS: 放量突破前期高点，收盘在高位
+            vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1.0
+            price_change = (current_close - recent_data['Close'].iloc[-2]) / recent_data['Close'].iloc[-2]
+            above_prior_high = current_close > recent_data['High'].iloc[-3:max(1, len(recent_data)-1)].max() * 0.98
+            high_close = current_close > recent_data['Open'].iloc[-1]
+            has_sos = vol_ratio > 1.5 and price_change > 0.02 and above_prior_high and high_close
+
+            # Upthrust: 创N期高点后收低，放量
+            current_high = recent_data['High'].iloc[-1]
+            upthrust_test = current_high >= lookback_high * 0.98
+            upthrust_reversal = current_close < current_open
+            has_upthrust = upthrust_test and upthrust_reversal and vol_ratio > 1.3
 
             return {'has_spring': has_spring, 'has_sos': has_sos, 'has_upthrust': has_upthrust}
         except Exception as e:

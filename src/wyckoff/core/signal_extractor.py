@@ -25,17 +25,20 @@ class SignalExtractor:
             包含各信号检测状态的字典
         """
         events = phase_result.get('events_detected', {})
-        spring_upthrust = events.get('spring_upthrust') or {}
-        sos_sow = events.get('sos_sow') or {}
-        lps_lpsy = events.get('lps_lpsy') or {}
+        spring_upthrust: dict = events.get('spring_upthrust') or {}
+        sos_sow: dict = events.get('sos_sow') or {}
+        lps_lpsy: dict = events.get('lps_lpsy') or {}
+
+        lps_data = lps_lpsy.get('lps', {}) if isinstance(lps_lpsy, dict) else {}
+        lpsy_data = lps_lpsy.get('lpsy', {}) if isinstance(lps_lpsy, dict) else {}
 
         return {
-            'has_spring': spring_upthrust.get('detected', False) and spring_upthrust.get('_type') == 'spring',
-            'has_upthrust': spring_upthrust.get('detected', False) and spring_upthrust.get('_type') == 'upthrust',
-            'has_sos': sos_sow.get('detected', False) and sos_sow.get('_type') == 'sos',
-            'has_sow': sos_sow.get('detected', False) and sos_sow.get('_type') == 'sow',
-            'has_lps': lps_lpsy.get('detected', False) and lps_lpsy.get('_type') == 'lps',
-            'has_lpsy': lps_lpsy.get('detected', False) and lps_lpsy.get('_type') == 'lpsy',
+            'has_spring': spring_upthrust.get('_type') == 'spring',
+            'has_upthrust': spring_upthrust.get('_type') == 'upthrust',
+            'has_sos': sos_sow.get('_type') == 'sos',
+            'has_sow': sos_sow.get('_type') == 'sow',
+            'has_lps': getattr(lps_data, 'detected', False) if hasattr(lps_data, 'detected') else lps_data.get('detected', False),
+            'has_lpsy': getattr(lpsy_data, 'detected', False) if hasattr(lpsy_data, 'detected') else lpsy_data.get('detected', False),
         }
 
     @staticmethod
@@ -82,51 +85,51 @@ class SignalExtractor:
         """
         if thresholds is None:
             thresholds = WyckoffThresholds()
-            
+
         events = phase_result.get('events_detected', {})
         if not events:
             return 0.0
-            
+
         base_score = 0.0
         latest_date = None
-        
+
         # 1. 计算信号质量分
         weights = thresholds.QUALITY_WEIGHTS
-        
+
         # 处理主要信号
         important_signals = [
             ('spring_upthrust', 40),
             ('sos_sow', 35),
             ('lps_lpsy', 25)
         ]
-        
+
         bullish_count = 0
         bearish_count = 0
-        
+
         for key, max_weight in important_signals:
             info = events.get(key)
             if not info: continue
-            
+
             data = info.get('data') if isinstance(info, dict) else info
             if not data or not getattr(data, 'detected', False): continue
-            
+
             # 判断方向供冲突检测
             sig_type = info.get('_type') if isinstance(info, dict) else getattr(data, 'type', '')
             if sig_type in ['spring', 'sos', 'lps']: bullish_count += 1
             elif sig_type in ['upthrust', 'sow', 'lpsy']: bearish_count += 1
-            
+
             # 计算该信号的质量因子 (0.5 - 1.2)
             quality_factor = 0.8 # 默认基础分
-            
+
             # 考虑成交量比 (Volume Ratio)
             vol_ratio = getattr(data, 'volume_ratio', 1.0)
             if vol_ratio > 2.0: quality_factor += weights['volume_ratio']
             elif vol_ratio > 1.5: quality_factor += weights['volume_ratio'] * 0.5
-            
+
             # 考虑置信度 (Confidence)
             conf = getattr(data, 'confidence', 0.5)
             quality_factor += (conf - 0.5) * weights['confidence']
-            
+
             # 考虑日期 (时间衰减)
             sig_date = getattr(data, 'date', None)
             if sig_date:
@@ -135,26 +138,26 @@ class SignalExtractor:
                     except Exception:
                         # 转换失败保持原样，后面会有类型检查
                         pass
-                
+
                 if isinstance(sig_date, datetime):
                     if latest_date is None or sig_date > latest_date:
                         latest_date = sig_date
-                    
+
                     # 时间衰减因子: exp(-ln(2) * t / half_life)
                     days_ago = (datetime.now() - sig_date).days
                     decay = np.exp(-0.693 * max(0, days_ago) / thresholds.TIME_DECAY_HALF_LIFE)
                     quality_factor *= decay
-            
+
             base_score += max_weight * min(quality_factor, 1.5)
-            
+
         # 2. 冲突惩罚
         if bullish_count > 0 and bearish_count > 0:
             base_score -= thresholds.CONFLICT_PENALTY
-            
+
         # 3. 基础置信度加成
         phase_conf = phase_result.get('confidence') or 0.0
         base_score += phase_conf * 10
-        
+
         return round(max(0.0, min(base_score, 100.0)), 2)
 
     @staticmethod
