@@ -23,6 +23,17 @@ class StrengthWeaknessDetector(BaseDetector):
         self.thresholds = thresholds
         #  P0-2修复：初始化信号屏蔽集合
         self._blocked_signals = set()
+        # 孟洪涛原则：信号质量优先级
+        self._signal_priority = {
+            'joc': 90,      # JOC 是最高质量的突破信号
+            'fti': 90,      # FTI 是最高质量的跌破信号
+            'spring': 85,   # Spring 是最重要的吸筹形态
+            'upthrust': 80, # Upthrust 是重要的派发形态
+            'sos': 60,      # SOS 是一般突破信号
+            'sow': 60,      # SOW 是一般跌破信号
+        }
+        # 已检测到的高优先级信号（用于排他逻辑）
+        self._detected_high_priority_signals = set()
     
     def _ensure_columns(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
         """确保所需的指标列存在，缺失时从缓存获取或动态计算"""
@@ -57,8 +68,59 @@ class StrengthWeaknessDetector(BaseDetector):
         应在每次分析开始时调用，避免上一次分析的屏蔽状态污染下一次分析。
         """
         self._blocked_signals.clear()
+        self._detected_high_priority_signals.clear()
 
     def block_signal(self, signal_type: str):
+        """
+        🔧 P0-2修复：屏蔽特定信号类型
+
+        Args:
+            signal_type: 信号类型，如 'sos' 或 'sow'
+        """
+        self._blocked_signals.add(signal_type)
+
+    def register_high_priority_signal(self, signal_type: str):
+        """
+        孟洪涛原则：注册高优先级信号（用于排他逻辑）
+
+        当检测到 JOC/FTI 等高优先级信号时，调用此方法注册。
+        后续检测到的低优先级信号（如 SOS）将被忽略。
+
+        Args:
+            signal_type: 信号类型，如 'joc', 'fti', 'spring', 'upthrust'
+        """
+        if signal_type in self._signal_priority and self._signal_priority[signal_type] >= 80:
+            self._detected_high_priority_signals.add(signal_type)
+            logger.info(f"[孟洪涛原则] 注册高优先级信号: {signal_type}，将屏蔽同方向的低优先级信号")
+
+    def _should_exclude_signal(self, signal_type: str) -> tuple:
+        """
+        孟洪涛原则：检查信号是否应被高优先级信号排除
+
+        Returns:
+            (should_exclude: bool, reason: str)
+        """
+        if signal_type not in self._signal_priority:
+            return False, ""
+
+        current_priority = self._signal_priority[signal_type]
+
+        # 检查是否有高优先级信号已检测到
+        for detected_signal in self._detected_high_priority_signals:
+            detected_priority = self._signal_priority.get(detected_signal, 0)
+
+            # 只比较同方向的信号
+            if detected_priority > current_priority:
+                # 做多方向信号
+                if signal_type in ('sos',) and detected_signal in ('joc', 'spring'):
+                    return True, f"已被高优先级信号 {detected_signal.upper()} 排除（孟洪涛原则：{detected_signal.upper()} > {signal_type.upper()}）"
+                # 做空方向信号
+                if signal_type in ('sow',) and detected_signal in ('fti', 'upthrust'):
+                    return True, f"已被高优先级信号 {detected_signal.upper()} 排除（孟洪涛原则：{detected_signal.upper()} > {signal_type.upper()}）"
+
+        return False, ""
+
+    def _is_signal_blocked(self, signal_type: str) -> bool:
         """
         🔧 P0-2修复：屏蔽特定信号类型
 
@@ -86,7 +148,15 @@ class StrengthWeaknessDetector(BaseDetector):
     def detect_sos(self, window: int = 40) -> Dict:
         """
         检测标准 SOS (Sign of Strength)
+
+        孟洪涛原则：如果已检测到 JOC（更高质量的突破信号），则忽略 SOS
         """
+        # 孟洪涛原则：检查是否被高优先级信号排除
+        should_exclude, exclude_reason = self._should_exclude_signal('sos')
+        if should_exclude:
+            logger.info(f"[孟洪涛原则] SOS信号被排除: {exclude_reason}")
+            return {'detected': False, 'reason': 'excluded_by_high_priority_signal', 'note': exclude_reason}
+
         if USE_VECTORIZED:
             try:
                 return self._detect_sos_vectorized(window)
@@ -275,6 +345,8 @@ class StrengthWeaknessDetector(BaseDetector):
         """
         检测 SOW (Sign of Weakness)
 
+        孟洪涛原则：如果已检测到 FTI（更高质量的跌破信号），则忽略 SOW
+
         🔧 新增：根据威科夫理论，真正的SOW必须：
         1. 跌破交易区间下沿（或关键支撑位）
         2. 后续无力收回（维持在下沿下方）
@@ -284,6 +356,12 @@ class StrengthWeaknessDetector(BaseDetector):
             window: 检测窗口
             trading_range: 当前交易区间（用于验证是否跌破区间下沿）
         """
+        # 孟洪涛原则：检查是否被高优先级信号排除
+        should_exclude, exclude_reason = self._should_exclude_signal('sow')
+        if should_exclude:
+            logger.info(f"[孟洪涛原则] SOW信号被排除: {exclude_reason}")
+            return {'detected': False, 'reason': 'excluded_by_high_priority_signal', 'note': exclude_reason}
+
         if USE_VECTORIZED:
             try:
                 return self._detect_sow_vectorized(window, trading_range)

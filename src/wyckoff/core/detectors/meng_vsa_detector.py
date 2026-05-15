@@ -95,3 +95,131 @@ class MengVsaDetector(BaseDetector):
         elif dur >= 10: score += 15
         elif dur >= 5: score += 10
         return score
+
+    def detect_volume_trend(self, window: int = 10) -> Dict:
+        """
+        孟洪涛原则：检测成交量趋势
+
+        孟洪涛理论强调：成交量趋势比单日信号更重要
+        - 放量趋势：成交量持续放大，表示资金积极参与
+        - 缩量趋势：成交量持续萎缩，表示市场观望情绪
+        - 平稳：成交量在正常范围内波动
+
+        Returns:
+            {
+                'trend': 'expanding' | 'contracting' | 'stable',
+                'strength': 0-100,
+                'description': str,
+                'short_ma': float,
+                'long_ma': float,
+                'ratio': float
+            }
+        """
+        if self.data is None or len(self.data) < window * 2:
+            return {'trend': 'unknown', 'reason': 'insufficient_data'}
+
+        df = self.data.tail(window * 2).copy()
+        volumes = df['Volume'].values
+
+        # 计算短期和长期成交量均线
+        short_window = max(3, window // 2)
+        vol_ma_short = df['Volume'].rolling(short_window).mean().iloc[-1]
+        vol_ma_long = df['Volume'].rolling(window).mean().iloc[-1]
+
+        if vol_ma_long <= 0:
+            return {'trend': 'unknown', 'reason': 'invalid_volume_data'}
+
+        # 计算量比
+        vol_ratio = vol_ma_short / vol_ma_long
+
+        # 计算趋势强度（基于最近几天的成交量变化）
+        recent_volumes = volumes[-min(5, len(volumes)):]
+        if len(recent_volumes) >= 3:
+            # 线性回归斜率
+            x = np.arange(len(recent_volumes))
+            y = recent_volumes
+            slope = np.polyfit(x, y, 1)[0] if len(y) > 1 else 0
+            # 归一化强度
+            avg_vol = np.mean(y)
+            strength = abs(slope) / avg_vol * 100 if avg_vol > 0 else 0
+            strength = min(strength, 100)
+        else:
+            strength = 0
+
+        # 判断趋势
+        if vol_ratio > 1.2:
+            trend = 'expanding'
+            description = f"放量趋势：短期均量{vol_ma_short:.0f} > 长期均量{vol_ma_long:.0f}（量比{vol_ratio:.2f}），资金积极参与"
+        elif vol_ratio < 0.8:
+            trend = 'contracting'
+            description = f"缩量趋势：短期均量{vol_ma_short:.0f} < 长期均量{vol_ma_long:.0f}（量比{vol_ratio:.2f}），市场观望情绪"
+        else:
+            trend = 'stable'
+            description = f"成交量平稳：短期均量{vol_ma_short:.0f} ≈ 长期均量{vol_ma_long:.0f}（量比{vol_ratio:.2f}），市场处于平衡状态"
+
+        return {
+            'trend': trend,
+            'strength': round(strength, 1),
+            'description': description,
+            'short_ma': round(float(vol_ma_short), 0),
+            'long_ma': round(float(vol_ma_long), 0),
+            'ratio': round(vol_ratio, 2),
+            'slope': round(float(slope), 2) if 'slope' in locals() else 0
+        }
+
+    def detect_vsa_with_trend_context(self) -> Dict:
+        """
+        结合成交量趋势的VSA信号检测（孟洪涛理论升级版）
+
+        孟洪涛强调：成交量趋势是判断信号质量的关键
+        - 在放量趋势中，No Supply/No Demand 信号更可靠
+        - 在缩量趋势中，Stopping Volume 信号更可靠
+        """
+        # 获取VSA信号
+        vsa_signals = self.detect_vsa_signals()
+
+        # 获取成交量趋势
+        vol_trend = self.detect_volume_trend()
+
+        # 根据成交量趋势调整信号质量
+        enhanced_signals = {
+            'no_supply': vsa_signals['no_supply'].copy(),
+            'no_demand': vsa_signals['no_demand'].copy(),
+            'stopping_vol': vsa_signals['stopping_vol'].copy(),
+            'volume_trend': vol_trend
+        }
+
+        # 根据成交量趋势增强信号解释
+        trend = vol_trend.get('trend', 'stable')
+
+        if vsa_signals['no_supply']['detected']:
+            if trend == 'contracting':
+                enhanced_signals['no_supply']['quality'] = 'high'
+                enhanced_signals['no_supply']['note'] = '缩量趋势中的No Supply，供应枯竭确认'
+            elif trend == 'expanding':
+                enhanced_signals['no_supply']['quality'] = 'medium'
+                enhanced_signals['no_supply']['note'] = '放量趋势中的No Supply，需谨慎确认'
+            else:
+                enhanced_signals['no_supply']['quality'] = 'neutral'
+
+        if vsa_signals['no_demand']['detected']:
+            if trend == 'contracting':
+                enhanced_signals['no_demand']['quality'] = 'high'
+                enhanced_signals['no_demand']['note'] = '缩量趋势中的No Demand，需求枯竭确认'
+            elif trend == 'expanding':
+                enhanced_signals['no_demand']['quality'] = 'medium'
+                enhanced_signals['no_demand']['note'] = '放量趋势中的No Demand，需谨慎确认'
+            else:
+                enhanced_signals['no_demand']['quality'] = 'neutral'
+
+        if vsa_signals['stopping_vol']['detected']:
+            if trend == 'expanding':
+                enhanced_signals['stopping_vol']['quality'] = 'high'
+                enhanced_signals['stopping_vol']['note'] = '放量趋势中的Stopping Volume，主力吸筹确认'
+            elif trend == 'contracting':
+                enhanced_signals['stopping_vol']['quality'] = 'medium'
+                enhanced_signals['stopping_vol']['note'] = '缩量趋势中的Stopping Volume，可能存在'
+            else:
+                enhanced_signals['stopping_vol']['quality'] = 'neutral'
+
+        return enhanced_signals

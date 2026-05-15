@@ -13,14 +13,16 @@ logger = logging.getLogger(__name__)
 class PointAndFigureCalculator:
     """
     点数图计算器
-    
+
     威科夫因果法则的核心：
     - 因（Cause）：水平准备（横向盘整的规模，用列数衡量）
     - 果（Effect）：垂直运动（价格突破后的目标幅度）
-    
+
     点数图通过X列（盘整宽度）来预测Y轴（价格目标）的高度
+
+    孟洪涛原则：根据市场波动率动态调整PNF水平计数阈值
     """
-    
+
     def __init__(self, box_size_pct: float = 1.0, reversal_boxes: int = 3):
         """
         Args:
@@ -29,6 +31,55 @@ class PointAndFigureCalculator:
         """
         self.box_size_pct = box_size_pct / 100.0
         self.reversal_boxes = reversal_boxes
+
+    def get_dynamic_pnf_threshold(self, data: pd.DataFrame) -> int:
+        """
+        孟洪涛原则：根据市场波动率动态调整PNF水平计数阈值
+
+        高波动市场：降低阈值（2列）- 避免错过信号
+        低波动市场：提高阈值（4列）- 减少假信号
+        正常波动：保持默认（3列）
+
+        Returns:
+            动态阈值 (2-4)
+        """
+        if data is None or len(data) < 20:
+            return 3  # 默认阈值
+
+        # 计算ATR百分比作为波动率度量
+        atr_series = self._calculate_atr_series(data, 14)
+        atr_pct = (atr_series.iloc[-1] / data['Close'].iloc[-1] * 100) if data['Close'].iloc[-1] > 0 else 0
+
+        # 计算价格区间的波动率
+        recent_high = data['High'].tail(20).max()
+        recent_low = data['Low'].tail(20).min()
+        range_pct = (recent_high - recent_low) / recent_low * 100 if recent_low > 0 else 0
+
+        # 综合波动率评分
+        volatility_score = (atr_pct + range_pct) / 2
+
+        # 根据波动率返回动态阈值
+        if volatility_score > 4.0:
+            return 2  # 高波动市场：降低阈值
+        elif volatility_score > 2.5:
+            return 3  # 中高波动市场：正常阈值
+        elif volatility_score < 1.5:
+            return 4  # 低波动市场：提高阈值
+        else:
+            return 3  # 正常波动：默认阈值
+
+    def _calculate_atr_series(self, data: pd.DataFrame, period: int = 14):
+        """计算ATR序列"""
+        high = data['High']
+        low = data['Low']
+        close = data['Close'].shift(1)
+
+        tr1 = high - low
+        tr2 = (high - close).abs()
+        tr3 = (low - close).abs()
+
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        return tr.rolling(period).mean()
     
     def calculate_pnf(self, data: pd.DataFrame) -> Dict:
         """
@@ -184,9 +235,18 @@ class PointAndFigureCalculator:
             method = "explicit_index"
         
         horizontal_count = len(accumulation_columns)
-        
-        if horizontal_count < 3:
-            return {'count': horizontal_count, 'targets': {}}
+
+        # 孟洪涛原则：使用动态阈值（需要传入 data 参数）
+        # 这里使用默认阈值3，调用方可以通过 kwargs 传入 dynamic_threshold
+        min_threshold = kwargs.get('dynamic_threshold', 3)
+
+        if horizontal_count < min_threshold:
+            return {
+                'count': horizontal_count,
+                'targets': {},
+                '_threshold_used': min_threshold,
+                '_threshold_note': f'水平计数{horizontal_count}列 < 阈值{min_threshold}列（孟洪涛原则）'
+            }
         
         # 计算积累区的价格范围
         all_highs = [col['high'] for col in accumulation_columns]
@@ -333,7 +393,7 @@ class PointAndFigureCalculator:
         return best_start, best_end
 
 
-def calculate_cause_effect_from_pnf(data: pd.DataFrame, 
+def calculate_cause_effect_from_pnf(data: pd.DataFrame,
                                     box_size_pct: float = 1.0,
                                     reversal_boxes: int = 3,
                                     phase: str = '',
@@ -341,25 +401,32 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
                                     known_tr_low: float = None) -> Dict:
     """
     基于点数图计算威科夫因果效应（便捷函数）
-    
+
+    孟洪涛原则：使用动态阈值根据市场波动率调整
+
     重要理论约束：
     - 派发期的"因"触发向下的"果"
     - 吸筹期的"因"触发向上的"果"
-    
+
     Args:
         data: OHLCV数据
         box_size_pct: 箱体大小百分比
         reversal_boxes: 反转箱体数
         phase: 当前阶段（用于确定目标方向）
-        
+
     Returns:
         因果效应分析结果
     """
     calculator = PointAndFigureCalculator(box_size_pct, reversal_boxes)
+
+    # 孟洪涛原则：获取动态PNF阈值
+    dynamic_threshold = calculator.get_dynamic_pnf_threshold(data)
+
     pnf_data = calculator.calculate_pnf(data)
     result = calculator.calculate_horizontal_count(
         pnf_data, phase=phase,
-        known_tr_high=known_tr_high, known_tr_low=known_tr_low
+        known_tr_high=known_tr_high, known_tr_low=known_tr_low,
+        dynamic_threshold=dynamic_threshold  # 传入动态阈值
     )
     
     pnf_method = result.get('_pnf_method', 'auto_detect')

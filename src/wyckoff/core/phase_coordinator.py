@@ -119,7 +119,10 @@ class PhaseCoordinator:
                 logger.info(f"[P0-2修复] 初步识别为{preliminary_phase}，屏蔽SOW检测")
 
         # 3. 用威科夫事件边界更新交易区间检测器
-        self._update_trading_range_from_events(climax_res, ar_res, preliminary_phase)
+        # UTAD检测需要移到这里，以便在更新TR边界时使用
+        utad_res = self.detector.detect_utad()
+
+        self._update_trading_range_from_events(climax_res, ar_res, preliminary_phase, utad_res)
 
         # 统一更新子检测器的分析上下文
         self.detector._update_all_detectors_context(preliminary_phase)
@@ -133,9 +136,6 @@ class PhaseCoordinator:
         lpsy_res = self.detector.detect_lpsy(trading_range=tr_res)
         joc_res = self.detector.detect_joc()
         fti_res = self.detector.detect_fti()
-
-        #  UTAD 检测：仅在派发阶段或价格高位时触发
-        utad_res = self.detector.detect_utad()
 
         # 5. 运行事件序列验证（在原始dict上，模型封装前）
         raw_events = {
@@ -244,18 +244,27 @@ class PhaseCoordinator:
 
         return events
 
-    def _update_trading_range_from_events(self, climax_res: Dict, ar_res: Dict, phase: str):
+    def _update_trading_range_from_events(self, climax_res: Dict, ar_res: Dict, phase: str, utad_res: Dict = None):
         """
         从威科夫事件更新交易区间边界
-        
+
         派发期：TR上沿 = BC高点, TR下沿 = AR低点
         积累期：TR上沿 = AR高点, TR下沿 = SC低点
+        UTAD增强：若检测到UTAD，使用UTAD突破位作为派发区上沿
         """
         tr_detector = self.detector.range_detector
-        
+
         if 'Distribution' in phase:
             bc_high = climax_res.get('price') if climax_res.get('type') == 'buying_climax' else None
             ar_low = ar_res.get('price') if ar_res.get('detected') else None
+
+            # 孟洪涛原则：UTAD 是派发区上沿的更准确参考
+            if utad_res and utad_res.get('detected'):
+                utad_high = utad_res.get('breakout_price')
+                if utad_high:
+                    bc_high = max(bc_high or 0, utad_high)
+                    logger.info(f"[孟洪涛原则] UTAD检测到派发区上沿更新: {utad_high:.2f}")
+
             if bc_high and ar_low and bc_high > ar_low:
                 tr_detector.update_from_phase_events(bc_high, ar_low, "BC-AR")
                 return
@@ -304,11 +313,27 @@ class PhaseCoordinator:
         if is_ps and is_sc:
             return 'Accumulation Phase A'  # 置信度低：PS+SC，等待 AR 确认
 
-        # 强信号覆盖
+        # 孟洪涛原则：Spring 是最重要形态（书中提及 136 次）
+        # Spring 直接跳转到 Phase C，且给予最高置信度
         if spring_res.get('detected'):
+            # 评估 Spring 质量：type_3_safe > type_2_neutral > type_1_dangerous
+            spring_signals = spring_res.get('signals', [])
+            latest_spring = spring_res.get('latest_spring', {})
+            if isinstance(latest_spring, dict):
+                spring_type = latest_spring.get('spring_type', 'type_2_neutral')
+                if spring_type == 'type_3_safe':
+                    # 安全型 Spring：置信度最高
+                    return 'Accumulation Phase C'  # 置信度: 0.95
+                elif spring_type == 'type_2_neutral':
+                    return 'Accumulation Phase C'  # 置信度: 0.85
+                else:
+                    # 危险型 Spring：可能需要二次确认
+                    return 'Accumulation Phase B'  # 置信度: 0.70
             return 'Accumulation Phase C'
+
+        # Upthrust 也跳转到 Phase C，但置信度略低于 Spring
         if upthrust_res.get('detected'):
-            return 'Distribution Phase C'
+            return 'Distribution Phase C'  # 置信度: 0.85
 
         # 默认未知
         return 'Unknown'

@@ -17,11 +17,100 @@ class RecommendationEngine:
     """
     威科夫交易建议引擎 (P2 #2 - Enhanced)
     负责从检测结果中推导出交易计划和风险建议
+
+    孟洪涛《新威科夫操盘法》核心原则：
+    - 70% 等待：保持耐心，不强行交易
+    - 20% 分析：深入研究市场结构
+    - 10% 交易：只在高质量信号时行动
     """
+
+    # 耐心状态追踪（类级别，跨分析会话保持）
+    _patience_state = {
+        'consecutive_weak_signals': 0,
+        'last_signal_quality': None,
+        'waiting_mode_active': False,
+        'waiting_since': None,
+    }
 
     def __init__(self, config: WyckoffConfig = None):
         self.config = config or WyckoffConfig()
         self.thresholds = WyckoffThresholds()
+
+    def _calculate_patience_score(self, detected_keys: List[str], base_score: float, market_env: MarketEnvironment) -> tuple:
+        """
+        计算耐心评分（孟洪涛70%等待原则）
+
+        Returns:
+            (patience_penalty: float, patience_reasons: List[str], should_wait: bool)
+        """
+        patience_penalty = 0
+        patience_reasons = []
+        should_wait = False
+
+        # 1. 检查是否有主要高质量信号
+        high_quality_signals = {'spring', 'joc', 'fti'}
+        medium_quality_signals = {'sos', 'sow', 'lps', 'lpsy'}
+        has_high_quality = bool(detected_keys & high_quality_signals)
+        has_medium_quality = bool(detected_keys & medium_quality_signals)
+
+        # 2. 检查信号数量是否过少
+        if len(detected_keys) == 0:
+            patience_penalty = 0
+            patience_reasons.append("无检测信号，保持耐心等待")
+        elif len(detected_keys) == 1 and not has_high_quality:
+            patience_penalty = -15
+            patience_reasons.append("单一信号且非高质量，建议等待更多确认")
+            should_wait = True
+        elif len(detected_keys) <= 2 and not has_high_quality:
+            patience_penalty = -8
+            patience_reasons.append("信号数量不足且缺少核心信号，耐心等待")
+            should_wait = True
+
+        # 3. 检查基础分数是否过低
+        if base_score < 25:
+            patience_penalty -= 10
+            patience_reasons.append(f"基础分数{base_score}较低，不符合孟洪涛10%交易原则")
+            should_wait = True
+        elif base_score < 40:
+            patience_penalty -= 5
+            patience_reasons.append("信号质量中等，建议提高入场门槛")
+
+        # 4. 检查市场环境是否适合交易
+        if market_env == MarketEnvironment.NEUTRAL:
+            if not has_high_quality:
+                patience_penalty -= 5
+                patience_reasons.append("震荡市场且无高质量信号，建议等待")
+                should_wait = True
+        elif market_env == MarketEnvironment.MIXED:
+            patience_penalty -= 8
+            patience_reasons.append("多空信号混杂，建议等待市场明确方向")
+            should_wait = True
+
+        # 5. 检查是否处于等待期（连续弱信号）
+        cls = self.__class__
+        if base_score < 50:
+            cls._patience_state['consecutive_weak_signals'] += 1
+            if cls._patience_state['consecutive_weak_signals'] >= 3:
+                patience_penalty -= 10
+                patience_reasons.append(f"连续{cls._patience_state['consecutive_weak_signals']}次低质量分析，进入耐心等待模式")
+                cls._patience_state['waiting_mode_active'] = True
+                if cls._patience_state['waiting_since'] is None:
+                    from datetime import datetime
+                    cls._patience_state['waiting_since'] = datetime.now()
+                should_wait = True
+        else:
+            # 高质量信号重置计数器
+            cls._patience_state['consecutive_weak_signals'] = 0
+            if has_high_quality:
+                cls._patience_state['waiting_mode_active'] = False
+
+        # 6. 检查是否处于等待激活期
+        if cls._patience_state['waiting_mode_active']:
+            patience_penalty -= 15
+            patience_reasons.append("系统处于耐心等待模式，只接受Spring/JOC级别的超高质量信号")
+            should_wait = True
+
+        return patience_penalty, patience_reasons, should_wait
 
     @staticmethod
     def _get_attr(obj: Any, key: str, default=None):
@@ -296,6 +385,15 @@ class RecommendationEngine:
             else:
                 base_score -= 8
                 reasons.append("SOS与Upthrust信号冲突 (-8分)")
+
+        # --- 孟洪涛耐心评分（70%等待原则） ---
+        patience_penalty, patience_reasons, should_wait = self._calculate_patience_score(
+            set(detected_keys), base_score, market_env
+        )
+        base_score += patience_penalty
+        reasons.extend(patience_reasons)
+        if should_wait and base_score < 50:
+            reasons.append("🕰️ 孟洪涛原则：当前处于70%等待期，建议耐心等待高质量信号")
 
         # --- 冲突惩罚 (v2.1校准) ---
         if bullish_count > 0 and bearish_count > 0 and not skip_conflict_penalty:
