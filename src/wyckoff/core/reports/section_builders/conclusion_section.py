@@ -1105,7 +1105,7 @@ class ConclusionSection(BaseSectionBuilder):
         if market_state is None:
             return ""
             
-        from ...core.market_state import RegimeState
+        from src.wyckoff.core.market_state import RegimeState
 
         report = """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
