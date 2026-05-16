@@ -27,6 +27,7 @@ class PositionSizingConfig(BaseModel):
 
 class WyckoffThresholds(BaseModel):
     """威科夫分析阈值集中配置"""
+    market_type: str = Field(default="UNKNOWN", description="市场类型（如 CRYPTO, A_SHARE）")
     
     # ── 波动率分类阈值 ──────────────────────────────────────
     VOLATILITY_THRESHOLDS: Dict[str, Dict[str, float]] = Field(
@@ -137,6 +138,18 @@ class WyckoffThresholds(BaseModel):
             raise ValueError(f'ATR百分比和基础阈值必须为正数 (atr_pct={atr_pct}, base_threshold={base_threshold})')
         if atr_pct > 0.5:
             raise ValueError(f'ATR百分比异常高 (atr_pct={atr_pct})，请检查数据')
+            
+        if self.market_type == "CRYPTO":
+            if atr_pct < 0.03:
+                result = base_threshold
+            elif atr_pct < 0.06:
+                result = base_threshold * 1.2
+            elif atr_pct < 0.10:
+                result = base_threshold * 1.5
+            else:
+                result = base_threshold * 2.0
+            return max(0.5, min(result, 5.0))
+            
         if atr_pct < 0.015:
             result = base_threshold * 0.8
         elif atr_pct < 0.03:
@@ -153,6 +166,18 @@ class WyckoffThresholds(BaseModel):
             raise ValueError(f'ATR百分比和基础阈值必须为正数 (atr_pct={atr_pct}, base_threshold={base_threshold})')
         if atr_pct > 0.5:
             raise ValueError(f'ATR百分比异常高 (atr_pct={atr_pct})，请检查数据')
+            
+        if self.market_type == "CRYPTO":
+            if atr_pct < 0.03:
+                result = max(atr_pct * 1.2, base_threshold * 1.2)
+            elif atr_pct < 0.06:
+                result = max(atr_pct * 1.5, base_threshold * 1.5)
+            elif atr_pct < 0.10:
+                result = max(atr_pct * 2.0, base_threshold * 2.0)
+            else:
+                result = max(atr_pct * 2.5, base_threshold * 3.0)
+            return max(0.01, min(result, 0.3)) # 上限提高到30%
+            
         if atr_pct < 0.015:
             result = max(atr_pct * 1.0, base_threshold * 0.8)
         elif atr_pct < 0.03:
@@ -165,6 +190,12 @@ class WyckoffThresholds(BaseModel):
     
     def classify_volatility(self, atr_pct: float) -> str:
         """根据ATR百分比分类波动率"""
+        if self.market_type == "CRYPTO":
+            if atr_pct < 0.03: return 'low'
+            elif atr_pct < 0.06: return 'medium'
+            elif atr_pct < 0.10: return 'high'
+            else: return 'extreme'
+            
         if atr_pct < 0.015:
             return 'low'
         elif atr_pct < 0.03:

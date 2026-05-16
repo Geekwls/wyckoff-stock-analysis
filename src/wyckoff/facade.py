@@ -53,7 +53,15 @@ class WyckoffAnalyzer:
         self.symbol = symbol
         self.period = period
         self.config = config or WyckoffConfig()
-        self.thresholds = WyckoffThresholds()
+        
+        # 提取市场类型并注入动态阈值系统
+        from .core.symbol_resolver import SymbolResolver
+        try:
+            market_info = SymbolResolver().resolve(self.symbol)
+            self.thresholds = WyckoffThresholds(market_type=market_info.market.value)
+        except Exception:
+            self.thresholds = WyckoffThresholds()
+            
         self.cache_service = cache_service or CacheService.get_instance()
         self._analysis_cache = self.cache_service.get_legacy_lru_adapter(
             namespace="analysis",
@@ -511,7 +519,13 @@ class WyckoffAnalyzer:
             # 深证主板：000/001/002/003开头
             return "sz.399001"  # 深证成指
         
-        # 美股
+        if info.market == MarketType.CRYPTO:
+            return "BTC-USD"
+            
+        if info.market == MarketType.HK_STOCK:
+            return "^HSI"  # 恒生指数
+            
+        # 美股及其他默认
         return "SPY"
 
     def _analyze_market_environment(self) -> Dict:
