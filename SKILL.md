@@ -27,6 +27,7 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    - Alternatively, import the library directly: `from src.wyckoff import WyckoffAnalyzer; analyzer = WyckoffAnalyzer("[SYMBOL]")`
    - If the tool fails or you don't have tool execution ability, strictly ask the user for recent price and volume data.
    - Evaluate the data. Determine Phase (A-E), Key Events (Spring/Upthrust/SOS/SOW), and Volume confirmation.
+   - **WIE 3.0 Searchlight Arbitration (CRITICAL)**: When analyzing the JSON output, always compare the legacy `summary.phase` against the `microstructure_background` data. If the legacy phase label contradicts the objective microstructure physical data (e.g., legacy says "Distribution" but APS > 10, Breakout Volume is massive, and S3/S4 probabilities are high), YOU MUST trust the objective microstructure data. Treat the `microstructure_background` as the "Searchlight" that reveals the truth. Explicitly reject the legacy phase label in your report, and analyze based on the objective supply/demand dynamics.
    - **Signal Conflict Resolution**: If `has_conflict` is true in the JSON output, you MUST enter "Deep Discernment Mode". Compare the "Shakeout/Spring" vs "Bull Trap/UT" scenarios, analyze the supply/demand weight, and provide a bias confidence level.
    - **🔑 Tool Selection (MANDATORY — choose the cheapest tool that satisfies the query):**
 
