@@ -9,8 +9,12 @@ Wyckoff Analyzer - Facade for Orchestrator and Detectors
 
 import pandas as pd
 import logging
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
 from datetime import datetime
+
+# WIE 3.0 MVP 类型导入 (用于类型提示)
+if TYPE_CHECKING:
+    from .core.market_state import MarketState
 
 # 库层内部导入
 from .config.settings import WyckoffConfig, WyckoffThresholds
@@ -67,6 +71,15 @@ class WyckoffAnalyzer:
         self.mtf_analyzer = None
         self.rs_analyzer = None
 
+        # WIE 3.0 MVP 微观结构引擎 (fetch_data 后初始化)
+        self.wie3_vsa_analyzer = None
+        self.wie3_efficiency_analyzer = None
+        self.wie3_aps_analyzer = None
+        self.wie3_regime_tracker = None
+        self.wie3_rs_engine = None
+        self.wie3_state_engine = None
+        self.wie3_market_state = None  # 存储最新的市场状态
+
         self._index_analyzer_cache: Optional['WyckoffAnalyzer'] = None
 
     def __enter__(self): return self
@@ -88,7 +101,156 @@ class WyckoffAnalyzer:
             self.law_analyzer = WyckoffLawAnalyzer(self.data, self.config, self.pattern_detector)
             self.mtf_analyzer = MultiTimeframeAnalyzer(self.data, self.pattern_detector)
             self.rs_analyzer = RelativeStrengthAnalyzer(self.data, self.symbol)
+
         return self.data
+
+    def _init_wie3_mvp_engines(self):
+        """初始化 WIE 3.0 MVP 微观结构分析引擎"""
+        try:
+            from .core.vsa_analyzer import VSAAnalyzer
+            from .core.expansion_efficiency import ExpansionEfficiencyEngine
+            from .core.aps_engine import APSEngine
+            from .core.regime_tracker import RegimeTracker
+            from .core.relative_strength import RelativeStrengthEngine
+            from .core.state_engine import EventDrivenStateEngine
+
+            # 1. VSA 微观量价解构
+            self.wie3_vsa_analyzer = VSAAnalyzer()
+
+            # 2. 推动效率引擎 (修补奇点)
+            self.wie3_efficiency_analyzer = ExpansionEfficiencyEngine()
+
+            # 3. APS 吸收动力学引擎
+            self.wie3_aps_analyzer = APSEngine()
+
+            # 4. Regime 追踪与 VPOC 引擎
+            self.wie3_regime_tracker = RegimeTracker()
+
+            # 5. 相对强度引擎 (需要大盘数据)
+            self.wie3_rs_engine = RelativeStrengthEngine()
+
+            # 6. 事件驱动状态引擎
+            self.wie3_state_engine = EventDrivenStateEngine()
+
+            logger.info("[WIE 3.0 MVP] 微观结构引擎初始化完成")
+
+        except Exception as e:
+            logger.error(f"[WIE 3.0 MVP] 引擎初始化失败: {e}")
+            # 不影响主流程,继续运行
+            self.wie3_vsa_analyzer = None
+            self.wie3_efficiency_analyzer = None
+            self.wie3_aps_analyzer = None
+            self.wie3_regime_tracker = None
+            self.wie3_rs_engine = None
+            self.wie3_state_engine = None
+
+    def analyze_wie3_mvp(self, index_df: pd.DataFrame = None) -> Optional['MarketState']:
+        """
+        执行 WIE 3.0 MVP 微观结构分析
+
+        Args:
+            index_df: 大盘数据 (用于相对强度分析),可选
+
+        Returns:
+            MarketState: 最新的市场状态对象
+        """
+        if self.data is None or self.data.empty:
+            logger.warning("[WIE 3.0 MVP] 数据未就绪,跳过微观结构分析")
+            return None
+
+        # 惰性加载 (Lazy Initialization): 仅在实际调用时初始化引擎，节约基础扫描时的资源
+        if not self.wie3_vsa_analyzer:
+            self._init_wie3_mvp_engines()
+
+        if not self.wie3_vsa_analyzer:
+            logger.warning("[WIE 3.0 MVP] 引擎初始化失败,跳过微观结构分析")
+            return None
+
+        try:
+            # 1. VSA 微观量价解构
+            df_vsa = self.wie3_vsa_analyzer.analyze(self.data)
+            logger.debug("[WIE 3.0 MVP] VSA 分析完成")
+
+            # 2. 推动效率分析
+            df_eff = self.wie3_efficiency_analyzer.analyze(df_vsa)
+            logger.debug("[WIE 3.0 MVP] 推动效率分析完成")
+
+            # 3. APS 吸收动力学分析
+            df_aps = self.wie3_aps_analyzer.analyze(df_eff)
+            logger.debug("[WIE 3.0 MVP] APS 吸收动力学分析完成")
+
+            # 4. Regime 追踪与 VPOC 计算
+            df_regime = self.wie3_regime_tracker.track(df_vsa, df_eff, df_aps)
+            logger.debug("[WIE 3.0 MVP] Regime 追踪与 VPOC 计算完成")
+
+            # 5. 相对强度分析 (如果提供了大盘数据)
+            has_index_data = index_df is not None and not index_df.empty
+            if has_index_data:
+                df_rs = self.wie3_rs_engine.analyze(df_regime, index_df)
+                logger.debug("[WIE 3.0 MVP] 相对强度分析完成")
+            else:
+                df_rs = df_regime.copy()  # 修复 SettingWithCopyWarning 隐患
+                # 添加默认的相对强度字段
+                if 'liquidity_retention' not in df_rs.columns:
+                    df_rs['liquidity_retention'] = 1.0
+                if 'hidden_strength' not in df_rs.columns:
+                    df_rs['hidden_strength'] = False
+                if 'hidden_weakness' not in df_rs.columns:
+                    df_rs['hidden_weakness'] = False
+                # 添加默认字段以供 extract_summary 使用
+                df_rs['idx_log_return'] = 0.0
+                df_rs['asset_log_return'] = 0.0
+
+            # 6. 状态机推演 (序列化更新，从头遍历以累积贝叶斯后验)
+            # 必须重置状态机，确保每次 analyze 都是从先验开始，而不是从上次的脏状态开始
+            from .core.state_engine import EventDrivenStateEngine
+            self.wie3_state_engine = EventDrivenStateEngine()
+
+            n_rows = len(df_rs)
+            for i in range(n_rows):
+                row_dict = df_rs.iloc[i].to_dict()
+                row_dict['close'] = self.data['Close'].iloc[i] if 'Close' in self.data.columns else row_dict.get('close', 0)
+                
+                v_dict = df_vsa.iloc[i].to_dict()
+                a_dict = df_aps.iloc[i].to_dict()
+                rg_dict = df_regime.iloc[i].to_dict()
+                rs_dict = df_rs.iloc[i].to_dict()
+                
+                # 兼容旧逻辑
+                if 'event_flag' not in rg_dict:
+                    rg_dict['event_flag'] = 'NORMAL'
+                
+                self.wie3_market_state = self.wie3_state_engine.update(
+                    row_dict, v_dict, a_dict, rg_dict, rs_dict
+                )
+
+            logger.info(
+                f"[WIE 3.0 MVP] 状态机序列推演完成: {self.wie3_market_state.regime} "
+                f"(APS={self.wie3_market_state.aps:.2f}, CDS={self.wie3_market_state.cds}, "
+                f"VPOC={self.wie3_market_state.vpoc_price:.2f}, Entropy={self.wie3_market_state.state_entropy:.4f})"
+            )
+
+            return self.wie3_market_state
+
+        except Exception as e:
+            logger.error(f"[WIE 3.0 MVP] 微观结构分析失败: {e}", exc_info=True)
+            return None
+
+    def get_wie3_summary(self) -> Dict[str, Any]:
+        """
+        获取 WIE 3.0 MVP 分析摘要
+
+        Returns:
+            包含所有模块摘要的字典
+        """
+        if self.wie3_market_state is None:
+            return {}
+
+        return {
+            'market_state': self.wie3_market_state.to_dict() if self.wie3_market_state else None,
+            'timestamp': str(self.data.index[-1]) if self.data is not None else None,
+            'symbol': self.symbol,
+        }
 
     def get_intraday_data(self, frequency: str = "60m") -> pd.DataFrame:
         """获取日内数据（不更新主数据状态）"""
@@ -112,7 +274,8 @@ class WyckoffAnalyzer:
 
         Returns:
             JSON string: { symbol, phase, phase_confidence, sequence_score,
-                          current_price, key_events_summary, phase_advice }
+                          current_price, key_events_summary, phase_advice,
+                          background_regime, background_entropy }
         """
         if not self.pattern_detector:
             self.fetch_data()
@@ -158,6 +321,19 @@ class WyckoffAnalyzer:
 
             current_price = float(self.data['Close'].iloc[-1]) if self.data is not None else None
 
+            # 融入 WIE 3.0 MVP 微观结构背景 (Microstructure Context)
+            bg_regime = "Unknown"
+            bg_entropy = 0.0
+            try:
+                market_idx_analyzer = getattr(self, '_get_cached_index_analyzer', lambda: None)()
+                index_df = market_idx_analyzer.data if market_idx_analyzer else None
+                wie3_state = self.analyze_wie3_mvp(index_df=index_df)
+                if wie3_state:
+                    bg_regime = wie3_state.regime
+                    bg_entropy = round(float(wie3_state.state_entropy), 4)
+            except Exception as e:
+                logger.warning(f"[WIE 3.0 MVP] 微观结构分析辅助失败: {e}")
+
             import json as _json
             return _json.dumps({
                 'symbol': self.symbol,
@@ -167,6 +343,8 @@ class WyckoffAnalyzer:
                 'current_price': current_price,
                 'key_events_summary': events_summary,
                 'phase_advice': phase_advice,
+                'background_regime': bg_regime,
+                'background_entropy': bg_entropy,
             }, ensure_ascii=False, indent=2)
 
         except Exception as e:

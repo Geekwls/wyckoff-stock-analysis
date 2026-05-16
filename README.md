@@ -1,9 +1,9 @@
-# 📈 Wyckoff Stock Analysis Skill v2.6.0 "Expert Edition"
+# 📈 Wyckoff Stock Analysis Skill v3.0.0 "Bayesian Edition"
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![Pydantic](https://img.shields.io/badge/Pydantic-v2-red.svg)](https://docs.pydantic.dev/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Accuracy](https://img.shields.io/badge/Accuracy-~80%25-orange.svg)](CHANGELOG.md)
+[![Accuracy](https://img.shields.io/badge/Accuracy-~85%25-orange.svg)](CHANGELOG.md)
 
 > **专业级 AI Agent 威科夫量化分析组件**
 > 专为 Claude Code, Cursor, MCP 客户端及量化交易员打造的"大脑+工具"双核引擎。
@@ -15,10 +15,10 @@
 本项目并非简单的"提示词模板"，而是一套经过生产级重构的 **Agent 技能包**。
 
 1.  **🧠 零幻觉**：形态识别由本地 Python 向量化算法完成，模型仅负责逻辑推理，杜绝 AI 对图表的臆断。
-2.  **📏 全量化**：基于理查德·威科夫（Richard D. Wyckoff）经典理论，将抽象概念（如“供应衰竭”）转为精确的数学阈值。
+2.  **📏 贝叶斯微观动力学 (WIE 3.0)**：独家引入 6x6 非对称隐马尔可夫模型 (HMM)，提供精准的 S0-S5 市场状态概率推演。
 3.  **🔄 动态术语**：根据当前市场阶段（吸筹/派发）动态调整术语解释，确保分析结论在威科夫逻辑内自洽。
 4.  **🛡️ 逻辑证伪**：明确列出“证伪条件”，不仅告诉你什么时候买，还告诉你什么时候你判断错了，提供纠错预案。
-5.  **⚡ 贝叶斯自适应**：内置贝叶斯阈值模型，自动根据不同标的的波动率（ATR）调整识别灵敏度。
+5.  **⚡ 纯正威科夫哲学**：系统坚持“探照灯”原则，用量化照亮背景（APS/VPOC），把定性与交易决策的权力彻底交还给人类。
 
 ---
 
@@ -71,16 +71,14 @@ python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 
 ---
 
-## 🌟 v2.0.0 核心功能亮点
+## 🌟 v3.0.0 核心功能亮点 (WIE 3.0 MVP)
 
 | 功能 | 说明 |
 |------|------|
+| **贝叶斯概率推演 (HMM)** | 基于 6x6 非对称转移矩阵推算 S0-S5 六大微观状态分布，符合因果定律的序列后验概率。 |
+| **机构级微观背景 (APS/VPOC)** | 暴露 `microstructure_background` 节点，提供吸收分 (APS)、收敛天数 (CDS)、筹码峰 (VPOC) 等物理参量。 |
+| **“探照灯”双重视角** | 形态检测与微观背景解耦。如：“检测到 Spring，但处于 S5 派发的高概率环境”，判断权归于用户。 |
 | **孟洪涛增强检测** | 完美实现《新威科夫操盘法》中的 Spring 5 重过滤及 JOC 强度分类。 |
-| **多周期共振** | 自动分析日线、周线、月线趋势的一致性，捕捉高胜率共振信号。 |
-| **点数图 (P&F)** | 基于横盘时间计算“因果法则”目标位，量化上涨/下跌空间。 |
-| **供需评估** | 量化每一波反弹与回撤中的供需比，识别主力吸筹质量。 |
-| **信号生命周期** | 自动管理信号时效性，通过 10 日窗口验证 Spring/JOC 的真伪并自动更新信号状态。 |
-| **PS/PSY 早期预警** | 检测 Phase A 的“初步”进场/抛压信号 (PS/PSY)，建立从趋势停止到高潮确认的完整证据链。 |
 | **跨周期 EVR 共振** | 实现 Effort vs Result 的周线-日线跨级别共振分析，识别具备大级别潜力的主力吸筹行情。 |
 
 ---

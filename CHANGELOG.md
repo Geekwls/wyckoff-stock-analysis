@@ -2,6 +2,13 @@
 
 本文档记录了Wyckoff Stock Analysis Skill的所有重要变更和功能更新。
 
+## [v3.0.0] - 2026-05-16
+### 🤖 贝叶斯动力学版 (Bayesian Dynamics Upgrade - WIE 3.0 MVP)
+- **WIE 3.0 MVP (Bayesian Regime Filter)**: 独家引入 6x6 非对称隐马尔可夫模型，计算市场微观状态的序列后验概率 (S0-S5)。
+- **微观物理量指标**: 新增 APS (吸收分), CDS (收敛天数), LCS (死票甄别), Expansion Efficiency (推动效率) 计算引擎。
+- **双重上下文生态**: JSON API 新增 `microstructure_background` 节点，将形态检测与背景概率解耦，贯彻“探照灯”设计哲学，不干预主观决策。
+- **Facade 惰性加载**: 重构 `facade.py` 引擎初始化机制，大幅降低旧有形态扫描时的内存与 CPU 开销。
+
 ## [v2.6.0] - 2026-05-15
 ### 💎 实战大师版 (Expert Edition Upgrade)
 - **Spring 生命周期管理**: 引入 10 日动态跟踪窗口，增加了对 Spring 失败（Failed）状态的证伪逻辑，显著减少假信号误报。

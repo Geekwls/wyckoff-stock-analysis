@@ -43,7 +43,15 @@ class AkShareStrategy(DataSourceStrategy):
             start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
             
             # akshare 频率映射
-            ak_period = "daily" if frequency in ("d", "1d") else frequency
+            freq_lower = str(frequency).lower()
+            if freq_lower in ("d", "1d", "daily"):
+                ak_period = "daily"
+            elif freq_lower in ("w", "1w", "weekly"):
+                ak_period = "weekly"
+            elif freq_lower in ("m", "1m", "monthly"):
+                ak_period = "monthly"
+            else:
+                ak_period = "daily"
             
             # 获取历史数据
             df = ak.stock_zh_a_hist(

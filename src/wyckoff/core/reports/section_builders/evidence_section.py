@@ -16,8 +16,23 @@ class EvidenceSection(BaseSectionBuilder):
         seq_validation = core_evidence.get('sequence_validation', {})
         ps_sc_valid = seq_validation.get('ps_sc_valid', True)
 
+        # 检查是否处于严重破位寻底状态
+        current_price = getattr(self, 'data', None) is not None and self.data['Close'].iloc[-1]
+        is_breakdown = False
+        try:
+            if hasattr(self, 'pattern_detector') and hasattr(self.pattern_detector, 'detect_trading_range'):
+                tr = self.pattern_detector.detect_trading_range()
+                if tr and getattr(tr, 'low', 0) > 0:
+                    tr_height = getattr(tr, 'high', getattr(tr, 'low', 0)) - tr.low
+                    if current_price < tr.low - 0.1 * tr_height or current_price < tr.low * 0.97:
+                        is_breakdown = True
+        except Exception:
+            pass
+
         text = f"\n【核心证据清单】（孟洪涛方法）\n   Phase A 确认度: {evidence_count}/{total_checks} ({strength.upper()})\n"
         text += "   注意：Phase A 标准事件为 PS → SC → AR → ST\n"
+        if is_breakdown:
+            text += "   ⚠️ 【证据链降噪说明】 当前盘面已跌穿前期核心箱体下沿，处于破位下行弱势寻底期。历史出现的 PSY (初次供应) 和未能守护底部的 PS (初步支撑) 在此轮深度下跌中业已死亡失效，不作为当前结构的有效前置判定。\n"
 
         #  新增：显示时序验证警告
         if not ps_sc_valid:
@@ -32,13 +47,11 @@ class EvidenceSection(BaseSectionBuilder):
         sc = evidence.get('sc', {})
         sc_detected = sc.get('detected') and any(k in sc for k in ['price', 'close'])
         if ps_sc_valid:
-            # 时序有效时正常显示
             if sc_detected:
                 text += f"   [Phase A] SC (恐慌抛售): {sc['date']} 价格{sc['price']:.2f} 量比{sc['volume_ratio']:.1f}x 置信度{sc['confidence']:.0f}%\n"
             else:
                 text += "   [Phase A] SC (恐慌抛售): 未检测到\n"
         else:
-            # 时序无效时标记为不计入
             if sc_detected:
                 text += f"   [Phase A] SC (恐慌抛售): 检测到但时序不符，不计入证据\n"
             else:
@@ -47,7 +60,9 @@ class EvidenceSection(BaseSectionBuilder):
         # PS
         ps = evidence.get('ps', {})
         ps_detected = ps.get('detected') and any(k in ps for k in ['ps_price', 'rebound_pct'])
-        if ps_sc_valid:
+        if is_breakdown:
+            text += "   [Phase A] PS (初步支撑): 未形成有效支撑 (前期支撑带已被向下跌穿失效)\n"
+        elif ps_sc_valid:
             if ps_detected:
                 price_str = f"价格{ps['ps_price']:.2f}" if 'ps_price' in ps else f"反弹{ps.get('rebound_pct', 0):.1f}%"
                 text += f"   [Phase A] PS (初步支撑): {ps.get('date', '?')} {price_str} 置信度{ps.get('confidence', 0):.0f}%\n"
@@ -62,7 +77,9 @@ class EvidenceSection(BaseSectionBuilder):
         # PSY
         psy = evidence.get('psy', {})
         psy_detected = psy.get('detected') and any(k in psy for k in ['price', 'confidence'])
-        if psy_detected:
+        if is_breakdown:
+            text += "   [Phase A] PSY (初步供应): 顶部陈旧供应信号已随长期单边下跌失效\n"
+        elif psy_detected:
             text += f"   [Phase A] PSY (初步供应): {psy.get('date', '?')} 价格{psy.get('price', 0):.2f} 置信度{psy.get('confidence', 0):.0f}%\n"
         elif 'psy' in evidence:
             text += "   [Phase A] PSY (初步供应): 未检测到\n"
@@ -76,10 +93,17 @@ class EvidenceSection(BaseSectionBuilder):
 
         # ST
         st = evidence.get('st', {})
-        if st.get('detected') and all(k in st for k in ['date', 'price', 'volume', 'confidence']):
-            text += f"   [Phase A] ST (二次测试): {st['date']} 价格{st['price']:.2f} 量比{st['volume_ratio']:.2f}x 置信度{st['confidence']:.0f}%\n"
+        if st.get('detected') and all(k in st for k in ['date', 'price', 'confidence']):
+            vol_ratio = st.get('volume_ratio', st.get('vol_ratio', 1.0))
+            if vol_ratio <= 0.85:
+                note = " (极致缩量：浮筹耗尽，典型高位/低位健康蓄力特征)"
+            elif vol_ratio >= 1.5:
+                note = " (放量测试：抛压未清，仍需反复试探或存在诱多风险)"
+            else:
+                note = " (正常缩量试探)"
+            text += f"   [Phase A/B] ST (二次测试): {st['date']} 价格{st['price']:.2f} 量比{vol_ratio:.2f}x 置信度{st['confidence']:.0f}%{note}\n"
         else:
-            text += "   [Phase A] ST (二次测试): 未检测到\n"
+            text += "   [Phase A/B] ST (二次测试): 未检测到\n"
 
         # Spring (辅助)
         spring_ev = evidence.get('spring', {})

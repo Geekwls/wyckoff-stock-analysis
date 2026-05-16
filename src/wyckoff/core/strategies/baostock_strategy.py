@@ -44,11 +44,28 @@ class BaoStockStrategy(DataSourceStrategy):
 
         end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
         
-        # 归一化频率参数：兼容 "1d"/"d" 两种格式
-        norm_freq = "d" if frequency in ("d", "1d") else frequency
+        freq_lower = str(frequency).lower()
+        if freq_lower in ("d", "1d", "daily"):
+            bs_freq = "d"
+        elif freq_lower in ("w", "1w", "weekly"):
+            bs_freq = "w"
+        elif freq_lower in ("m", "1m", "monthly"):
+            bs_freq = "m"
+        elif freq_lower in ("60m", "1h", "60"):
+            bs_freq = "60"
+        elif freq_lower in ("30m", "30"):
+            bs_freq = "30"
+        elif freq_lower in ("15m", "15"):
+            bs_freq = "15"
+        elif freq_lower in ("5m", "5"):
+            bs_freq = "5"
+        else:
+            bs_freq = "d"
+        
+        is_daily_or_above = bs_freq in ("d", "w", "m")
         
         # 对于日线以上频率，使用period参数；对于日内频率，限制时间窗口
-        if norm_freq == "d":
+        if is_daily_or_above:
             period_days = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
             days = period_days.get(period, 365)
         else:
@@ -57,10 +74,8 @@ class BaoStockStrategy(DataSourceStrategy):
             
         start_date = (pd.Timestamp.now() - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
 
-        # Baostock 频率映射
-        bs_freq = "d" if norm_freq == "d" else "60" if norm_freq == "60m" else norm_freq
         fields = "date,open,high,low,close,volume,amount"
-        if bs_freq != "d":
+        if not is_daily_or_above:
             fields = "date,time,open,high,low,close,volume,amount"
 
         rs = bs.query_history_k_data_plus(
@@ -84,7 +99,7 @@ class BaoStockStrategy(DataSourceStrategy):
         })
         
         # 处理时间索引
-        if bs_freq == "d":
+        if is_daily_or_above:
             df['Date'] = pd.to_datetime(df['date'])
         else:
             # intraday 数据使用 time 列 (YYYYMMDDHHMMSSmmm)

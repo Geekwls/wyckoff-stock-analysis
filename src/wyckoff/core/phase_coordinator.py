@@ -324,24 +324,22 @@ class PhaseCoordinator:
                 return 'Accumulation Phase A (Re-accumulation)'
         
         # 派发初步迹象：BC + AR + ST（至少BC+AR）
+        phase = 'Unknown'
         if is_bc and is_ar and is_st:
-            return 'Distribution Phase A'  # 置信度高：完整结构 BC+AR+ST
-        if is_bc and is_ar:
-            return 'Distribution Phase A'  # 置信度中：BC+AR，ST 待确认
-        
+            phase = 'Distribution Phase A'  # 置信度高：完整结构 BC+AR+ST
+        elif is_bc and is_ar:
+            phase = 'Distribution Phase A'  # 置信度中：BC+AR，ST 待确认
         # 孟洪涛原则：PSY + BC 也是强有力的派发信号
-        if is_psy and is_bc:
-            return 'Distribution Phase A'  # 置信度中：PSY+BC，预警派发
-
+        elif is_psy and is_bc:
+            phase = 'Distribution Phase A'  # 置信度中：PSY+BC，预警派发
         # 吸筹初步迹象：SC + AR（至少两者）才确认 Phase A 结构启动
-        if is_sc and is_ar and is_st:
-            return 'Accumulation Phase A'  # 置信度高：完整结构 SC+AR+ST
-        if is_sc and is_ar:
-            return 'Accumulation Phase A'  # 置信度中：SC+AR，ST 待确认
-
+        elif is_sc and is_ar and is_st:
+            phase = 'Accumulation Phase A'  # 置信度高：完整结构 SC+AR+ST
+        elif is_sc and is_ar:
+            phase = 'Accumulation Phase A'  # 置信度中：SC+AR，ST 待确认
         # PS (初次支撑) + SC 确认吸筹结构启动（PS 存在时降低对 AR 的要求）
-        if is_ps and is_sc:
-            return 'Accumulation Phase A'  # 置信度低：PS+SC，等待 AR 确认
+        elif is_ps and is_sc:
+            phase = 'Accumulation Phase A'  # 置信度低：PS+SC，等待 AR 确认
 
         # 孟洪涛原则：Spring 是最重要形态（书中提及 136 次）
         # Spring 直接跳转到 Phase C，且给予最高置信度
@@ -352,31 +350,52 @@ class PhaseCoordinator:
             if isinstance(latest_spring, dict):
                 spring_type = latest_spring.get('spring_type', 'type_2_neutral')
                 if spring_type == 'type_3_safe':
-                    # 安全型 Spring：置信度最高
-                    return 'Accumulation Phase C'  # 置信度: 0.95
+                    return 'Accumulation Phase C'
                 elif spring_type == 'type_2_neutral':
-                    return 'Accumulation Phase C'  # 置信度: 0.85
+                    return 'Accumulation Phase C'
                 else:
-                    # 危险型 Spring：可能需要二次确认
-                    return 'Accumulation Phase B'  # 置信度: 0.70
+                    return 'Accumulation Phase B'
             return 'Accumulation Phase C'
 
         # Upthrust 也跳转到 Phase C，但置信度略低于 Spring
         if upthrust_res.get('detected'):
-            return 'Distribution Phase C'  # 置信度: 0.85
+            return 'Distribution Phase C'
 
         # 孟洪涛：CHoCH 是阶段转换的终极确认 (P0)
         if choch_res and choch_res.get('detected'):
             direction = choch_res.get('direction')
             if direction == 'up':
-                # 下跌中出现的第一个强力反弹波段 -> 进入吸筹 Phase A
                 return 'Accumulation Phase A (CHoCH 确认特征变异)'
             else:
-                # 上涨中出现的第一个强力下跌波段 -> 进入派发 Phase A
                 return 'Distribution Phase A (CHoCH 确认特征变异)'
 
-        # 默认未知
-        return 'Unknown'
+        # 长周期重构检查 (避免 2 年以上长跨度机械停留在 Phase A)
+        if 'Phase A' in phase and hasattr(self.detector, 'data') and self.detector.data is not None and not self.detector.data.empty:
+            df = self.detector.data
+            last_date = pd.Timestamp(df.index[-1])
+            earliest_date = None
+            for res in [psy_res, ps_res, climax_res]:
+                if res and res.get('detected') and res.get('date'):
+                    d = pd.Timestamp(res.get('date'))
+                    if earliest_date is None or d < earliest_date: earliest_date = d
+            if earliest_date:
+                days_diff = (last_date - earliest_date).days
+                bars_count = len(df[df.index >= earliest_date])
+                if days_diff > 365 or bars_count > 100:
+                    current_price = df['Close'].iloc[-1]
+                    tr = self.detector.detect_trading_range()
+                    tr_high = tr.get('high', 0) if isinstance(tr, dict) else getattr(tr, 'high', 0)
+                    tr_low = tr.get('low', 0) if isinstance(tr, dict) else getattr(tr, 'low', 0)
+                    if tr_high > tr_low:
+                        pos_ratio = (current_price - tr_low) / (tr_high - tr_low)
+                        if pos_ratio >= 0.7:
+                            logger.info(f"[长周期重构] 箱体跨度{days_diff}天/K线{bars_count}根，高位蓄力，由{phase}升级为再吸筹突破过渡期")
+                            return "Accumulation Phase C/D (Re-accumulation / JOC 蓄力)"
+                        elif pos_ratio <= 0.3:
+                            return "Distribution Phase C/D (高位派发破位前夕)"
+                    return "Consolidation Phase B/C (长周期宽幅震荡过渡)"
+
+        return phase
 
 
     def _replace_phase_type(self, phase: Optional[str], new_type: str) -> str:

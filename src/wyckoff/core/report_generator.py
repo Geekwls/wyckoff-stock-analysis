@@ -40,6 +40,20 @@ class WyckoffReportGenerator:
             self.data = self.analyzer.data
             self.pattern_detector = self.analyzer.pattern_detector
 
+        # === WIE 3.0 MVP 微观结构分析 (集成到主流程) ===
+        wie3_market_state = None
+        try:
+            # 尝试获取大盘数据用于相对强度分析
+            market_idx_analyzer = getattr(self.analyzer, '_get_cached_index_analyzer', lambda: None)()
+            index_df = market_idx_analyzer.data if market_idx_analyzer else None
+
+            # 执行 WIE 3.0 MVP 分析
+            wie3_market_state = self.analyzer.analyze_wie3_mvp(index_df=index_df)
+            if wie3_market_state:
+                logger.info(f"[WIE 3.0 MVP] 微观结构分析完成: {wie3_market_state.regime}")
+        except Exception as e:
+            logger.warning(f"[WIE 3.0 MVP] 微观结构分析失败,继续使用传统流程: {e}")
+
         # 获取各检测器的结果
         phase_result = self.pattern_detector.identify_phase()
         trading_range = self.pattern_detector.detect_trading_range()
@@ -71,22 +85,24 @@ class WyckoffReportGenerator:
         vsa = self.pattern_detector.detect_vsa_menhongtao()
         boring_res = self.pattern_detector.detect_boring_zone()
         dead_corner = self.pattern_detector.detect_dead_corner_breakout()
-        
+
         # 集成 RVS 分析 (P2 #5)
-        market_idx_analyzer = getattr(self.analyzer, '_get_cached_index_analyzer', lambda: None)()
+        market_df = None
+        if not market_idx_analyzer:
+            market_idx_analyzer = getattr(self.analyzer, '_get_cached_index_analyzer', lambda: None)()
         market_df = market_idx_analyzer.data if market_idx_analyzer else None
         vsa['rvs'] = self.pattern_detector.detect_rvs(market_df=market_df)
-        
+
         # 外部分析
         cause_effect = getattr(self.analyzer, 'calculate_cause_effect', lambda: {})()
         market_env_res = getattr(self.analyzer, '_analyze_market_environment', lambda: {})()
         market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
-        
+
         # 信号质量
         patterns = self.pattern_detector._collect_all_events()
         patterns.update({'phase': phase_result.get('phase'), 'boring_zone': boring_res, 'dead_corner_breakout': dead_corner})
         quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
-        
+
         # 跨周期分析
         from .multi_timeframe_analyzer import MultiTimeframeAnalyzer
         mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
@@ -136,9 +152,9 @@ class WyckoffReportGenerator:
             phase_result, trading_range, cause_effect, conflict, quality_data,
             joc, spring, sos, lps, fti, upthrust, sow, lpsy, mtf,
             boring_res, dead_corner, market_env_res, arbitration_result, breakout_analysis,
-            sos_sow_analysis  #  新增：传递SOS-SOW分析结果
+            sos_sow_analysis, wie3_market_state  #  新增：传递SOS-SOW分析和WIE 3.0 MVP状态
         )
-        
+
         return report
 
     def generate_json(self) -> str:
@@ -147,6 +163,15 @@ class WyckoffReportGenerator:
             self.analyzer.fetch_data()
             self.data = self.analyzer.data
             self.pattern_detector = self.analyzer.pattern_detector
+
+        # === WIE 3.0 MVP 微观结构分析 (作为背景上下文) ===
+        wie3_market_state = None
+        try:
+            market_idx_analyzer = getattr(self.analyzer, '_get_cached_index_analyzer', lambda: None)()
+            index_df = market_idx_analyzer.data if market_idx_analyzer else None
+            wie3_market_state = self.analyzer.analyze_wie3_mvp(index_df=index_df)
+        except Exception as e:
+            logger.warning(f"[WIE 3.0 MVP] 微观结构分析失败, JSON 报告跳过此节点: {e}")
 
         # 获取各检测器的结果
         phase_result = self.pattern_detector.identify_phase()
@@ -234,6 +259,7 @@ class WyckoffReportGenerator:
             'conflict_analysis': conflict,
             'arbitration_result': arbitration_result,
             'breakout_analysis': breakout_analysis,
+            'microstructure_background': wie3_market_state.to_dict() if wie3_market_state else None,
         }
 
         return json.dumps(result, ensure_ascii=False, indent=2, default=str)

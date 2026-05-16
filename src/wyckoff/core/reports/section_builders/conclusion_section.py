@@ -11,13 +11,18 @@ class ConclusionSection(BaseSectionBuilder):
               quality_data: dict, joc: dict, spring: dict, sos: dict, lps: dict, fti: dict,
               upthrust: dict, sow: dict, lpsy: dict, mtf: dict, boring_res: dict,
               dead_corner: dict, market_env: dict, arbitration_result: dict = None,
-              breakout_analysis: dict = None, sos_sow_analysis: dict = None) -> str:
+              breakout_analysis: dict = None, sos_sow_analysis: dict = None,
+              wie3_market_state = None) -> str:
 
         phase_str = phase_result.get('phase', 'Unknown')
         phase_conf = phase_result.get('confidence', 0.0)
         current_price = self.data['Close'].iloc[-1]
 
         report = ""
+
+        # === WIE 3.0 MVP 机构级微观结构状态 ===
+        if wie3_market_state:
+            report += self._build_wie3_mvp_section(wie3_market_state)
 
         #  新增：计算健康回测区间（用于后续推荐）
         retest_zone = None
@@ -203,6 +208,25 @@ class ConclusionSection(BaseSectionBuilder):
                 report += f"⏸️ 观望等待（信号质量不足）:\n   当前评分: {quality_score}/{max_score} | 置信度: {phase_conf*100:.0f}%\n   结论: 信号强度或可靠性低于执行阈值，建议继续观察。\n"
                 if post_breakout: report += f"\n{post_breakout}"
 
+        # 检查单边向下破位寻底模式
+        tr_low = self._get_tr_value(trading_range, 'low', 0)
+        tr_high = self._get_tr_value(trading_range, 'high', 0)
+        is_breakdown = False
+        if tr_low > 0:
+            tr_height = tr_high - tr_low
+            if current_price < tr_low - 0.1 * tr_height or current_price < tr_low * 0.97:
+                is_breakdown = True
+
+        # 如果处于单边下行破位寻底状态，直接给出单边观望结论
+        if is_breakdown:
+            min_52w = self.data['Low'].tail(250).min() if len(self.data) >= 50 else current_price * 0.88
+            report += f"""⏸️ 机构级战略观望 (弱趋势衰退带 / 波动率塌缩磨底前夜):
+   当前定性: 现价 {current_price:.2f} 元处于前期中继盘整下沿 {tr_low:.2f} 元下方，定性为大级别派发后的弱趋势衰退带 (Markdown 尾段 → 波动压缩 → 空头效率下降 → 长期再平衡前夜)。特别提示：“前夜”绝不等于“已经见底”。
+   操盘纪律: 杀跌动能虽大幅衰竭钝化，但在未见主力放量重夺关键位 (SOS) 前严禁重仓抢反弹。所有上涨绝对优先按 LPSY 对待。牢记远端低位 ({min_52w:.2f}元附近) 仅为大资金需求观察区而非必达目标，大底建构乃漫长“时间事件”，需严格等待建筹五要件 (SC+AR+ST+Spring+带量重夺SOS) 齐备。
+"""
+            report += self._build_falsification(phase_str, trading_range)
+            return report
+
         # 原有逻辑
         if conflict.get('has_conflict') and is_weekly_bullish and is_daily_bearish:
             #  修复：严格派发逻辑 - 绝不在派发阶段建议做多
@@ -252,7 +276,8 @@ class ConclusionSection(BaseSectionBuilder):
                     report += f"[YES] 做多机会（LPS 最后支撑）:\n   入场价格: {lp:.2f} | 止损: {lp * 0.95:.2f}\n"
                 elif signal_type == 'support_test':
                     report += f"[?] 观察支撑测试:\n   价格: {lp:.2f}（非正式LPS，需等待确认）\n"
-                # 其他signal_type（pullback等）不显示在核心结论中
+                else:
+                    report += f"⏸️ 观察过渡回踩 ({signal_type}):\n   价格: {lp:.2f}（非标准买点信号，建议继续观望）\n"
             elif fti.get('detected') and fti.get('test_detected'):
                 report += f"🔻 做空/减仓警示（FTI 跌破确认）\n"
             elif trading_range.get('is_consolidation'):
@@ -658,122 +683,98 @@ class ConclusionSection(BaseSectionBuilder):
 
     def _build_cause_effect(self, cause_effect, trading_range, sos_sow_analysis=None) -> str:
         """
-        构建因果测算部分
-
-        修改要点：
-        - 上涨目标优先显示（当前价格在区间上方时）
-        - 下跌目标降级为"极端情景"展示
-        - 根据SOS-SOW分析结果调整展示逻辑
+        构建因果测算部分 (待激活模式与核心防守轴聚焦)
         """
         if not cause_effect or 'targets' not in cause_effect: return ''
 
         tr_high, tr_low = trading_range.get('high', 0), trading_range.get('low', 0)
         current_price = self.data['Close'].iloc[-1]
-        is_above_range = current_price > tr_high if tr_high > 0 else False
+        cause_bars = cause_effect.get('cause_bars', 0)
+        breakout_dir = cause_effect.get('breakout_direction', 'up')
+
+        # 破位寻底模式判定：现价低于下沿且超过箱体幅度的10%或绝对跌幅超3%
+        is_breakdown = False
+        if tr_low > 0:
+            tr_height = tr_high - tr_low
+            if current_price < tr_low - 0.1 * tr_height or current_price < tr_low * 0.97:
+                is_breakdown = True
+
+        # 针对单边向下破位寻底模式专项处理
+        if is_breakdown:
+            min_52w = self.data['Low'].tail(250).min() if len(self.data) >= 50 else current_price * 0.88
+            report = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            report += "【🎯 机构级点数图 (P&F) 宏观视野与复合操作手行为深度剖析】\n\n"
+            report += f"【大局观结构重构】 针对前期盘整 ({tr_low:.2f}-{tr_high:.2f}元) 下破后的特征，威科夫机构视角不再将其粗略定性为“瀑布式崩塌”，而是精准定性为**【大级别派发后的弱趋势衰退带 (Markdown 衰退尾段 → 波动率压缩 → 空头效率下降 → 长期再平衡前夜)】**。特别提示：“前夜”绝不等于“已经见底”。\n\n"
+            report += f"【大尺度观察区界定】 威科夫理论明确反对“整数关口锚定或市场共识支撑必到论”。远端情绪冰点带 ({min_52w:.2f}元附近) 仅为大资金真实成本与长期需求的【潜在大需求观察区】，绝非机械的必达到位目标。大资金 (Composite Man) 经常拒绝给予大众预期的恐慌极点，而是采取横盘耗时或快速洗盘来重构筹码。\n\n"
+            report += "根据威科夫因果法则，大尺度筹码推演呈现如下分层架构：\n\n"
+            report += "• **已激活目标**: 无 (前期中继箱体已破位失效，当前无有效多头起动 TR 结构)。\n"
+            report += f"• **待重构下行边界**: 市场已进入长期耗时磨底阶段。大底从来不是纯粹的价格事件，而是伴随数月至一两年的极度冷清与无人问津的“时间事件”。\n"
+            report += f"• **多头极限中轴**: 需带量强力越过中轴阻力 ({tr_high:.2f}元)，当前多头胜率极低，仅作长远期多空生命线基准。\n\n"
+            report += "【📊 波动率塌缩与需求控制权双向深度剖析 (Demand vs Supply)】\n"
+            report += "1. **供给端特征 (Effort vs Result 衰竭)**：当前盘面呈现明显的波动率塌缩与向下推动效率衰弱 (大阴线减少、量比渐小)。反映出当前卖压虽占优，但机构做空效能正呈递减规律，此乃供给衰竭的前置表征。\n"
+            report += "2. **需求端特征 (需求缺位与弱平衡陷阱)**：威科夫机构级核心公式为 `Supply exhausted + Demand takes control = 真实右侧`。当前盘面仅有供给衰减，但尚未观察到任何主动性需求扩散、连续性跟随买盘以及带量越过阻力的 SOS 级别动作。必须警惕标的步入“低波动时间消耗型横盘陷阱”。\n\n"
+            report += "【⚠️ 机构操盘心理学与分级实战策略】\n"
+            report += "1. **防范分析师一致预期底部**：大资金极其厌恶共识支撑位。未来极可能通过“不破底直接收敛成底”或“极速砸穿后强势拉回 (Spring + Reclaim)”来完成终极震仓。\n"
+            report += "2. **牢记威科夫核心戒律**：`Never buy because price is low. Buy because supply is exhausted.` (永远不因价格低而抄底，只因供给耗尽而介入)。\n"
+            report += "3. **分级交易指南**：\n"
+            report += "   • **短线资金**：严禁幻想价值投资闭眼长拿。当前标的属性为大震荡衰退资产，仅适用区间网格与高抛低吸波段。\n"
+            report += "   • **中线资金**：密切跟踪波动压缩与利空钝化，捕捉 Composite Operator 重新吸筹的痕迹。\n"
+            report += "   • **长线右侧标准**：在未见 **SC (情绪冰点) + AR (强力反弹) + ST (缩量回踩) + Spring (洗盘) + SOS (放量带量重夺关键位)** 五大建构要件齐备前，**所有反弹一律绝对优先按 LPSY 或技术性反抽处理**！\n"
+            return report
 
         if trading_range.get('is_broken'):
             direction = trading_range.get('breakout_direction', 'unknown')
             return f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【因果测算 - 待重新锚定】\n原区间: {tr_low:.2f} - {tr_high:.2f}（已被{direction}突破至{current_price:.2f}）\n状态: 原TR已失效，旧因果目标不再适用\n"
 
-        # 获取base_effect和breakout_direction
-        base_effect = cause_effect.get('base_effect', 0)
-        breakout_dir = cause_effect.get('breakout_direction', 'up')
-        cause_bars = cause_effect.get('cause_bars', 0)
-
-        #  修复：根据当前价格位置计算正确的上涨/下跌目标
-        if is_above_range or breakout_dir == 'up':
-            # 价格在区间上方或向上突破 → 计算上涨目标
-            # 使用保守的上涨目标计算（避免base_effect过大导致不合理）
-            price_range = tr_high - tr_low
-            range_pct = price_range / tr_low if tr_low > 0 else 0
-
-            # 方法1：基于区间幅度的扩展（威科夫因果法则）
-            # 保守估计：上涨幅度 = 区间幅度的1-2倍
-            if base_effect > 0 and base_effect < 3:  # base_effect合理时才使用
-                t1_up = current_price * (1 + base_effect * 0.2)   # 保守：20%的base_effect
-                t2_up = current_price * (1 + base_effect * 0.4)   # 正常：40%的base_effect
-                t3_up = current_price * (1 + base_effect * 0.6)   # 激进：60%的base_effect
-            else:
-                # 方法2：使用斐波那契扩展（更保守）
-                t1_up = current_price * 1.10   # +10%（保守）
-                t2_up = current_price * 1.20   # +20%（正常）
-                t3_up = current_price * 1.35   # +35%（激进）
-
-        # 获取各个方向的目标
         targets = cause_effect.get('targets', {})
-        t1_up = targets.get('target_1', 0) if breakout_dir == 'up' else 0
-        t2_up = targets.get('target_2', 0) if breakout_dir == 'up' else 0
-        t1_down = targets.get('target_1', 0) if breakout_dir == 'down' else 0
-        t2_down = targets.get('target_2', 0) if breakout_dir == 'down' else 0
-        
-        # 兼容性变量定义，防止后续崩溃
-        t1, t2 = 0, 0
+        t1_raw = targets.get('target_1', 0)
+        t2_raw = targets.get('target_2', 0)
 
-        #  修改：根据当前价格位置和SOS-SOW分析，决定展示顺序
-        report = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        report += "【📈 因果法则目标预测】\n\n"
+        # 动态推导多头与空头理论目标（基于因果法则：列数 * 步长 * 3翻转）
+        box_size = current_price * 0.015
+        total_move = cause_bars * box_size if cause_bars > 0 else current_price * 0.25
 
-        # 判断当前状态
-        if is_above_range or breakout_dir == 'up':
-            # 情景A：当前价格在区间上方或突破方向向上 → 优先显示上涨目标
-            report += "###  上涨情景（当前突破有效）\n\n"
-            report += f"基于{cause_bars}列水平积累，若**有效站稳{tr_high:.2f}上方**：\n\n"
-
-            # 计算更合理的触发条件
-            # 从SOS信号中获取价格
-            sos_price = current_price  # 默认值
-            # 尝试获取SOS的高点作为参考
-            try:
-                if hasattr(self, 'pattern_detector') and hasattr(self.pattern_detector, 'detect_sos'):
-                    sos_result = self.pattern_detector.detect_sos()
-                    if sos_result and sos_result.get('detected'):
-                        sos_price = sos_result.get('price', current_price)
-            except Exception:
-                pass
-
-            # 计算合理的触发条件价格（比当前价格高2-3%）
-            trigger_price = current_price * 1.025  # +2.5%作为突破确认位
-
-            report += "| 目标位 | 价格 | 涨幅 | 触发条件 |\n"
-            report += "|--------|------|------|----------|\n"
-            report += f"| **T1** | {t1_up:.2f} | {(t1_up/current_price - 1)*100:+.1f}% | 放量突破{trigger_price:.2f}并回踩不破 |\n"
-            report += f"| **T2** | {t2_up:.2f} | {(t2_up/current_price - 1)*100:+.1f}% | T1达成后延续上涨 |\n"
-            report += f"| **T3** | {t3_up:.2f} | {(t3_up/current_price - 1)*100:+.1f}% | 进入派发期前高 |\n"
-
-            # 下跌目标降级展示（如果有明显的下跌目标）
-            if t1_down > 0 and t1_down < current_price * 0.8:
-                report += f"\n### ⚠️ 下跌情景（若跌破{tr_low:.2f}激活）\n\n"
-                report += f"**极端情景（仅供参考，概率较低）**：\n"
-                report += f"- 跌破{tr_low:.2f}后，基于点数图{cause_bars}列计数\n"
-                report += f"- 理论目标{t1_down:.2f}元（{(t1_down/current_price - 1)*100:.1f}%）\n"
-                report += f"- **激活条件**：有效跌破{tr_low:.2f}且3天不收复\n\n"
-                report += f"**当前判断**：由于价格在{tr_high:.2f}上方，**上涨情景概率更高**"
-
-                # 如果有SOS-SOW分析，补充说明
-                if sos_sow_analysis and sos_sow_analysis.get('has_conflict'):
-                    interpretation = sos_sow_analysis.get('interpretation')
-                    if interpretation in ['trap_bearish', 'suspected_trap']:
-                        conf = sos_sow_analysis.get('confidence', 0) * 100
-                        report += f"，但⚠️ **SOS-SOW分析疑似为诱多陷阱（{conf:.0f}%置信度，待确认）**，需警惕假突破风险。"
-                    elif interpretation in ['shakeout_bullish', 'suspected_shakeout']:
-                        conf = sos_sow_analysis.get('confidence', 0) * 100
-                        report += f"，✅ **SOS-SOW分析疑似为震仓洗盘（{conf:.0f}%置信度，待确认）**，支持上涨情景。"
-                report += "\n"
-
+        if breakout_dir == 'up' and t1_raw > current_price:
+            t1_up, t2_up = t1_raw, t2_raw
         else:
-            # 情景B：当前价格在区间内或下方 → 均衡展示
-            report += f"交易区间：{tr_low:.2f} - {tr_high:.2f}\n"
-            report += f"突破方向：{breakout_dir}\n\n"
+            t1_up = (tr_high if tr_high > 0 else current_price) + total_move * 0.6
+            t2_up = (tr_high if tr_high > 0 else current_price) + total_move
 
-            if breakout_dir == 'up':
-                report += f"上涨目标（若突破{tr_high:.2f}）：\n"
-                report += f"  目标1（保守）：{t1_up:.2f}元\n"
-                report += f"  目标2（正常）：{t2_up:.2f}元\n"
-            else:
-                report += f"下跌目标（若跌破{tr_low:.2f}）：\n"
-                report += f"  目标1：{t1_down:.2f}元\n"
-                report += f"  目标2：{t2_down:.2f}元\n"
+        if breakout_dir == 'down' and 0 < t1_raw < current_price:
+            t1_down, t2_down = t1_raw, t2_raw
+        else:
+            t1_down = (tr_low if tr_low > total_move * 0.6 else current_price) - total_move * 0.6
+            t2_down = (tr_low if tr_low > total_move else current_price) - total_move
+            if t1_down <= 0: t1_down = current_price * 0.8
+            if t2_down <= 0: t2_down = current_price * 0.7
 
+        report = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        report += "【🎯 点数图 (P&F) 因果测算目标推演】\n\n"
+        report += f"长期箱体盘整带共计积累了 {cause_bars} 列的水平因果筹码。在绝对中轴 {tr_high:.2f} 元分出多空胜负前，所有测算目标均处于【待激活（Pending）】状态：\n\n"
+
+        trigger_up = (tr_high if tr_high > 0 else current_price) * 1.025
+
+        report += "### 🚀 向上突破情景（多头终极目标）\n\n"
+        report += f"基于 {cause_bars} 列因果筹码扩展，若**带量站稳 {tr_high:.2f} 元颈线上方**：\n\n"
+        report += "| 目标位 | 价格 | 涨幅 | 激活与达成条件 |\n"
+        report += "|--------|------|------|----------------|\n"
+        report += f"| **T1 (首要目标)** | {t1_up:.2f} | {(t1_up/current_price - 1)*100:+.1f}% | 放量越过 {trigger_up:.2f} 元并出现 LPS 缩量回踩 |\n"
+        report += f"| **T2 (终极目标)** | {t2_up:.2f} | {(t2_up/current_price - 1)*100:+.1f}% | T1 达成后展开大周期主升浪 |\n"
+
+        report += f"\n### ⚠️ 向下防守极限情景（仅供极端防守参考）\n\n"
+        report += f"• **极限防守位**: {t1_down:.2f} 元 ({(t1_down/current_price - 1)*100:+.1f}%)\n"
+        report += f"• **激活门槛**: 需放量跌破绝对下沿 {tr_low:.2f} 元且连续 3 周无法收复。在未跌破 {tr_high:.2f} 元前，发生概率极低。\n"
+        report += f"• **操作防守轴**: 重点聚焦于 **{tr_high:.2f} 元**。若价格突破后再度放量跌回其下方，确认为 Upthrust 诱多陷阱，需无条件执行离场纪律。\n"
+
+        if sos_sow_analysis and sos_sow_analysis.get('has_conflict'):
+            interpretation = sos_sow_analysis.get('interpretation')
+            if interpretation in ['trap_bearish', 'suspected_trap']:
+                conf = sos_sow_analysis.get('confidence', 0) * 100
+                report += f"\n⚠️ **SOS-SOW分析警示：盘面近期存在疑似诱多迹象（{conf:.0f}%置信度）**，请高度提防假突破。\n"
+            elif interpretation in ['shakeout_bullish', 'suspected_shakeout']:
+                conf = sos_sow_analysis.get('confidence', 0) * 100
+                report += f"\n✅ **SOS-SOW分析提示：缩量回落属于健康震仓洗盘（{conf:.0f}%置信度）**，支持多头爆发。\n"
+        report += "\n"
         return report
 
     def _check_post_breakout_state(self, trading_range, joc, current_price) -> str:
@@ -1096,3 +1097,161 @@ class ConclusionSection(BaseSectionBuilder):
             'logic': 'Wyckoff Test of JOC',
             'explanation': f'经典Test of JOC：回测原突破位{breakout_level:.2f}元（最强阻力转为支撑）'
         }
+
+    def _build_wie3_mvp_section(self, market_state) -> str:
+        """
+        构建 WIE 3.0 机构级贝叶斯微观结构状态区块
+        """
+        if market_state is None:
+            return ""
+            
+        from ...core.market_state import RegimeState
+
+        report = """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【WIE 3.0 机构级贝叶斯状态估计器】
+   威科夫自适应行为动力学操作系统 v3.0 - 贝叶斯后验推演
+
+"""
+
+        # 基础状态信息
+        report += f"📊 最高概率状态标签: {market_state.regime}\n"
+        report += f"   当前价格: {market_state.close:.2f}\n"
+        report += f"   系统信息熵: {market_state.state_entropy:.4f}"
+
+        if market_state.is_confidence_degraded:
+            report += " ⚠️ (高熵模糊带 - 状态混沌，建议降权观望)"
+        else:
+            report += " ✓ (信息熵稳定 - 状态收敛)"
+
+        report += "\n\n"
+        
+        # 概率分布展示
+        if market_state.state_probs:
+            report += "📈 贝叶斯后验状态分布 (State Probability Distribution):\n"
+            sorted_probs = sorted(market_state.state_probs.items(), key=lambda x: x[1], reverse=True)
+            for state, prob in sorted_probs:
+                if prob > 0.01:
+                    bar_length = int(prob * 40)
+                    bar = "█" * bar_length
+                    report += f"   {state.split('(')[0].strip():40s} [{bar}] {prob*100:.1f}%\n"
+            report += "\n"
+            
+        # 转移路径预测
+        if hasattr(market_state, 'transition_paths') and market_state.transition_paths:
+            report += "🛣️ HMM 转移路径演化预测 (Next-Step Path Dependency):\n"
+            sorted_paths = sorted(market_state.transition_paths.items(), key=lambda x: x[1], reverse=True)
+            path_count = 0
+            for state, prob in sorted_paths:
+                if prob > 0.05 and path_count < 3: # 仅展示最高概率的Top 3路径
+                    report += f"   👉 预计转向 -> {state.split('(')[0].strip()}: {prob*100:.1f}%\n"
+                    path_count += 1
+            report += "\n"
+
+        # 核心微观指标
+        report += "🔬 核心微观指标:\n"
+        report += f"   APS (吸收分): {market_state.aps:.2f}"
+        if market_state.aps > 15:
+            report += " ✅ (强劲吸收)"
+        elif market_state.aps > 8:
+            report += " (中等吸收)"
+        else:
+            report += " (吸收不足)"
+        report += "\n"
+
+        report += f"   CDS (换手记忆): {market_state.cds} 天"
+        if market_state.cds > 20:
+            report += " ✅ (充分换手)"
+        elif market_state.cds > 10:
+            report += " (中度换手)"
+        else:
+            report += " (换手不足)"
+        report += "\n"
+
+        report += f"   LCS (死票甄别): {market_state.lcs:.2f}"
+        if market_state.lcs < 3:
+            report += " ⚠️ (可能为死票)"
+        else:
+            report += " ✓ (活跃度正常)"
+        report += "\n"
+
+        report += f"   VPOC (筹码峰): {market_state.vpoc_price:.2f}"
+        current_price = market_state.close
+        if current_price > market_state.vpoc_price:
+            report += f" ✅ (价格企稳于筹码峰之上 {((current_price / market_state.vpoc_price - 1) * 100):.1f}%)"
+        else:
+            report += f" (价格在筹码峰之下 {((1 - current_price / market_state.vpoc_price) * 100):.1f}%)"
+        report += "\n"
+
+        report += f"   推动效率: {market_state.expansion_eff:.2f}"
+        if market_state.expansion_eff > 2.0:
+            report += " ✅ (供给真空突破)"
+        elif market_state.expansion_eff > 1.0:
+            report += " (效率正常)"
+        else:
+            report += " ⚠️ (推动乏力)"
+        report += "\n"
+
+        report += f"   CLV (吃单效率): {market_state.clv:.2f}"
+        if market_state.clv > 0.5:
+            report += " ✅ (机构强势吸单)"
+        elif market_state.clv < -0.5:
+            report += " ⚠️ (机构派发砸盘)"
+        else:
+            report += " (中性)"
+        report += "\n\n"
+
+        # 相对强度分析
+        report += "🔄 相对强度分析:\n"
+        report += f"   流动性留存率: {market_state.liquidity_retention:.2f}x"
+        if market_state.liquidity_retention > 1.2:
+            report += " ✅ (资金相对大盘净流入)\n"
+        elif market_state.liquidity_retention < 0.8:
+            report += " ⚠️ (资金相对大盘净流出)\n"
+        else:
+            report += " (与大盘同步)\n"
+
+        report += f"   暗藏强势: {'✅ 是 - 大盘跌个股抗跌' if market_state.hidden_strength else '❌ 否'}\n"
+        report += f"   暗藏弱势: {'⚠️ 是 - 大盘涨个股滞涨' if market_state.hidden_weakness else '❌ 否'}\n\n"
+
+        # 事件标志
+        if market_state.event_flags:
+            report += "🚩 事件标志:\n"
+            for flag in market_state.event_flags:
+                if 'SPRING' in flag:
+                    report += f"   🎯 {flag} - 瞬态震仓破底翻,起跳前兆!\n"
+                elif 'HIDDEN STRENGTH' in flag:
+                    report += f"   💪 {flag} - 机构锁仓拒绝下跌\n"
+                elif 'HIDDEN WEAKNESS' in flag:
+                    report += f"   ⚠️ {flag} - 机构暗中撤退\n"
+                else:
+                    report += f"   📌 {flag}\n"
+            report += "\n"
+
+        # 风险敞口调整 (取代判决式)
+        report += "🛡️ 机构级风险加权敞口建议 (Risk-weighted Exposure):\n"
+        s0_prob = market_state.state_probs.get(RegimeState.S0_PANIC_LIQUIDATION.value, 0)
+        s1_prob = market_state.state_probs.get(RegimeState.S1_ABSORPTION.value, 0)
+        s5_prob = market_state.state_probs.get(RegimeState.S5_DISTRIBUTION.value, 0)
+        s3_s4_prob = market_state.state_probs.get(RegimeState.S3_DEMAND_EMERGENCE.value, 0) + market_state.state_probs.get(RegimeState.S4_MARKUP.value, 0)
+        
+        if s0_prob > 0.4:
+            report += "   ⚠️ 【高频下行/信息发散带】当前盘面呈现高下行动能与高不确定性。威科夫理论中此为机会生成的前置区（潜在SC），但吸收概率目前仍偏低。\n"
+            report += "   策略建议：绝不进行左侧摸底，**建议将风险敞口严格压缩至 0%-10%**，密切等待 S1(吸收) 概率显著上升。\n"
+        elif s5_prob > 0.4:
+            report += "   🎣 【高位派发危险带】微观结构显示机构资金正在系统性流出，筹码松动明显。\n"
+            report += "   策略建议：保护利润为第一要务，**建议将多头风险敞口迅速降至 0%-10%**，严防断头铡刀。\n"
+        elif s1_prob > 0.35:
+            report += "   🧽 【吸收沉淀带】微观结构显示筹码正在被密集承接，系统进入耗时磨底阶段。\n"
+            report += "   策略建议：底座初步构筑中，可进行防御性试探，**建议配置风险敞口 10%-30%**，耐心等待 VPOC 突破。\n"
+        elif s3_s4_prob > 0.35:
+            report += "   🚀 【需求接管/主升带】多头动力学特征极其显著，带量穿越核心阻力位。\n"
+            report += "   策略建议：右侧确认，趋势已成。**建议提升风险敞口至 60%-100%**，顺势持仓。\n"
+        else:
+            report += "   ⏳ 【中性震荡带】多空动力学进入均势，未见明显单边结构。\n"
+            report += "   策略建议：维持网格或波段策略，**建议风险敞口控制在 30%-50%**。\n"
+
+        report += "\n" + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + "\n\n"
+
+        return report

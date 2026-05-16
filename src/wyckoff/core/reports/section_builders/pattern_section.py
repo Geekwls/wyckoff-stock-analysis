@@ -5,8 +5,17 @@ class PatternSection(BaseSectionBuilder):
     def build(self, trading_range: dict, spring: dict, upthrust: dict, sos: dict, sow: dict, lps: dict, lpsy: dict, phase_str: str, ps: dict = None, psy: dict = None) -> str:
         text = "【形态检测】\n"
         
-        # Trading Range
-        if trading_range.get('is_broken'):
+        # 深度破位寻底检查
+        is_deep_breakdown = trading_range.get('position', 0) < -0.05
+        
+        if is_deep_breakdown:
+            text += f"""
+[!] 机构级形态定性：原中继交易区间（TR）已跌穿失效
+    前期盘整带: {trading_range.get('low', 0):.2f} - {trading_range.get('high', 0):.2f}
+    当前价格: {trading_range.get('current_price', 0):.2f} (处于大级别再分配后的弱趋势衰退区)
+    状态说明: 威科夫机构视角判定，前期小盘整带有效跌穿，但并未呈现瀑布式崩塌，而是步入杀跌动能衰减钝化的大震荡衰退磨底期。在此长周期下行中，陈旧的 PSY 与前期未能阻击暴跌的 PS 均已宣告失效阵亡。盘面正处于向下方长线冰点支撑带寻求重新平衡的前夜。
+"""
+        elif trading_range.get('is_broken'):
             direction = trading_range.get('breakout_direction', 'unknown')
             text += f"""
 [!] 原交易区间已被突破（{direction}突破）
@@ -35,16 +44,17 @@ class PatternSection(BaseSectionBuilder):
     说明: {'反弹已收复实体跌幅50%，确认为底部高潮。' if climax.get('is_confirmed') and climax.get('type')=='selling_climax' else 'AR尚未有效跌破BC前支撑，确认为顶部高潮。' if climax.get('is_confirmed') else '反弹强度不足或尚未回测，需警惕。'}
 """
         # Preliminary Signals (P1 #7)
-        if ps and ps.get('detected'):
-            text += f"""
+        if not is_deep_breakdown:
+            if ps and ps.get('detected'):
+                text += f"""
 [YES] 检测到初次支撑 (PS):
     日期: {ps.get('date')}
     价格: {ps.get('ps_price', 0):.2f}
     信心: {ps.get('confidence')}%
     说明: 出现放量止跌迹象，代表大资金开始尝试抄底。
 """
-        if psy and psy.get('detected'):
-            text += f"""
+            if psy and psy.get('detected'):
+                text += f"""
 [YES] 检测到初次供应 (PSY):
     日期: {psy.get('date')}
     价格: {psy.get('price', 0):.2f}
