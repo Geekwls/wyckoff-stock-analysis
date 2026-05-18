@@ -45,8 +45,15 @@ class MengTrendDetector(BaseDetector):
         daily_ranges = highs - lows
         close_positions = np.where(daily_ranges > 0, (closes - lows) / daily_ranges, 0.5)
         
-        #  修复#4: 突破力度标准从 3% 提高到 5%（孟洪涛要求长阳线）
-        valid_joc = is_breakout & (price_changes >= 5) & (volume_ratios >= 1.5) & (close_positions >= 0.75)
+        min_breakout_pct = getattr(self.thresholds, "JOC_MIN_BREAKOUT_PCT", 3.0)
+        min_volume_ratio = getattr(self.thresholds, "JOC_VOLUME_RATIO", 1.5)
+        min_close_position = getattr(self.thresholds, "JOC_CLOSE_POSITION", 0.75)
+        valid_joc = (
+            is_breakout
+            & (price_changes >= min_breakout_pct)
+            & (volume_ratios >= min_volume_ratio)
+            & (close_positions >= min_close_position)
+        )
         indices = np.where(valid_joc)[0]
         signals, n = [], len(df)
         for i in indices:
@@ -98,13 +105,13 @@ class MengTrendDetector(BaseDetector):
         for i in range(20, len(df)):
             if df['Close'].iloc[i] > creek_level and df['Close'].iloc[i-1] <= creek_level:
                 price_change = (df['Close'].iloc[i] - df['Open'].iloc[i]) / df['Open'].iloc[i] * 100
-                #  修复#4: 突破力度标准从 3% 提高到 5%
-                if price_change < 5: continue
+                min_breakout_pct = getattr(self.thresholds, "JOC_MIN_BREAKOUT_PCT", 3.0)
+                if price_change < min_breakout_pct: continue
                 vol_ratio = df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
-                if vol_ratio < 1.5: continue
+                if vol_ratio < getattr(self.thresholds, "JOC_VOLUME_RATIO", 1.5): continue
                 daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
                 close_pos = (df['Close'].iloc[i] - df['Low'].iloc[i]) / daily_range if daily_range > 0 else 0.5
-                if close_pos < 0.75: continue
+                if close_pos < getattr(self.thresholds, "JOC_CLOSE_POSITION", 0.75): continue
                 td, tdt, tvr = False, None, None
                 for j in range(i+1, min(i+10, len(df))):
                     #  修复#5: 回测检测逻辑优化 - 允许短暂跌破后收回
@@ -125,14 +132,15 @@ class MengTrendDetector(BaseDetector):
 
     def _calculate_joc_confidence(self, breakout_pct, volume_ratio, close_position, has_test, test_score=0):
         score = 0
-        if breakout_pct >= 5: score += 25
-        elif breakout_pct >= 3: score += 20
+        min_breakout_pct = getattr(self.thresholds, "JOC_MIN_BREAKOUT_PCT", 3.0)
+        if breakout_pct >= max(5.0, min_breakout_pct): score += 25
+        elif breakout_pct >= min_breakout_pct: score += 20
         if volume_ratio >= 2.5: score += 25
         elif volume_ratio >= 2.0: score += 20
-        elif volume_ratio >= 1.5: score += 15
+        elif volume_ratio >= getattr(self.thresholds, "JOC_VOLUME_RATIO", 1.5): score += 15
         if close_position >= 0.9: score += 25
         elif close_position >= 0.8: score += 20
-        elif close_position >= 0.75: score += 15
+        elif close_position >= getattr(self.thresholds, "JOC_CLOSE_POSITION", 0.75): score += 15
         
         # 回测权重提升
         if has_test:

@@ -119,7 +119,9 @@ class TrendDetector(BaseDetector):
             'test_detected': test_detected, 'test_date': test_date, 'test_vol_ratio': test_vol_ratio,
             'test_depth_pct': round(test_depth_pct * 100, 2), 'test_count': test_count,
             'strength': strength_info['strength'], 'strength_description': strength_info['description'],
-            'trading_implication': strength_info['trading_implication'], 'confidence': round(min(confidence, 1.0), 2)
+            'trading_implication': strength_info['trading_implication'],
+            'description': strength_info['description'],
+            'confidence': round(min(confidence, 1.0), 2)
         }
 
     def _detect_joc_test_iterative(self, df_after, creek_level, vol_ma, joc_row):
@@ -246,7 +248,9 @@ class TrendDetector(BaseDetector):
         return {
             'detected': True, 'date': fti_idx, 'ice_level': round(ice_level, 3), 'close_price': round(fti_row['Close'], 3),
             'breakdown_pct': round(breakdown_pct * 100, 2), 'volume_ratio': round(volume_ratio, 2),
-            'test_detected': test_detected, 'test_date': test_date, 'test_vol_ratio': test_vol_ratio, 'confidence': round(min(confidence, 1.0), 2)
+            'test_detected': test_detected, 'test_date': test_date, 'test_vol_ratio': test_vol_ratio,
+            'description': 'FTI跌破冰层' + ('并完成缩量反抽确认' if test_detected else '但尚无缩量反抽确认'),
+            'confidence': round(min(confidence, 1.0), 2)
         }
 
     def _detect_fti_test_iterative(self, df_after, ice_level, vol_ma):
