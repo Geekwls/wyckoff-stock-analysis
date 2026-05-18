@@ -289,13 +289,14 @@ class ReversalDetector(BaseDetector):
 
             vol_test = row['Volume'] < climax_vol * self.thresholds.VOLUME_CONFIRMATION['weak']
 
-            #  缺陷5修复：验证K线有下影线支撑（收盘位置 > 最低点1/3）
+            #  缺陷5修复：验证K线有下影线支撑（收盘位置 > 最低点1/3），或者量能极度萎缩
             candle_range = max(row['High'] - row['Low'], 1e-9)
             close_pct = (row['Close'] - row['Low']) / candle_range
-            has_lower_shadow_support = close_pct > 0.33 if is_sc else close_pct < 0.67
+            vol_ratio = row['Volume'] / climax_vol if climax_vol > 0 else 1.0
+            
+            has_lower_shadow_support = (close_pct > 0.33 or vol_ratio < 0.4) if is_sc else (close_pct < 0.67 or vol_ratio < 0.4)
 
             if price_test and vol_test:
-                vol_ratio = row['Volume'] / climax_vol if climax_vol > 0 else 1.0
                 all_tests.append({
                     'date': df_after.index[i],
                     'price': float(row['Low'] if is_sc else row['High']),
@@ -466,6 +467,12 @@ class ReversalDetector(BaseDetector):
             # Spring 量能分类与 ST 强制绑定 (符合 David Weis 原著)
             mean_vol = recent['Volume'].mean()
             breakdown_vol_ratio = float(volumes[cur_idx] / mean_vol) if mean_vol > 0 else 1.0
+            
+            # 解决极端缩量的“量比失真”
+            if 'turn' in recent.columns:
+                if recent['turn'].mean() < 0.5:
+                    breakdown_vol_ratio = min(breakdown_vol_ratio, 1.5)  # 惩罚性阻尼限制
+                    
             penetration_depth = breakdown_pcts[i]
             needs_secondary_test = False
             is_valid = True
@@ -530,6 +537,12 @@ class ReversalDetector(BaseDetector):
             # Spring 量能分类与 ST 强制绑定 (符合 David Weis 原著)
             mean_vol = recent['Volume'].mean()
             breakdown_vol_ratio = float(cur['Volume'] / mean_vol) if mean_vol > 0 else 1.0
+            
+            # 解决极端缩量的“量比失真”
+            if 'turn' in recent.columns:
+                if recent['turn'].mean() < 0.5:
+                    breakdown_vol_ratio = min(breakdown_vol_ratio, 1.5)  # 惩罚性阻尼限制
+                    
             penetration_depth = breakdown_pct
             needs_secondary_test = False
             is_valid = True
@@ -675,10 +688,24 @@ class ReversalDetector(BaseDetector):
 
         recent_high = recent['High'].max()
         recent_high_idx = recent['High'].idxmax()
-        is_near_high = recent_high >= lookback_high * 0.98
+        
+        # 高波动资产特化的 UTAD 容差机制
+        market_type = getattr(self.thresholds, 'market_type', 'EQUITY')
+        
+        atr_pct = 0.05
+        try:
+            atr_pct = ((df['High'] - df['Low']).tail(14).mean()) / current_price
+        except Exception:
+            pass
+
+        upper_limit = 1.03 + atr_pct  # 引入 ATR 联动
+        if market_type == 'CRYPTO':
+            upper_limit = max(1.10, 1.0 + atr_pct) # CRYPTO 允许放宽至刺穿 1.10
+
+        is_near_high = (lookback_high * 0.98 <= recent_high <= lookback_high * upper_limit)
 
         if not is_near_high:
-            return {'detected': False, 'reason': 'price_not_near_high'}
+            return {'detected': False, 'reason': 'price_not_near_high_or_breakout_too_deep'}
 
         breakout_row = df.loc[recent_high_idx]
         vol_ma = df['Volume'].tail(60).mean()
