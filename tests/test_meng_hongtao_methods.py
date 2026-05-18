@@ -26,7 +26,8 @@ from src.wyckoff.config.settings import WyckoffConfig
 
 def _make_base_df(n: int = 120, base_price: float = 20.0) -> pd.DataFrame:
     """生成基础平稳行情（价格均在 base_price ± 5% 内震荡）"""
-    rng = pd.date_range(start="2025-01-01", periods=n, freq="B")
+    end = pd.Timestamp.today().normalize()
+    rng = pd.bdate_range(end=end, periods=n)
     np.random.seed(42)
     closes = base_price + np.random.randn(n) * 0.3
     closes = np.clip(closes, base_price * 0.95, base_price * 1.05)
@@ -136,11 +137,9 @@ class TestDetectJOC:
         df = _inject_joc(df, creek, position=-3)  # 更靠近末尾，避免信号过期
         det = _make_detector(df)
         result = det.detect_joc()
-        # JOC检测受阈值影响，如果不能触发就验证结构正确
-        if not result.get("detected"):
-            assert "detected" in result, f"Result should have 'detected' key: {result}"
-        else:
-            assert result["detected"] is True
+        assert result.get("detected") is True, f"Valid JOC breakout should be detected: {result}"
+        assert result.get("volume_ratio", 0) >= 1.5
+        assert result.get("breakout_pct", 0) >= 3.0
 
     def test_joc_not_detected_without_volume(self):
         """量能不足时不应触发 JOC"""
@@ -166,10 +165,9 @@ class TestDetectJOC:
         df = _inject_joc_test(df, creek, position=-5)
         det = _make_detector(df)
         result = det.detect_joc()
-        # JOC检测受阈值影响，即使主信号未触发也验证结构正确
-        assert "detected" in result
-        if result.get("detected") and result.get("test_detected"):
-            assert True
+        assert result.get("detected") is True, f"JOC breakout should be detected before retest validation: {result}"
+        assert result.get("test_detected") is True, f"JOC creek retest should be detected: {result}"
+
     def test_joc_confidence_increases_with_retest(self):
         """有回测确认的 JOC 置信度应高于无回测"""
         df_base = _make_base_df(base_price=20.0)

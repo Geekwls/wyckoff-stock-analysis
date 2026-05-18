@@ -102,14 +102,16 @@ class MengReversalDetector(BaseDetector):
         df, signals = self.data.copy(), []
         atr_series = self._calculate_atr_series(df, 14)
         atr_pct = (atr_series.iloc[-1] / df['Close'].iloc[-1] * 100) if df['Close'].iloc[-1] > 0 else 0
-        max_recovery_days = 5 if atr_pct < 1.5 else 3 if atr_pct < 3 else 2
+        # 与向量化路径保持一致：波动率越高，允许的收回窗口越长
+        max_recovery_days = 3 if atr_pct < 1.5 else 4 if atr_pct < 3.0 else 5
         t = self.thresholds
         for i in range(20, len(df) - 5):
             support_level = df['Low'].iloc[i-20:i].min()
             if df['Low'].iloc[i] < support_level:
                 breakdown_price, breakdown_vol = df['Low'].iloc[i], df['Volume'].iloc[i]
                 breakdown_pct = (support_level - breakdown_price) / support_level * 100
-                if not (t.MENG_SPRING_BREAKDOWN_MIN <= breakdown_pct <= t.MENG_SPRING_BREAKDOWN_MAX): continue
+                dynamic_max_breakdown = 3.0 if atr_pct < 1.5 else 4.0 if atr_pct < 3.0 else 6.0
+                if not (t.MENG_SPRING_BREAKDOWN_MIN <= breakdown_pct <= dynamic_max_breakdown): continue
                 for j in range(i+1, min(i+max_recovery_days+1, len(df))):
                     if df['Close'].iloc[j] > support_level:
                         vol_ratio = df['Volume'].iloc[j] / breakdown_vol if breakdown_vol > 0 else 1

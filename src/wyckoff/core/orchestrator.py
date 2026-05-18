@@ -7,6 +7,7 @@ from .recommendation_engine import RecommendationEngine
 from .report_generator import WyckoffReportGenerator
 from ..config.settings import WyckoffConfig
 from ..exceptions import WyckoffError
+from .cache_service import CacheService
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,12 @@ class WyckoffOrchestrator:
         self.config = config or WyckoffConfig()
         self.data_fetcher = WyckoffDataFetcher(self.config)
         self.rec_engine = RecommendationEngine(self.config)
+        self.cache_service = CacheService.get_instance()
+        self._analysis_cache = self.cache_service.get_legacy_lru_adapter(
+            namespace="orchestrator_analysis",
+            max_size=256,
+            ttl_seconds=3600,
+        )
 
     def run_analysis(self, symbol: str, period: str = "1y") -> Dict[str, Any]:
         """
@@ -73,7 +80,7 @@ class WyckoffOrchestrator:
 
         关键修复：确保在调用 detect_sos() 之前正确设置阶段信息
         """
-        detector = WyckoffPatternDetector(data, self.config)
+        detector = WyckoffPatternDetector(data, self.config, self._analysis_cache)
 
         # 首先获取阶段信息（这会触发 _collect_all_events()）
         phase_info = detector.identify_phase()
