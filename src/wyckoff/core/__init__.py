@@ -7,6 +7,7 @@ from .law_analyzer import WyckoffLawAnalyzer
 from .report_generator import WyckoffReportGenerator
 from .multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from .relative_strength_analyzer import RelativeStrengthAnalyzer
+from .china_market_helper import ChinaMarketHelper
 
 __all__ = [
     'WyckoffDataFetcher',
@@ -15,4 +16,5 @@ __all__ = [
     'WyckoffReportGenerator',
     'MultiTimeframeAnalyzer',
     'RelativeStrengthAnalyzer',
+    'ChinaMarketHelper',
 ]

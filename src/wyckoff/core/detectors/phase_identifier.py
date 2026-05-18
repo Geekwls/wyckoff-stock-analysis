@@ -8,6 +8,43 @@ from ..utils import PhaseAdapter
 
 logger = logging.getLogger(__name__)
 
+# Named constants for magic numbers
+CLIMAX_CONFIDENCE_THRESHOLD = 0.85
+WEAK_SIGNAL_CONFIDENCE = 0.5
+PHASE_A_COMPLETENESS_PENALTY = {
+    'extreme': 0.3,    # Only Climax, extremely incomplete
+    'severe': 0.5,     # Climax + AR or ST
+    'moderate': 0.7    # Other incomplete cases
+}
+STRUCTURAL_INTEGRITY_FACTORS = {
+    1: 0.4,   # Only 1-2 pillars remaining
+    2: 0.6,   # 2 pillars
+    3: 0.85,  # 3 pillars
+    4: 1.0    # Complete structure
+}
+VOLUME_RATIO_THRESHOLDS = {
+    'extremely_low': 0.4,
+    'low': 0.7,
+    'normal': 0.8,
+    'high': 1.2
+}
+PRICE_TOLERANCE_PCT = 0.02    # 2% tolerance for weak signal detection
+WEAK_PRICE_TOLERANCE_PCT = 0.03  # 3% tolerance for weak ST detection
+CONFIDENCE_ADJUSTMENT = {
+    'strong_markup_with_warning': 0.65,
+    'strong_markup_bc_warning': 0.60,
+    'strong_markup_sc_warning': 0.55,
+    'distribution_a_pending': 0.70,
+    'accumulation_a_pending': 0.70,
+    'trending_bc_warning': 0.50,
+    'trending_sc_warning': 0.50
+}
+LOOKBACK_DAYS = 120
+MIN_DATA_POINTS = 3
+SPRING_WINDOW_DAYS = 30
+VOLUME_MA_WINDOW = 20
+ANALYSIS_WINDOW_DAYS = 40
+
 class PhaseIdentifier(BaseDetector):
     """负责识别威科夫阶段和评分"""
     def __init__(self, data: pd.DataFrame, config: WyckoffConfig, thresholds: WyckoffThresholds, indicator_cache=None):
@@ -33,12 +70,28 @@ class PhaseIdentifier(BaseDetector):
             completeness_factor = self._calculate_structural_integrity(events, phase_enum)
             confidence *= completeness_factor
 
-            #  新增：Phase A结构不完整时的额外惩罚
-            if phase_enum == WyckoffPhase.PHASE_A:
-                has_complete_structure = self._check_phase_a_completeness(events)
-                if not has_complete_structure:
-                    confidence *= 0.5  # 结构不完整，置信度减半
-                    logger.info(f"[Phase A结构不完整] 置信度从{confidence*2:.2f}降低至{confidence:.2f}")
+        # 新增：Phase A结构不完整时的额外惩罚
+        if phase_enum == WyckoffPhase.PHASE_A:
+            has_complete_structure = self._check_phase_a_completeness(events)
+            structure_status = self._get_phase_a_structure_status(events)
+
+            if not has_complete_structure:
+                score = structure_status.get("completeness_score", 0)
+                penalty_factor = self._get_phase_a_penalty_factor(score)
+                original_confidence = confidence
+                confidence *= penalty_factor
+
+                penalty_pct = int((1 - penalty_factor) * 100)
+                logger.info(f"[Phase A结构不完整] 置信度从{original_confidence:.2f}降低至{confidence:.2f} (惩罚{penalty_pct}%)")
+
+            # 将结构状态添加到返回结果中
+            phase_a_structure_info = {
+                "completeness_score": structure_status.get("completeness_score", 0),
+                "missing_elements": structure_status.get("missing_elements", []),
+                "warnings": structure_status.get("warnings", [])
+            }
+        else:
+            phase_a_structure_info = None
 
         ma_conf = self._check_ma_confirmation(phase_enum)
         vol_conf = self._check_volume_confirmation(phase_enum)
@@ -59,7 +112,7 @@ class PhaseIdentifier(BaseDetector):
         #  修复矛盾二：增加相位一致性互斥校验
         phase_str, phase_enum, final_conf = self._check_logical_consistency(events, phase_str, phase_enum, final_conf)
 
-        return {
+        result = {
             'phase': phase_str,
             'phase_enum': phase_enum,
             'confidence': round(min(final_conf, 1.0), 2),
@@ -69,6 +122,12 @@ class PhaseIdentifier(BaseDetector):
             'quality_factor': round(quality_factor, 2)
         }
 
+        # 添加Phase A结构状态信息
+        if phase_a_structure_info:
+            result['phase_a_structure'] = phase_a_structure_info
+
+        return result
+
     def _analyze_phase_a_evidence(self, events: Dict) -> float:
         """
         验证 Phase A 的量价质量传递 (P2 #2.3)
@@ -76,52 +135,121 @@ class PhaseIdentifier(BaseDetector):
         score = 1.0
         climax = events.get('climax')
         st = events.get('secondary_test')
-        
-        if climax and hasattr(climax, 'detected') and climax.detected and \
-           st and hasattr(st, 'detected') and st.detected:
-            try:
-                sc_vol = climax.volume
-                st_date = st.date
-                st_vol = self.data.loc[st_date, 'Volume']
-                
-                vol_ratio = st_vol / sc_vol
-                # 如果 ST 成交量显著小于 SC，说明供应萎缩，增加置信度
-                if vol_ratio < 0.4:
-                    score += 0.15
-                elif vol_ratio > 0.8:
-                    score -= 0.15
-            except Exception:
-                pass
+
+        if not (self._safe_check_detected(climax) and self._safe_check_detected(st)):
+            return score
+
+        try:
+            sc_vol = self._safe_get_event_attribute(climax, 'volume')
+            st_date = self._safe_get_event_attribute(st, 'date')
+            st_vol = self.data.loc[st_date, 'Volume']
+
+            vol_ratio = st_vol / sc_vol
+            # 如果 ST 成交量显著小于 SC，说明供应萎缩，增加置信度
+            if vol_ratio < VOLUME_RATIO_THRESHOLDS['extremely_low']:
+                score += 0.15
+            elif vol_ratio > VOLUME_RATIO_THRESHOLDS['normal']:
+                score -= 0.15
+        except Exception:
+            pass
         return score
 
     def _check_phase_a_completeness(self, events: Dict) -> bool:
-        """检查Phase A结构完整性"""
+        """
+        检查Phase A结构完整性
+
+        威科夫理论要求：Phase A 必须包含完整的 PS → SC/BC → AR → ST 序列
+        只有Climax没有AR/ST = 可能只是暂时的停顿，不是真正的Phase A
+        """
         climax = events.get('climax')
         ar = events.get('automatic_reaction')
         st = events.get('secondary_test')
+        ps = events.get('preliminary_support')
 
-        has_climax = False
-        if climax:
-            if hasattr(climax, 'detected'):
-                has_climax = climax.detected
-            elif isinstance(climax, dict):
-                has_climax = climax.get('detected', False)
+        has_climax = self._safe_check_detected(climax)
+        has_ar = self._safe_check_detected(ar)
+        has_st = self._safe_check_detected(st)
+        has_ps = self._safe_check_detected(ps)
 
-        has_ar = False
-        if ar:
-            if hasattr(ar, 'detected'):
-                has_ar = ar.detected
-            elif isinstance(ar, dict):
-                has_ar = ar.get('detected', False)
+        # 威科夫理论：Phase A 至少需要 Climax + (AR 或 ST)
+        has_complete_structure = has_climax and (has_ar or has_st)
 
-        has_st = False
-        if st:
-            if hasattr(st, 'detected'):
-                has_st = st.detected
-            elif isinstance(st, dict):
-                has_st = st.get('detected', False)
+        # 记录详细的缺失警告
+        if has_climax and not has_complete_structure:
+            missing = []
+            if not has_ar:
+                missing.append("AR(自动反弹/回落)")
+            if not has_st:
+                missing.append("ST(二次测试)")
 
-        return has_climax and (has_ar or has_st)
+            logger.warning(
+                f"[Phase A结构不完整] 检测到Climax但缺少 {', '.join(missing)}。"
+                f"根据威科夫理论，这可能只是趋势中的暂时停顿，而非真正的Phase A开始。"
+                f"等待 {', '.join(missing)} 出现后再确认Phase A。"
+            )
+
+        return has_complete_structure
+
+    def _get_phase_a_structure_status(self, events: Dict) -> Dict:
+        """
+        获取Phase A结构状态的详细信息
+
+        Returns:
+            包含结构完整性状态和警告信息的字典
+        """
+        climax = events.get('climax')
+        ar = events.get('automatic_reaction')
+        st = events.get('secondary_test')
+        ps = events.get('preliminary_support')
+
+        has_climax = self._safe_check_detected(climax)
+        has_ar = self._safe_check_detected(ar)
+        has_st = self._safe_check_detected(st)
+        has_ps = self._safe_check_detected(ps)
+
+        status = {
+            "has_preliminary_support": has_ps,
+            "has_climax": has_climax,
+            "has_automatic_reaction": has_ar,
+            "has_secondary_test": has_st,
+            "is_complete": has_climax and (has_ar or has_st),
+            "completeness_score": 0,
+            "missing_elements": [],
+            "warnings": []
+        }
+
+        # 计算完整性得分（满分4分）
+        score = sum([
+            has_ps,
+            has_climax,
+            has_ar,
+            has_st
+        ])
+        status["completeness_score"] = score
+
+        # 记录缺失元素
+        required_elements = {
+            'has_ps': 'PS',
+            'has_climax': 'Climax',
+            'has_ar': 'AR',
+            'has_st': 'ST'
+        }
+
+        for key, element_name in required_elements.items():
+            if not status[key]:
+                status["missing_elements"].append(element_name)
+
+        # 生成警告信息
+        if has_climax and not (has_ar or has_st):
+            status["warnings"].append(
+                "⚠️ 威科夫理论警告：仅有Climax无AR/ST，可能只是趋势中暂时停顿"
+            )
+        if score == 1 and has_climax:
+            status["warnings"].append(
+                "⚠️ 威科夫理论警告：Phase A结构极不完整（1/4），不建议作为交易依据"
+            )
+
+        return status
 
     def _determine_phase_from_events(self, events: Dict) -> Tuple[str, WyckoffPhase, float]:
         """从事件序列中判定阶段 - 优化版（方案B）"""
@@ -167,34 +295,17 @@ class PhaseIdentifier(BaseDetector):
 
         return 'Unknown', WyckoffPhase.UNKNOWN, 0.30
 
-    def _check_ambiguous_phase_structure(self, events: Dict) -> Tuple[str, WyckoffPhase, float]:
+    def _check_ambiguous_phase_structure(self, events: Dict) -> Optional[Tuple[str, WyckoffPhase, float]]:
         """
         🔧 方案B核心功能：识别和标记模糊结构
 
         处理"BC强但AR/ST缺失"的情况，给出更精确的阶段标签
         """
         climax = events.get('climax')
+        has_strong_climax, climax_type, climax_confidence = self._get_climax_info(climax)
 
-        # 检查是否有强烈的Climax信号
-        has_strong_climax = False
-        climax_type = None
-        climax_confidence = 0.0
-
-        if climax:
-            # 安全地检查climax对象
-            if hasattr(climax, 'detected'):
-                has_strong_climax = climax.detected
-                climax_type = getattr(climax, 'type', None)
-                #  修复 P1-1: 降低默认置信度，避免低质量信号被误判为高置信度
-                climax_confidence = getattr(climax, 'confidence', 0.5)
-            elif isinstance(climax, dict):
-                has_strong_climax = climax.get('detected', False)
-                climax_type = climax.get('type')
-                #  修复 P1-1: 降低默认置信度，避免低质量信号被误判为高置信度
-                climax_confidence = climax.get('confidence', 0.5)
-
-        #  方案B增强：设置BC强度阈值（只处理高置信度BC）
-        if not has_strong_climax or climax_confidence < 0.85:
+        # 方案B增强：设置BC强度阈值（只处理高置信度BC）
+        if not has_strong_climax or climax_confidence < CLIMAX_CONFIDENCE_THRESHOLD:
             return None  # BC不够强或不存在，不是模糊结构
 
         # 安全地检查AR/ST
@@ -204,50 +315,16 @@ class PhaseIdentifier(BaseDetector):
         has_ar = self._safe_check_detected(ar)
         has_st = self._safe_check_detected(st)
 
-        #  方案B核心：BC强但AR/ST缺失
-        if has_strong_climax and not (has_ar or has_st):
+        # 方案B核心：BC强但AR/ST缺失
+        if not (has_ar or has_st):
             logger.info(f"[方案B] 检测到模糊结构: {climax_type} (置信度: {climax_confidence:.2f}), 缺失AR/ST确认")
 
-            #  动态灵敏度调整：尝试检测"准AR"和"准ST"
+            # 动态灵敏度调整：尝试检测"准AR"和"准ST"
             weak_ar = self._detect_weak_automatic_reaction(events, climax)
             weak_st = self._detect_weak_secondary_test(events, climax)
 
-            current_price = self.data['Close'].iloc[-1]
-            ma20 = self.data['MA20'].iloc[-1] if 'MA20' in self.data.columns else current_price
-            ma50 = self.data['MA50'].iloc[-1] if 'MA50' in self.data.columns else current_price
-            ma200 = self.data['MA200'].iloc[-1] if 'MA200' in self.data.columns else current_price
-
-            # 根据技术趋势和BC类型给出更精确的标签
-            if current_price > ma20 > ma50 > ma200:
-                #  技术面完美多头排列 + Buying Climax
-                if climax_type == 'buying_climax':
-                    if weak_ar or weak_st:
-                        logger.info(f"[方案B] 判定为: Markup Phase E (上涨末期，潜在派发初期)")
-                        return 'Markup Phase E (上涨末期，潜在派发初期)', WyckoffPhase.PHASE_E, 0.65
-                    else:
-                        logger.info(f"[方案B] 判定为: Markup Phase E (强势上涨，伴有买入高潮警示)")
-                        return 'Markup Phase E (强势上涨，伴有买入高潮警示)', WyckoffPhase.PHASE_E, 0.60
-                else:  # selling_climax
-                    logger.info(f"[方案B] 判定为: Markup Phase E (强势上涨，但出现恐慌性抛售)")
-                    return 'Markup Phase E (强势上涨，但出现恐慌性抛售)', WyckoffPhase.PHASE_E, 0.55
-
-            elif current_price < ma20 < ma50:
-                #  技术面转弱
-                if climax_type == 'buying_climax':
-                    logger.info(f"[方案B] 判定为: Distribution Phase A (买入高潮，等待回落确认)")
-                    return 'Distribution Phase A (买入高潮，等待回落确认)', WyckoffPhase.PHASE_A, 0.70
-                else:  # selling_climax
-                    logger.info(f"[方案B] 判定为: Accumulation Phase A (恐慌抛售，等待反弹确认)")
-                    return 'Accumulation Phase A (恐慌抛售，等待反弹确认)', WyckoffPhase.PHASE_A, 0.70
-
-            else:
-                #  技术面震荡不明
-                if climax_type == 'buying_climax':
-                    logger.info(f"[方案B] 判定为: Trending with BC Warning (趋势推进中，买入高潮警示)")
-                    return 'Trending with BC Warning (趋势推进中，买入高潮警示)', WyckoffPhase.UNKNOWN, 0.50
-                else:
-                    logger.info(f"[方案B] 判定为: Trending with SC Warning (趋势整理中，恐慌抛售警示)")
-                    return 'Trending with SC Warning (趋势整理中，恐慌抛售警示)', WyckoffPhase.UNKNOWN, 0.50
+            trend_context = self._get_market_trend_context()
+            return self._determine_ambiguous_phase(climax_type, weak_ar, weak_st, trend_context)
 
         return None  # 不是模糊结构
 
@@ -257,11 +334,126 @@ class PhaseIdentifier(BaseDetector):
             return False
 
         if hasattr(event, 'detected'):
-            return event.detected
+            return bool(event.detected)
         elif isinstance(event, dict):
-            return event.get('detected', False)
+            return bool(event.get('detected', False))
 
         return False
+
+    def _safe_get_event_attribute(self, event, attr_name: str, default=None):
+        """安全地获取事件属性"""
+        if event is None:
+            return default
+
+        if hasattr(event, attr_name):
+            return getattr(event, attr_name, default)
+        elif isinstance(event, dict):
+            return event.get(attr_name, default)
+
+        return default
+
+    def _get_phase_a_penalty_factor(self, completeness_score: int) -> float:
+        """根据Phase A完整性得分计算惩罚因子"""
+        if completeness_score == 1:
+            return PHASE_A_COMPLETENESS_PENALTY['extreme']
+        elif completeness_score == 2:
+            return PHASE_A_COMPLETENESS_PENALTY['severe']
+        else:
+            return PHASE_A_COMPLETENESS_PENALTY['moderate']
+
+    def _get_climax_info(self, climax) -> Tuple[bool, Optional[str], float]:
+        """
+        安全地提取Climax信息
+
+        Returns:
+            (has_strong_climax, climax_type, climax_confidence)
+        """
+        if not climax:
+            return False, None, 0.0
+
+        has_strong_climax = False
+        climax_type = None
+        climax_confidence = 0.0
+
+        if hasattr(climax, 'detected'):
+            has_strong_climax = bool(climax.detected)
+            climax_type = self._safe_get_event_attribute(climax, 'type')
+            climax_confidence = self._safe_get_event_attribute(climax, 'confidence', WEAK_SIGNAL_CONFIDENCE)
+        elif isinstance(climax, dict):
+            has_strong_climax = bool(climax.get('detected', False))
+            climax_type = climax.get('type')
+            climax_confidence = climax.get('confidence', WEAK_SIGNAL_CONFIDENCE)
+
+        return has_strong_climax, climax_type, climax_confidence
+
+    def _get_market_trend_context(self) -> Dict[str, Any]:
+        """获取当前市场趋势上下文信息"""
+        current_price = self.data['Close'].iloc[-1]
+        ma20 = self.data['MA20'].iloc[-1] if 'MA20' in self.data.columns else current_price
+        ma50 = self.data['MA50'].iloc[-1] if 'MA50' in self.data.columns else current_price
+        ma200 = self.data['MA200'].iloc[-1] if 'MA200' in self.data.columns else current_price
+
+        return {
+            'current_price': current_price,
+            'ma20': ma20,
+            'ma50': ma50,
+            'ma200': ma200,
+            'is_bullish_alignment': current_price > ma20 > ma50 > ma200,
+            'is_bearish_alignment': current_price < ma20 < ma50,
+            'is_above_ma200': current_price > ma200
+        }
+
+    def _determine_ambiguous_phase(self, climax_type: str, weak_ar: bool, weak_st: bool, trend_context: Dict) -> Optional[Tuple[str, WyckoffPhase, float]]:
+        """
+        根据Climax类型和市场趋势确定模糊阶段
+
+        Returns:
+            (phase_str, phase_enum, confidence) or None
+        """
+        if trend_context['is_bullish_alignment']:
+            return self._handle_bullish_trend_ambiguous_phase(climax_type, weak_ar, weak_st)
+        elif trend_context['is_bearish_alignment']:
+            return self._handle_bearish_trend_ambiguous_phase(climax_type)
+        else:
+            return self._handle_neutral_trend_ambiguous_phase(climax_type)
+
+    def _handle_bullish_trend_ambiguous_phase(self, climax_type: str, weak_ar: bool, weak_st: bool) -> Tuple[str, WyckoffPhase, float]:
+        """处理多头趋势下的模糊阶段"""
+        if climax_type == 'buying_climax':
+            if weak_ar or weak_st:
+                logger.info("[方案B] 判定为: Markup Phase E (上涨末期，潜在派发初期)")
+                return ('Markup Phase E (上涨末期，潜在派发初期)', WyckoffPhase.PHASE_E,
+                       CONFIDENCE_ADJUSTMENT['strong_markup_with_warning'])
+            else:
+                logger.info("[方案B] 判定为: Markup Phase E (强势上涨，伴有买入高潮警示)")
+                return ('Markup Phase E (强势上涨，伴有买入高潮警示)', WyckoffPhase.PHASE_E,
+                       CONFIDENCE_ADJUSTMENT['strong_markup_bc_warning'])
+        else:  # selling_climax
+            logger.info("[方案B] 判定为: Markup Phase E (强势上涨，但出现恐慌性抛售)")
+            return ('Markup Phase E (强势上涨，但出现恐慌性抛售)', WyckoffPhase.PHASE_E,
+                   CONFIDENCE_ADJUSTMENT['strong_markup_sc_warning'])
+
+    def _handle_bearish_trend_ambiguous_phase(self, climax_type: str) -> Tuple[str, WyckoffPhase, float]:
+        """处理空头趋势下的模糊阶段"""
+        if climax_type == 'buying_climax':
+            logger.info("[方案B] 判定为: Distribution Phase A (买入高潮，等待回落确认)")
+            return ('Distribution Phase A (买入高潮，等待回落确认)', WyckoffPhase.PHASE_A,
+                   CONFIDENCE_ADJUSTMENT['distribution_a_pending'])
+        else:  # selling_climax
+            logger.info("[方案B] 判定为: Accumulation Phase A (恐慌抛售，等待反弹确认)")
+            return ('Accumulation Phase A (恐慌抛售，等待反弹确认)', WyckoffPhase.PHASE_A,
+                   CONFIDENCE_ADJUSTMENT['accumulation_a_pending'])
+
+    def _handle_neutral_trend_ambiguous_phase(self, climax_type: str) -> Tuple[str, WyckoffPhase, float]:
+        """处理震荡趋势下的模糊阶段"""
+        if climax_type == 'buying_climax':
+            logger.info("[方案B] 判定为: Trending with BC Warning (趋势推进中，买入高潮警示)")
+            return ('Trending with BC Warning (趋势推进中，买入高潮警示)', WyckoffPhase.UNKNOWN,
+                   CONFIDENCE_ADJUSTMENT['trending_bc_warning'])
+        else:
+            logger.info("[方案B] 判定为: Trending with SC Warning (趋势整理中，恐慌抛售警示)")
+            return ('Trending with SC Warning (趋势整理中，恐慌抛售警示)', WyckoffPhase.UNKNOWN,
+                   CONFIDENCE_ADJUSTMENT['trending_sc_warning'])
 
     def _detect_weak_automatic_reaction(self, events: Dict, climax) -> bool:
         """
@@ -269,44 +461,41 @@ class PhaseIdentifier(BaseDetector):
 
         放宽AR检测条件，寻找"微弱的价格反应"
         """
-        if not climax or not hasattr(climax, 'date'):
-            return False
-
-        climax_date = climax.date if hasattr(climax, 'date') else climax.get('date')
+        climax_date = self._safe_get_event_attribute(climax, 'date')
         if not climax_date:
             return False
 
         try:
-            #  降低AR检测阈值：正常AR需要明显反向运动，这里寻找微弱反应
-            df_after = self.data[self.data.index > climax_date].head(30)
-            if len(df_after) < 3:
+            df_after = self.data[self.data.index > climax_date].head(SPRING_WINDOW_DAYS)
+            if len(df_after) < MIN_DATA_POINTS:
                 return False
 
-            # 正常AR阈值：明显反向运动
-            # 准AR阈值：任何价格停滞或微弱反向
+            climax_price = self._safe_get_event_attribute(climax, 'price')
+            if not climax_price:
+                return False
 
-            if climax.type == 'buying_climax':
-                # BC后的微弱回落
-                high_after_bc = df_after['High'].iloc[0:5].max()
-                bc_price = climax.price if hasattr(climax, 'price') else climax.get('price')
+            climax_type = self._safe_get_event_attribute(climax, 'type')
 
-                # 准AR条件：价格没有创新高，显示上涨动力衰竭
-                if bc_price and high_after_bc < bc_price * 1.02:  # 2%容差
-                    return True
-
+            if climax_type == 'buying_climax':
+                return self._check_weak_ar_after_buying_climax(df_after, climax_price)
             else:  # selling_climax
-                # SC后的微弱反弹
-                low_after_sc = df_after['Low'].iloc[0:5].min()
-                sc_price = climax.price if hasattr(climax, 'price') else climax.get('price')
-
-                # 准AR条件：价格没有创新低，显示抛压减轻
-                if sc_price and low_after_sc > sc_price * 0.98:  # 2%容差
-                    return True
+                return self._check_weak_ar_after_selling_climax(df_after, climax_price)
 
         except Exception as e:
             logger.debug(f"Weak AR detection failed: {e}")
+            return False
 
-        return False
+    def _check_weak_ar_after_buying_climax(self, df_after: pd.DataFrame, bc_price: float) -> bool:
+        """检查买入高潮后的微弱回落"""
+        high_after_bc = df_after['High'].iloc[0:5].max()
+        # 准AR条件：价格没有创新高，显示上涨动力衰竭
+        return high_after_bc < bc_price * (1 + PRICE_TOLERANCE_PCT)
+
+    def _check_weak_ar_after_selling_climax(self, df_after: pd.DataFrame, sc_price: float) -> bool:
+        """检查卖出高潮后的微弱反弹"""
+        low_after_sc = df_after['Low'].iloc[0:5].min()
+        # 准AR条件：价格没有创新低，显示抛压减轻
+        return low_after_sc > sc_price * (1 - PRICE_TOLERANCE_PCT)
 
     def _detect_weak_secondary_test(self, events: Dict, climax) -> bool:
         """
@@ -314,50 +503,61 @@ class PhaseIdentifier(BaseDetector):
 
         放宽ST检测条件，寻找"量能萎缩的价格测试"
         """
-        if not climax or not hasattr(climax, 'date') or not hasattr(climax, 'volume'):
+        climax_date = self._safe_get_event_attribute(climax, 'date')
+        climax_price = self._safe_get_event_attribute(climax, 'price')
+        climax_volume = self._safe_get_event_attribute(climax, 'volume')
+
+        if not (climax_date and climax_price):
             return False
 
-        climax_date = climax.date
-        climax_volume = climax.volume
-
         try:
-            df_after = self.data[self.data.index > climax_date].head(30)
-            if len(df_after) < 5:
+            df_after = self.data[self.data.index > climax_date].head(SPRING_WINDOW_DAYS)
+            if len(df_after) < MIN_DATA_POINTS + 2:  # Need at least 5 data points
                 return False
 
-            # 正常ST：价格测试climax低点 + 量能显著萎缩
-            # 准ST：价格接近climax低点 OR 量能萎缩（二选一即可）
+            climax_type = self._safe_get_event_attribute(climax, 'type')
 
-            if climax.type == 'buying_climax':
-                bc_high = climax.price
-                recent_highs = df_after['High'].tail(10)
-
-                # 准ST条件1：价格接近BC高点（容差放宽到3%）
-                price_test = (recent_highs >= bc_high * 0.97).any()
-
-                # 准ST条件2：量能显著萎缩（比正常要求更宽松）
-                volume_ma = self.data['Volume_MA20'].iloc[-1] if 'Volume_MA20' in self.data.columns else df_after['Volume'].mean()
-                vol_shrinkage = (df_after['Volume'].tail(5) < volume_ma * 0.8).any()
-
-                return price_test or vol_shrinkage
-
+            if climax_type == 'buying_climax':
+                return self._check_weak_st_after_buying_climax(df_after, climax_price)
             else:  # selling_climax
-                sc_low = climax.price
-                recent_lows = df_after['Low'].tail(10)
-
-                # 准ST条件1：价格接近SC低点（容差放宽到3%）
-                price_test = (recent_lows <= sc_low * 1.03).any()
-
-                # 准ST条件2：量能显著萎缩
-                volume_ma = self.data['Volume_MA20'].iloc[-1] if 'Volume_MA20' in self.data.columns else df_after['Volume'].mean()
-                vol_shrinkage = (df_after['Volume'].tail(5) < volume_ma * 0.8).any()
-
-                return price_test or vol_shrinkage
+                return self._check_weak_st_after_selling_climax(df_after, climax_price)
 
         except Exception as e:
             logger.debug(f"Weak ST detection failed: {e}")
+            return False
 
-        return False
+    def _check_weak_st_after_buying_climax(self, df_after: pd.DataFrame, bc_high: float) -> bool:
+        """检查买入高潮后的准ST信号"""
+        recent_highs = df_after['High'].tail(10)
+
+        # 准ST条件1：价格接近BC高点（容差放宽到3%）
+        price_test = (recent_highs >= bc_high * (1 - WEAK_PRICE_TOLERANCE_PCT)).any()
+
+        # 准ST条件2：量能显著萎缩
+        volume_ma = self._get_volume_ma(df_after)
+        vol_shrinkage = (df_after['Volume'].tail(5) < volume_ma * VOLUME_RATIO_THRESHOLDS['normal']).any()
+
+        return price_test or vol_shrinkage
+
+    def _check_weak_st_after_selling_climax(self, df_after: pd.DataFrame, sc_low: float) -> bool:
+        """检查卖出高潮后的准ST信号"""
+        recent_lows = df_after['Low'].tail(10)
+
+        # 准ST条件1：价格接近SC低点（容差放宽到3%）
+        price_test = (recent_lows <= sc_low * (1 + WEAK_PRICE_TOLERANCE_PCT)).any()
+
+        # 准ST条件2：量能显著萎缩
+        volume_ma = self._get_volume_ma(df_after)
+        vol_shrinkage = (df_after['Volume'].tail(5) < volume_ma * VOLUME_RATIO_THRESHOLDS['normal']).any()
+
+        return price_test or vol_shrinkage
+
+    def _get_volume_ma(self, df: pd.DataFrame) -> float:
+        """获取量能移动平均值"""
+        if 'Volume_MA20' in self.data.columns:
+            return self.data['Volume_MA20'].iloc[-1]
+        else:
+            return df['Volume'].mean()
 
     def _fallback_logic(self, events: Dict = None) -> Tuple[str, WyckoffPhase, float]:
         """基于均线排布的降级判定逻辑"""
