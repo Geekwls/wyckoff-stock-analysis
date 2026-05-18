@@ -63,4 +63,7 @@ coverage/
 *.deb
 *.Z
 *.lz
-*.lzo
+*.lzo
+# Temporary batch reports
+temp_reports/
+batch_generate.py
