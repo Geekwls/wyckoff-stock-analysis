@@ -650,7 +650,7 @@ class ScreenerService:
                 try:
                     signal_dt = pd.to_datetime(spring_date)
                     days_elapsed = (pd.Timestamp.now() - signal_dt).days
-                except:
+                except Exception:
                     days_elapsed = 0
             else:
                 days_elapsed = 0

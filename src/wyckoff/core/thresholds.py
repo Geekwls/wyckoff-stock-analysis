@@ -4,7 +4,9 @@
 动态阈值自适应系统
 """
 import logging
+import pandas as pd
 from typing import Dict, Any
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +25,54 @@ JOC_MIN_VOLUME_RATIO = 1.5          # JOC最小量比
 JOC_MIN_CLOSE_POSITION = 0.75       # JOC最低收盘位置
 SOT_VOLUME_THRESHOLD = 1.3          # SOT量比阈值
 SOT_BODY_RATIO_THRESHOLD = 0.3      # SOT实体占比阈值
-MAX_RECOVERY_DAYS_LOW_VOL = 5       # 低波动最大收回天数
-MAX_RECOVERY_DAYS_MEDIUM_VOL = 3    # 中波动最大收回天数
-MAX_RECOVERY_DAYS_HIGH_VOL = 2      # 高波动最大收回天数
+# 威科夫理论标准：Spring必须在1-3天内收回支撑位
+# 失败Spring：价格3+天未收回 → 真下跌开始
+MAX_RECOVERY_DAYS_STANDARD = 3      # 统一标准：3天（所有波动率体制）
+MIN_RECOVERY_DAYS_STANDARD = 1      # 最小收回天数
+
+
+@dataclass(frozen=True)
+class VolatilityThresholds:
+    """波动率体制阈值配置"""
+    spring_breakdown_max: float
+    joc_body_ratio: float
+    joc_upper_shadow_ratio: float
+    joc_volume_ratio: float
+    lps_volume_ratio: float
+    upthrust_breakout_max: float
+    vsa_volume_cutoff: float
+
+
+# 不同波动率体制的阈值配置
+VOLATILITY_THRESHOLDS = {
+    "low": VolatilityThresholds(
+        spring_breakdown_max=2.5,
+        joc_body_ratio=0.04,
+        joc_upper_shadow_ratio=0.3,
+        joc_volume_ratio=1.8,
+        lps_volume_ratio=1.5,
+        upthrust_breakout_max=2.0,
+        vsa_volume_cutoff=0.7
+    ),
+    "medium": VolatilityThresholds(
+        spring_breakdown_max=3.0,
+        joc_body_ratio=0.03,
+        joc_upper_shadow_ratio=0.35,
+        joc_volume_ratio=1.5,
+        lps_volume_ratio=1.3,
+        upthrust_breakout_max=3.0,
+        vsa_volume_cutoff=0.8
+    ),
+    "high": VolatilityThresholds(
+        spring_breakdown_max=5.0,
+        joc_body_ratio=0.02,
+        joc_upper_shadow_ratio=0.4,
+        joc_volume_ratio=1.2,
+        lps_volume_ratio=1.2,
+        upthrust_breakout_max=5.0,
+        vsa_volume_cutoff=0.9
+    )
+}
 
 
 class VolatilityRegime:
@@ -74,44 +121,25 @@ class AdaptiveThresholds:
 
     def _set_thresholds_by_regime(self):
         """根据波动率体制设置阈值"""
+        # 获取对应体制的阈值配置
+        thresholds = VOLATILITY_THRESHOLDS.get(self.volatility_regime, VOLATILITY_THRESHOLDS["medium"])
 
-        if self.volatility_regime == VolatilityRegime.LOW:
-            # 低波动：严格阈值
-            self.SPRING_BREAKDOWN_MAX = 2.5      # Spring最大跌破幅度
-            self.SPRING_RECOVERY_DAYS_MIN = 1    # Spring最小收回天数
-            self.SPRING_RECOVERY_DAYS_MAX = 3    # Spring最大收回天数
-            self.JOC_BODY_RATIO = 0.04            # JOC实体比例（4%）
-            self.JOC_UPPER_SHADOW_RATIO = 0.3    # JOC上影线比例
-            self.JOC_VOLUME_RATIO = 1.8          # JOC量能比例
-            self.LPS_VOLUME_RATIO = 1.5          # LPS量能比例
-            self.UPTHRUST_BREAKOUT_MAX = 2.0     # Upthrust最大突破幅度
-            self.VSA_VOLUME_CUTOFF = 0.7         # VSA量能 cutoff
-
-        elif self.volatility_regime == VolatilityRegime.MEDIUM:
-            # 中波动：标准阈值
-            self.SPRING_BREAKDOWN_MAX = 3.0      # Spring最大跌破幅度
-            self.SPRING_RECOVERY_DAYS_MIN = 1
-            self.SPRING_RECOVERY_DAYS_MAX = 3
-            self.JOC_BODY_RATIO = 0.03            # JOC实体比例（3%）
-            self.JOC_UPPER_SHADOW_RATIO = 0.35   # JOC上影线比例
-            self.JOC_VOLUME_RATIO = 1.5          # JOC量能比例
-            self.LPS_VOLUME_RATIO = 1.3          # LPS量能比例
-            self.UPTHRUST_BREAKOUT_MAX = 3.0     # Upthrust最大突破幅度
-            self.VSA_VOLUME_CUTOFF = 0.8         # VSA量能 cutoff
-
-        else:  # HIGH volatility
-            # 高波动：宽松阈值
-            self.SPRING_BREAKDOWN_MAX = 5.0      # Spring最大跌破幅度
-            self.SPRING_RECOVERY_DAYS_MIN = 1
-            self.SPRING_RECOVERY_DAYS_MAX = 4    # 允许更长的收回时间
-            self.JOC_BODY_RATIO = 0.02            # JOC实体比例（2%）
-            self.JOC_UPPER_SHADOW_RATIO = 0.4    # JOC上影线比例
-            self.JOC_VOLUME_RATIO = 1.2          # JOC量能比例
-            self.LPS_VOLUME_RATIO = 1.2          # LPS量能比例
-            self.UPTHRUST_BREAKOUT_MAX = 5.0     # Upthrust最大突破幅度
-            self.VSA_VOLUME_CUTOFF = 0.9         # VSA量能 cutoff
+        # 应用阈值配置
+        self.SPRING_BREAKDOWN_MAX = thresholds.spring_breakdown_max
+        self.SPRING_RECOVERY_DAYS_MIN = MIN_RECOVERY_DAYS_STANDARD
+        self.SPRING_RECOVERY_DAYS_MAX = MAX_RECOVERY_DAYS_STANDARD
+        self.JOC_BODY_RATIO = thresholds.joc_body_ratio
+        self.JOC_UPPER_SHADOW_RATIO = thresholds.joc_upper_shadow_ratio
+        self.JOC_VOLUME_RATIO = thresholds.joc_volume_ratio
+        self.LPS_VOLUME_RATIO = thresholds.lps_volume_ratio
+        self.UPTHRUST_BREAKOUT_MAX = thresholds.upthrust_breakout_max
+        self.VSA_VOLUME_CUTOFF = thresholds.vsa_volume_cutoff
 
         # 孟洪涛增强器专用阈值（不随波动率体制变化）
+        self._set_meng_thresholds()
+
+    def _set_meng_thresholds(self):
+        """设置孟洪涛增强器专用阈值"""
         self.MENG_SPRING_BREAKDOWN_MIN = 1.0
         self.MENG_SPRING_BREAKDOWN_MAX = 3.0
         self.MENG_SPRING_RECOVERY_CLOSE_POS = 0.7
@@ -235,7 +263,3 @@ class ThresholdAdapterFactory:
         """
         adaptive = AdaptiveThresholds(atr_pct=1.5)
         return adaptive.get_thresholds_dict()
-
-
-# 导入pandas（在类定义后导入避免循环依赖）
-import pandas as pd

@@ -73,7 +73,8 @@ class WyckoffOrchestrator:
 
         关键修复：确保在调用 detect_sos() 之前正确设置阶段信息
         """
-        detector = WyckoffPatternDetector(data, self.config)
+        # WyckoffPatternDetector 会创建内部 IndicatorCache，无需外部传入
+        detector = WyckoffPatternDetector(data, self.config, analysis_cache=None)
 
         # 首先获取阶段信息（这会触发 _collect_all_events()）
         phase_info = detector.identify_phase()
