@@ -64,9 +64,14 @@ class WyckoffThresholds(BaseModel):
     JOC_UPPER_SHADOW_RATIO: float = Field(0.25, description="上影线最大占波幅比例")
     JOC_VOLUME_RATIO: float = Field(1.5, description="突破日最小量比（相对20日均量）")
     JOC_MIN_BREAKOUT_PCT: float = Field(3.0, description="突破日最小涨幅百分比；不同市场可调，避免硬编码5%")
+    JOC_EXCELLENT_BREAKOUT_PCT: float = Field(5.0, description="优秀突破阈值，用于置信度评分")
     JOC_CLOSE_POSITION: float = Field(0.75, description="突破日收盘位置下限（0=最低，1=最高）")
     JOC_TEST_BAND: float = Field(0.02, description="回测允许偏离小溪位的比例 (±2%)")
     JOC_TEST_VOL_RATIO: float = Field(0.85, description="回测日量能萎缩阈值（< 均量85%）")
+    JOC_EXCELLENT_VOLUME_RATIO: float = Field(2.5, description="优秀量能阈值，用于置信度评分")
+    JOC_EXCELLENT_CLOSE_POSITION: float = Field(0.9, description="优秀收盘位置阈值，用于置信度评分")
+    JOC_GOOD_CLOSE_POSITION: float = Field(0.8, description="良好收盘位置阈值，用于置信度评分")
+    JOC_GOOD_VOLUME_RATIO: float = Field(2.0, description="良好量能阈值，用于置信度评分")
 
     # ── FTI (Fall Through the Ice / 跌破冰层) 参数 ────────────
     FTI_ICE_QUANTILE: float = Field(0.15, description="近期区间低点分位数（冰层支撑）")

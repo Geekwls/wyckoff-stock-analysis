@@ -25,8 +25,11 @@ from src.wyckoff.config.settings import WyckoffConfig
 # ─────────────────────────────────────────────────────────────
 
 def _make_base_df(n: int = 120, base_price: float = 20.0) -> pd.DataFrame:
-    """生成基础平稳行情（价格均在 base_price ± 5% 内震荡）"""
-    end = pd.Timestamp.today().normalize()
+    """生成基础平稳行情（价格均在 base_price ± 5% 内震荡）
+
+    使用固定日期避免测试不稳定（周末/节假日边界问题）
+    """
+    end = pd.Timestamp('2025-01-31')
     rng = pd.bdate_range(end=end, periods=n)
     np.random.seed(42)
     closes = base_price + np.random.randn(n) * 0.3

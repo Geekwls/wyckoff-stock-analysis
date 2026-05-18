@@ -44,15 +44,12 @@ class MengTrendDetector(BaseDetector):
         volume_ratios = np.where(vol_ma20 > 0, volumes / vol_ma20, 1.0)
         daily_ranges = highs - lows
         close_positions = np.where(daily_ranges > 0, (closes - lows) / daily_ranges, 0.5)
-        
-        min_breakout_pct = getattr(self.thresholds, "JOC_MIN_BREAKOUT_PCT", 3.0)
-        min_volume_ratio = getattr(self.thresholds, "JOC_VOLUME_RATIO", 1.5)
-        min_close_position = getattr(self.thresholds, "JOC_CLOSE_POSITION", 0.75)
+
         valid_joc = (
             is_breakout
-            & (price_changes >= min_breakout_pct)
-            & (volume_ratios >= min_volume_ratio)
-            & (close_positions >= min_close_position)
+            & (price_changes >= self.thresholds.JOC_MIN_BREAKOUT_PCT)
+            & (volume_ratios >= self.thresholds.JOC_VOLUME_RATIO)
+            & (close_positions >= self.thresholds.JOC_CLOSE_POSITION)
         )
         indices = np.where(valid_joc)[0]
         signals, n = [], len(df)
@@ -105,13 +102,12 @@ class MengTrendDetector(BaseDetector):
         for i in range(20, len(df)):
             if df['Close'].iloc[i] > creek_level and df['Close'].iloc[i-1] <= creek_level:
                 price_change = (df['Close'].iloc[i] - df['Open'].iloc[i]) / df['Open'].iloc[i] * 100
-                min_breakout_pct = getattr(self.thresholds, "JOC_MIN_BREAKOUT_PCT", 3.0)
-                if price_change < min_breakout_pct: continue
+                if price_change < self.thresholds.JOC_MIN_BREAKOUT_PCT: continue
                 vol_ratio = df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
-                if vol_ratio < getattr(self.thresholds, "JOC_VOLUME_RATIO", 1.5): continue
+                if vol_ratio < self.thresholds.JOC_VOLUME_RATIO: continue
                 daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
                 close_pos = (df['Close'].iloc[i] - df['Low'].iloc[i]) / daily_range if daily_range > 0 else 0.5
-                if close_pos < getattr(self.thresholds, "JOC_CLOSE_POSITION", 0.75): continue
+                if close_pos < self.thresholds.JOC_CLOSE_POSITION: continue
                 td, tdt, tvr = False, None, None
                 for j in range(i+1, min(i+10, len(df))):
                     #  修复#5: 回测检测逻辑优化 - 允许短暂跌破后收回
@@ -132,21 +128,27 @@ class MengTrendDetector(BaseDetector):
 
     def _calculate_joc_confidence(self, breakout_pct, volume_ratio, close_position, has_test, test_score=0):
         score = 0
-        min_breakout_pct = getattr(self.thresholds, "JOC_MIN_BREAKOUT_PCT", 3.0)
-        if breakout_pct >= max(5.0, min_breakout_pct): score += 25
-        elif breakout_pct >= min_breakout_pct: score += 20
-        if volume_ratio >= 2.5: score += 25
-        elif volume_ratio >= 2.0: score += 20
-        elif volume_ratio >= getattr(self.thresholds, "JOC_VOLUME_RATIO", 1.5): score += 15
-        if close_position >= 0.9: score += 25
-        elif close_position >= 0.8: score += 20
-        elif close_position >= getattr(self.thresholds, "JOC_CLOSE_POSITION", 0.75): score += 15
-        
+        t = self.thresholds
+        # 突破幅度评分：优秀阈值取配置值与5%的较大者
+        excellent_breakout_threshold = max(t.JOC_EXCELLENT_BREAKOUT_PCT, t.JOC_MIN_BREAKOUT_PCT)
+        if breakout_pct >= excellent_breakout_threshold: score += 25
+        elif breakout_pct >= t.JOC_MIN_BREAKOUT_PCT: score += 20
+
+        # 量能评分
+        if volume_ratio >= t.JOC_EXCELLENT_VOLUME_RATIO: score += 25
+        elif volume_ratio >= t.JOC_GOOD_VOLUME_RATIO: score += 20
+        elif volume_ratio >= t.JOC_VOLUME_RATIO: score += 15
+
+        # 收盘位置评分
+        if close_position >= t.JOC_EXCELLENT_CLOSE_POSITION: score += 25
+        elif close_position >= t.JOC_GOOD_CLOSE_POSITION: score += 20
+        elif close_position >= t.JOC_CLOSE_POSITION: score += 15
+
         # 回测权重提升
         if has_test:
             score += 25
-            if test_score >= 80: score += 10 # 高质量回测额外加分
-            
+            if test_score >= 80: score += 10  # 高质量回测额外加分
+
         return min(100, score)
 
     def _calculate_joc_test_quality(self, close, open, high, low, vol, vol_ma20, creek_level, prev_body_pct=None):
