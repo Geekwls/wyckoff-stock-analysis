@@ -53,20 +53,11 @@ class VSAAnalyzer:
         out_df['spread_zscore'] = (out_df['spread'] - r_mean) / r_std
 
         # 3. 计算 Volume Percentile 252 (0.0 到 1.0)
-        def calc_percentile(s: pd.Series) -> float:
-            if len(s) == 0:
-                return 0.0
-            last_val = s.iloc[-1]
-            return float((s < last_val).sum() / len(s))
-
-        out_df['vol_percentile'] = out_df['volume'].rolling(window=self.vol_window, min_periods=1).apply(
-            calc_percentile, raw=False
-        )
+        # 高效替代方案：使用 Pandas 内置的 rank(pct=True) 极大提升性能
+        out_df['vol_percentile'] = out_df['volume'].rolling(window=self.vol_window, min_periods=1).rank(pct=True)
 
         # 4. 计算 Spread Percentile 252 供 EvR 差值使用
-        out_df['spread_percentile'] = out_df['spread'].rolling(window=self.vol_window, min_periods=1).apply(
-            calc_percentile, raw=False
-        )
+        out_df['spread_percentile'] = out_df['spread'].rolling(window=self.vol_window, min_periods=1).rank(pct=True)
 
         # 5. 单点量价效率差值 (Effort vs Result - EvR)
         # EvR 越大，说明量能极大 (Effort大) 但实际涨跌波幅极小 (Result小)，典型的主力暗中吸收或派发滞涨

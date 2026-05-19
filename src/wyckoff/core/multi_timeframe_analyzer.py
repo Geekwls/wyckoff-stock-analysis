@@ -113,8 +113,9 @@ class MultiTimeframeAnalyzer:
         resonance_signals = []
 
         # Spring共振（权重调整）
-        spring_upthrust = daily_events.get('spring_upthrust') or {}
-        if spring_upthrust.get('_type') == 'spring':
+        spring_upthrust = daily_events.get('spring_upthrust') if isinstance(daily_events, dict) else getattr(daily_events, 'spring_upthrust', None)
+        spring_type = spring_upthrust.get('_type') if isinstance(spring_upthrust, dict) else getattr(spring_upthrust, 'type_', None)
+        if spring_type == 'spring':
             resonance_strength += 1
             resonance_signals.append('daily_spring')
         if weekly_resonance.get('has_spring'):
@@ -125,8 +126,9 @@ class MultiTimeframeAnalyzer:
             resonance_signals.append('monthly_spring')
 
         # SOS共振
-        sos_sow = daily_events.get('sos_sow') or {}
-        if sos_sow.get('_type') == 'sos':
+        sos_sow = daily_events.get('sos_sow') if isinstance(daily_events, dict) else getattr(daily_events, 'sos_sow', None)
+        sos_type = sos_sow.get('_type') if isinstance(sos_sow, dict) else getattr(sos_sow, 'type_', None)
+        if sos_type == 'sos':
             resonance_strength += 1
             resonance_signals.append('daily_sos')
         if weekly_resonance.get('has_sos'):

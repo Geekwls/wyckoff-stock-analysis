@@ -24,21 +24,45 @@ class SignalExtractor:
         Returns:
             包含各信号检测状态的字典
         """
-        events = phase_result.get('events_detected', {})
-        spring_upthrust: dict = events.get('spring_upthrust') or {}
-        sos_sow: dict = events.get('sos_sow') or {}
-        lps_lpsy: dict = events.get('lps_lpsy') or {}
+        events = phase_result.get('events_detected') if isinstance(phase_result, dict) else getattr(phase_result, 'events_detected', None)
+        if not events:
+            events = phase_result
 
-        lps_data = lps_lpsy.get('lps', {}) if isinstance(lps_lpsy, dict) else {}
-        lpsy_data = lps_lpsy.get('lpsy', {}) if isinstance(lps_lpsy, dict) else {}
+        # 如果 events 是 dict
+        if isinstance(events, dict):
+            spring_upthrust = events.get('spring_upthrust') or {}
+            sos_sow = events.get('sos_sow') or {}
+            lps_lpsy = events.get('lps_lpsy') or {}
+            lps_data = lps_lpsy.get('lps', {}) if isinstance(lps_lpsy, dict) else {}
+            lpsy_data = lps_lpsy.get('lpsy', {}) if isinstance(lps_lpsy, dict) else {}
+
+            has_spring = spring_upthrust.get('_type') == 'spring'
+            has_upthrust = spring_upthrust.get('_type') == 'upthrust'
+            has_sos = sos_sow.get('_type') == 'sos'
+            has_sow = sos_sow.get('_type') == 'sow'
+            has_lps = getattr(lps_data, 'detected', False) if hasattr(lps_data, 'detected') else lps_data.get('detected', False)
+            has_lpsy = getattr(lpsy_data, 'detected', False) if hasattr(lpsy_data, 'detected') else lpsy_data.get('detected', False)
+        else:
+            # 强类型 Pydantic Model (EventsModel)
+            spring_upthrust = getattr(events, 'spring_upthrust', None)
+            sos_sow = getattr(events, 'sos_sow', None)
+            lps_data = getattr(events, 'lps', None)
+            lpsy_data = getattr(events, 'lpsy', None)
+
+            has_spring = spring_upthrust.type_ == 'spring' if spring_upthrust else False
+            has_upthrust = spring_upthrust.type_ == 'upthrust' if spring_upthrust else False
+            has_sos = sos_sow.type_ == 'sos' if sos_sow else False
+            has_sow = sos_sow.type_ == 'sow' if sos_sow else False
+            has_lps = getattr(lps_data, 'detected', False) if lps_data else False
+            has_lpsy = getattr(lpsy_data, 'detected', False) if lpsy_data else False
 
         return {
-            'has_spring': spring_upthrust.get('_type') == 'spring',
-            'has_upthrust': spring_upthrust.get('_type') == 'upthrust',
-            'has_sos': sos_sow.get('_type') == 'sos',
-            'has_sow': sos_sow.get('_type') == 'sow',
-            'has_lps': getattr(lps_data, 'detected', False) if hasattr(lps_data, 'detected') else lps_data.get('detected', False),
-            'has_lpsy': getattr(lpsy_data, 'detected', False) if hasattr(lpsy_data, 'detected') else lpsy_data.get('detected', False),
+            'has_spring': has_spring,
+            'has_upthrust': has_upthrust,
+            'has_sos': has_sos,
+            'has_sow': has_sow,
+            'has_lps': has_lps,
+            'has_lpsy': has_lpsy,
         }
 
     @staticmethod
@@ -86,7 +110,10 @@ class SignalExtractor:
         if thresholds is None:
             thresholds = WyckoffThresholds()
 
-        events = phase_result.get('events_detected', {})
+        events = phase_result.get('events_detected') if isinstance(phase_result, dict) else getattr(phase_result, 'events_detected', None)
+        if not events:
+            events = phase_result
+
         if not events:
             return 0.0
 
@@ -107,14 +134,41 @@ class SignalExtractor:
         bearish_count = 0
 
         for key, max_weight in important_signals:
-            info = events.get(key)
-            if not info: continue
+            if isinstance(events, dict):
+                info = events.get(key)
+            else:
+                info = getattr(events, key, None)
 
-            data = info.get('data') if isinstance(info, dict) else info
+            if not info:
+                # 兼容：如果 key 是 lps_lpsy 且 events 是 EventsModel
+                if key == 'lps_lpsy' and not isinstance(events, dict):
+                    lps = getattr(events, 'lps', None)
+                    lpsy = getattr(events, 'lpsy', None)
+                    is_lps_detected = getattr(lps, 'detected', False) if lps else False
+                    is_lpsy_detected = getattr(lpsy, 'detected', False) if lpsy else False
+                    if is_lps_detected:
+                        info = lps
+                    elif is_lpsy_detected:
+                        info = lpsy
+                if not info:
+                    continue
+
+            # 统一提取具体的事件实体和类型
+            if isinstance(info, dict):
+                data = info.get('data') or info
+                sig_type = info.get('_type') or info.get('type', '')
+            else:
+                # 强类型，可能是 DualEventModel 或具体的 LpsModel/LpsyModel
+                if hasattr(info, 'type_'):
+                    sig_type = info.type_
+                    data = info.data
+                else:
+                    sig_type = key
+                    data = info
+
             if not data or not getattr(data, 'detected', False): continue
 
             # 判断方向供冲突检测
-            sig_type = info.get('_type') if isinstance(info, dict) else getattr(data, 'type', '')
             if sig_type in ['spring', 'sos', 'lps']: bullish_count += 1
             elif sig_type in ['upthrust', 'sow', 'lpsy']: bearish_count += 1
 
@@ -136,14 +190,13 @@ class SignalExtractor:
                 if isinstance(sig_date, str):
                     try: sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
                     except Exception:
-                        # 转换失败保持原样，后面会有类型检查
                         pass
 
                 if isinstance(sig_date, datetime):
                     if latest_date is None or sig_date > latest_date:
                         latest_date = sig_date
 
-                    # 时间衰减因子: exp(-ln(2) * t / half_life)
+                    # 时间衰减因子
                     days_ago = (datetime.now() - sig_date).days
                     decay = np.exp(-0.693 * max(0, days_ago) / thresholds.TIME_DECAY_HALF_LIFE)
                     quality_factor *= decay
@@ -155,7 +208,8 @@ class SignalExtractor:
             base_score -= thresholds.CONFLICT_PENALTY
 
         # 3. 基础置信度加成
-        phase_conf = phase_result.get('confidence') or 0.0
+        phase_conf = phase_result.get('confidence') if isinstance(phase_result, dict) else getattr(phase_result, 'confidence', 0.0)
+        phase_conf = phase_conf or 0.0
         base_score += phase_conf * 10
 
         return round(max(0.0, min(base_score, 100.0)), 2)

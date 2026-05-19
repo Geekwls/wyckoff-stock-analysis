@@ -53,13 +53,23 @@ class PhaseIdentifier(BaseDetector):
         self.config = config
         self.thresholds = thresholds
 
-    def identify(self, raw_events: Dict) -> Dict:
-        """主识别流程"""
+    def _get_event(self, events: Any, name: str) -> Any:
+        """从 dict 或 Pydantic Model 稳健地获取子事件对象"""
+        if isinstance(events, dict):
+            return events.get(name)
+        return getattr(events, name, None)
+
+    def identify(self, raw_events) -> Dict:
+        """主识别流程 — raw_events 现在是 EventsModel 或向后兼容的 Dict"""
         if self.data is None:
             return {'phase': 'Unknown', 'confidence': 0.0, 'phase_enum': WyckoffPhase.UNKNOWN}
 
-        #  修复信号穿越：只分析相关时间窗口内的事件
-        events = self.filter_relevant_events(raw_events)
+        # 若传入 EventsModel，直接使用；否则保持历史兼容路径
+        from ...schemas import EventsModel as _EM
+        if isinstance(raw_events, _EM):
+            events = raw_events
+        else:
+            events = self.filter_relevant_events(raw_events)
 
         phase_str, phase_enum, confidence = self._determine_phase_from_events(events)
         if phase_enum == WyckoffPhase.UNKNOWN:
@@ -133,8 +143,8 @@ class PhaseIdentifier(BaseDetector):
         验证 Phase A 的量价质量传递 (P2 #2.3)
         """
         score = 1.0
-        climax = events.get('climax')
-        st = events.get('secondary_test')
+        climax = self._get_event(events, 'climax')
+        st = self._get_event(events, 'secondary_test')
 
         if not (self._safe_check_detected(climax) and self._safe_check_detected(st)):
             return score
@@ -161,10 +171,10 @@ class PhaseIdentifier(BaseDetector):
         威科夫理论要求：Phase A 必须包含完整的 PS → SC/BC → AR → ST 序列
         只有Climax没有AR/ST = 可能只是暂时的停顿，不是真正的Phase A
         """
-        climax = events.get('climax')
-        ar = events.get('automatic_reaction')
-        st = events.get('secondary_test')
-        ps = events.get('preliminary_support')
+        climax = self._get_event(events, 'climax')
+        ar = self._get_event(events, 'automatic_reaction')
+        st = self._get_event(events, 'secondary_test')
+        ps = self._get_event(events, 'preliminary_support')
 
         has_climax = self._safe_check_detected(climax)
         has_ar = self._safe_check_detected(ar)
@@ -197,10 +207,10 @@ class PhaseIdentifier(BaseDetector):
         Returns:
             包含结构完整性状态和警告信息的字典
         """
-        climax = events.get('climax')
-        ar = events.get('automatic_reaction')
-        st = events.get('secondary_test')
-        ps = events.get('preliminary_support')
+        climax = self._get_event(events, 'climax')
+        ar = self._get_event(events, 'automatic_reaction')
+        st = self._get_event(events, 'secondary_test')
+        ps = self._get_event(events, 'preliminary_support')
 
         has_climax = self._safe_check_detected(climax)
         has_ar = self._safe_check_detected(ar)
@@ -265,19 +275,22 @@ class PhaseIdentifier(BaseDetector):
             return phase_b_result
 
         # 标准阶段识别逻辑
-        su_info = events.get('spring_upthrust') or {}
-        su_data = su_info.get('data')
-        ss_info = events.get('sos_sow') or {}
-        ss_data = ss_info.get('data')
+        from ...schemas import DualEventModel as _DEM
+        su_info = getattr(events, 'spring_upthrust', None)
+        ss_info = getattr(events, 'sos_sow', None)
 
-        climax = events.get('climax')
-        ar = events.get('automatic_reaction')
-        st = events.get('secondary_test')
+        climax = getattr(events, 'climax', None)
+        ar = getattr(events, 'automatic_reaction', None)
+        st = getattr(events, 'secondary_test', None)
 
-        is_spring = su_info.get('_type') == 'spring' and su_data and su_data.detected
-        is_upthrust = su_info.get('_type') == 'upthrust' and su_data and su_data.detected
-        is_sos = ss_info.get('_type') == 'sos' and ss_data and ss_data.detected
-        is_sow = ss_info.get('_type') == 'sow' and ss_data and ss_data.detected
+        is_spring = (isinstance(su_info, _DEM) and su_info.type_ == 'spring'
+                     and getattr(su_info.data, 'detected', False))
+        is_upthrust = (isinstance(su_info, _DEM) and su_info.type_ == 'upthrust'
+                       and getattr(su_info.data, 'detected', False))
+        is_sos = (isinstance(ss_info, _DEM) and ss_info.type_ == 'sos'
+                  and getattr(ss_info.data, 'detected', False))
+        is_sow = (isinstance(ss_info, _DEM) and ss_info.type_ == 'sow'
+                  and getattr(ss_info.data, 'detected', False))
 
         if is_spring and is_sos:
             return 'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, 0.85
@@ -312,11 +325,11 @@ class PhaseIdentifier(BaseDetector):
         - VSA 枯竭信号（no_supply/no_demand）
         """
         # 获取关键事件
-        lps_events = events.get('lps_list', [])
-        ut_events = events.get('ut_list', [])
-        climax = events.get('climax')
-        ar = events.get('automatic_reaction')
-        st = events.get('secondary_test')
+        lps_events = getattr(events, 'lps_list', []) or []
+        ut_events = getattr(events, 'ut_list', []) or []
+        climax = getattr(events, 'climax', None)
+        ar = getattr(events, 'automatic_reaction', None)
+        st = getattr(events, 'secondary_test', None)
 
         # 检查是否有基础结构（至少有 Climax + AR）
         has_climax = self._safe_check_detected(climax)
@@ -334,9 +347,11 @@ class PhaseIdentifier(BaseDetector):
         has_st = self._safe_check_detected(st)
 
         #  新增：检查 VSA 枯竭信号
-        vsa_signals = events.get('vsa_signals', {})
-        has_no_supply = vsa_signals.get('is_no_supply', False)
-        has_no_demand = vsa_signals.get('is_no_demand', False)
+        vsa_signals = getattr(events, 'vsa_signals', None) or {}
+        has_no_supply = (vsa_signals.get('is_no_supply', False) if isinstance(vsa_signals, dict)
+                         else getattr(vsa_signals, 'is_no_supply', False))
+        has_no_demand = (vsa_signals.get('is_no_demand', False) if isinstance(vsa_signals, dict)
+                         else getattr(vsa_signals, 'is_no_demand', False))
 
         # VSA 枯竭 + TR 中 = Phase B 强信号
         if (has_no_supply or has_no_demand) and total_tests >= 1:
@@ -350,8 +365,9 @@ class PhaseIdentifier(BaseDetector):
 
         if total_tests >= 2 or has_st:
             # 检查是否在 TR 中震荡
-            tr_info = events.get('trading_range', {})
-            in_tr = tr_info.get('is_consolidation', False) if hasattr(tr_info, 'get') else False
+            tr_info = getattr(events, 'trading_range', None)
+            in_tr = (tr_info.is_consolidation if hasattr(tr_info, 'is_consolidation')
+                     else (tr_info.get('is_consolidation', False) if isinstance(tr_info, dict) else False))
 
             if in_tr or total_tests >= 2:
                 climax_type = getattr(climax, 'type', 'selling_climax') if has_climax else 'selling_climax'
@@ -377,7 +393,7 @@ class PhaseIdentifier(BaseDetector):
 
         处理"BC强但AR/ST缺失"的情况，给出更精确的阶段标签
         """
-        climax = events.get('climax')
+        climax = getattr(events, 'climax', None)
         has_strong_climax, climax_type, climax_confidence = self._get_climax_info(climax)
 
         # 方案B增强：设置BC强度阈值（只处理高置信度BC）
@@ -385,8 +401,8 @@ class PhaseIdentifier(BaseDetector):
             return None  # BC不够强或不存在，不是模糊结构
 
         # 安全地检查AR/ST
-        ar = events.get('automatic_reaction')
-        st = events.get('secondary_test')
+        ar = getattr(events, 'automatic_reaction', None)
+        st = getattr(events, 'secondary_test', None)
 
         has_ar = self._safe_check_detected(ar)
         has_st = self._safe_check_detected(st)
@@ -417,16 +433,10 @@ class PhaseIdentifier(BaseDetector):
         return False
 
     def _safe_get_event_attribute(self, event, attr_name: str, default=None):
-        """安全地获取事件属性"""
+        """安全地获取事件属性 (兼容 Pydantic Model 和 dict)"""
         if event is None:
             return default
-
-        if hasattr(event, attr_name):
-            return getattr(event, attr_name, default)
-        elif isinstance(event, dict):
-            return event.get(attr_name, default)
-
-        return default
+        return getattr(event, attr_name, event.get(attr_name, default) if isinstance(event, dict) else default)
 
     def _normalize_date(self, date) -> Optional[pd.Timestamp]:
         """
@@ -477,14 +487,10 @@ class PhaseIdentifier(BaseDetector):
         climax_type = None
         climax_confidence = 0.0
 
-        if hasattr(climax, 'detected'):
-            has_strong_climax = bool(climax.detected)
-            climax_type = self._safe_get_event_attribute(climax, 'type')
-            climax_confidence = self._safe_get_event_attribute(climax, 'confidence', WEAK_SIGNAL_CONFIDENCE)
-        elif isinstance(climax, dict):
-            has_strong_climax = bool(climax.get('detected', False))
-            climax_type = climax.get('type')
-            climax_confidence = climax.get('confidence', WEAK_SIGNAL_CONFIDENCE)
+        # EventsModel 路径: 优先属性访问
+        has_strong_climax = bool(getattr(climax, 'detected', climax.get('detected', False) if isinstance(climax, dict) else False))
+        climax_type = self._safe_get_event_attribute(climax, 'type')
+        climax_confidence = self._safe_get_event_attribute(climax, 'confidence', WEAK_SIGNAL_CONFIDENCE)
 
         return has_strong_climax, climax_type, climax_confidence
 
@@ -682,10 +688,10 @@ class PhaseIdentifier(BaseDetector):
         
         #  新增：利用交易区间内的吸收特征提前判定再积累
         if events:
-            tr = events.get('trading_range', {})
-            if hasattr(tr, 'model_dump'): tr = tr.model_dump()
-            elif hasattr(tr, 'dict'): tr = tr.dict()
-            if isinstance(tr, dict) and tr.get('absorption_detected', False):
+            tr = self._get_event(events, 'trading_range') or {}
+            absorption = (getattr(tr, 'absorption_detected', False) if tr and hasattr(tr, 'absorption_detected')
+                          else (tr.get('absorption_detected', False) if isinstance(tr, dict) else False))
+            if absorption:
                 if current > ma200:
                     return "Reaccumulation Phase C/D (再积累确认，供应已被吸收)", WyckoffPhase.PHASE_D, 0.75
         
@@ -780,12 +786,10 @@ class PhaseIdentifier(BaseDetector):
         """
         计算结构完整性因子 (Phase A 四大支柱：PS → SC/BC → AR → ST)
         """
-        climax = events.get('climax')
-        ar = events.get('automatic_reaction')
-        st = events.get('secondary_test')
-
-        # PS/PSY 初次支撑/供给检测
-        ps_event = events.get('preliminary_support')
+        climax = self._get_event(events, 'climax')
+        ar = self._get_event(events, 'automatic_reaction')
+        st = self._get_event(events, 'secondary_test')
+        ps_event = self._get_event(events, 'preliminary_support')
         ps_detected = False
         if ps_event:
             ps_detected = self._safe_check_detected(ps_event)
@@ -805,14 +809,14 @@ class PhaseIdentifier(BaseDetector):
     def calculate_sequence_score(self, events: Dict, phase: Union[str, WyckoffPhase]) -> Dict:
         """计算事件序列完整性得分"""
         count = 0
+        from ...schemas import DualEventModel as _DEMC
         checks = ['climax', 'automatic_reaction', 'secondary_test', 'spring_upthrust', 'sos_sow']
         for c in checks:
-            event = events.get(c)
+            event = self._get_event(events, c)
             if event:
-                if isinstance(event, dict): # spring_upthrust or sos_sow
-                    data = event.get('data')
-                    if data and data.detected: count += 1
-                elif hasattr(event, 'detected') and event.detected: 
+                if isinstance(event, _DEMC):
+                    if getattr(event.data, 'detected', False): count += 1
+                elif hasattr(event, 'detected') and event.detected:
                     count += 1
             
         completeness = (count / len(checks)) * 100
@@ -834,12 +838,12 @@ class PhaseIdentifier(BaseDetector):
         """
         # 获取具体的检测标志
         is_lps = False
-        lps_event = events.get('lps')
+        lps_event = self._get_event(events, 'lps')
         if lps_event:
             is_lps = lps_event.get('detected') if isinstance(lps_event, dict) else getattr(lps_event, 'detected', False)
 
         is_joc = False
-        joc_event = events.get('joc')
+        joc_event = self._get_event(events, 'joc')
         if joc_event:
             is_joc = joc_event.get('detected') if isinstance(joc_event, dict) else getattr(joc_event, 'detected', False)
             

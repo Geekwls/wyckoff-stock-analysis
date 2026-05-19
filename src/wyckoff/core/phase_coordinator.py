@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple, Any, Optional
 from ..schemas import (
     ClimaxModel, WyckoffEventModel, SpringModel, UpthrustModel,
     SosModel, SowModel, LpsModel, LpsyModel, TradingRangeModel,
-    JocModel, FtiModel
+    JocModel, FtiModel, DualEventModel, EventsModel
 )
 from ..config.settings import WyckoffConfig
 from .sequence_validator import SequenceValidator
@@ -140,32 +140,23 @@ class PhaseCoordinator:
         joc_res = self.detector.detect_joc()
         fti_res = self.detector.detect_fti()
 
-        # 5. 运行事件序列验证（在原始dict上，模型封装前）
-        raw_events = {
-            "preliminary_support": ps_res,
-            "preliminary_supply": psy_res,
-            "climax": climax_res,
-            "automatic_reaction": ar_res,
-            "secondary_test": st_res,
-            "spring": spring_res,
-            "upthrust": upthrust_res,
-            "sos": sos_res,
-            "sow": sow_res,
-            "lps": lps_res,
-            "lpsy": lpsy_res,
-            "joc": joc_res,
-            "fti": fti_res,
-            "utad": utad_res,
-            "choch": choch_res,
-        }
-        sequence_validation = SequenceValidator(raw_events, self.detector.data).validate_all()
 
         # 5.5. 运行事件仲裁（解决信号冲突）
-        arbitration_result = self._arbitrate_events(raw_events)
+        arbitration_raw = {
+            'spring': spring_res,
+            'upthrust': upthrust_res,
+            'sos': sos_res,
+            'sow': sow_res,
+            'lps': lps_res,
+            'lpsy': lpsy_res,
+            'joc': joc_res,
+            'fti': fti_res,
+        }
+        arbitration_result = self._arbitrate_events(arbitration_raw)
 
         #  新增：构建 LPS/UT 序列列表供 Phase B 检测使用
-        lps_list = self._build_lps_sequence(raw_events)
-        ut_list = self._build_ut_sequence(raw_events)
+        lps_list = self._build_lps_sequence(arbitration_raw)
+        ut_list = self._build_ut_sequence(arbitration_raw)
 
         # 6. 统一使用强类型模型封装
         # 安全地构造Pydantic模型：过滤掉dict中模型不存在的字段
@@ -194,66 +185,77 @@ class PhaseCoordinator:
         trading_range_model = _safe_model(TradingRangeModel, tr_res)
         breakout_analysis = self.analyze_breakout_quality(tr_res)
 
-        events = {
+        from ..schemas import DualEventModel, EventsModel, BoringZoneModel, BreakoutAnalysisModel, SequenceValidationModel
+        
+        events_dict = {
             'trading_range': trading_range_model,
-            '_raw_events': raw_events_map,
-            'lps_list': lps_list,      # 新增：LPS序列
-            'ut_list': ut_list,         # 新增：UT序列
+            'lps_list': lps_list,
+            'ut_list': ut_list,
             'climax': _safe_model(ClimaxModel, climax_res),
             'automatic_reaction': _safe_model(WyckoffEventModel, ar_res) if ar_res.get('detected') else WyckoffEventModel(detected=False),
             'secondary_test': _safe_model(WyckoffEventModel, st_res) if st_res.get('detected') else WyckoffEventModel(detected=False),
-            'spring_upthrust': None,
-            'sos_sow': None,
-            'lps_lpsy': {
-                'lps': _safe_model(LpsModel, lps_res),
-                'lpsy': _safe_model(LpsyModel, lpsy_res)
-            },
+            'spring': _safe_model(SpringModel, spring_res),
+            'upthrust': _safe_model(UpthrustModel, upthrust_res),
+            'sos': _safe_model(SosModel, sos_res),
+            'sow': _safe_model(SowModel, sow_res),
+            'lps': _safe_model(LpsModel, lps_res),
+            'lpsy': _safe_model(LpsyModel, lpsy_res),
             'joc': _safe_model(JocModel, joc_res) if joc_res.get('detected') else None,
             'fti': _safe_model(FtiModel, fti_res) if fti_res.get('detected') else None,
-            'boring_zone': boring_zone_res,
+            'boring_zone': _safe_model(BoringZoneModel, boring_zone_res) if boring_zone_res and isinstance(boring_zone_res, dict) else None,
             'phase_revision_log': [],
-            'sequence_validation': sequence_validation,
-            'arbitration_result': arbitration_result,
-            'breakout_analysis': breakout_analysis,
+            'arbitration_result': _safe_model(ArbitrationResult, arbitration_result) if arbitration_result and isinstance(arbitration_result, dict) else None,
+            'breakout_analysis': _safe_model(BreakoutAnalysisModel, breakout_analysis) if breakout_analysis and isinstance(breakout_analysis, dict) else None,
+            'preliminary_support': _safe_model(WyckoffEventModel, ps_res) if ps_res.get('detected') else WyckoffEventModel(detected=False),
+            'preliminary_supply': _safe_model(WyckoffEventModel, psy_res) if psy_res.get('detected') else WyckoffEventModel(detected=False),
+            'utad': _safe_model(WyckoffEventModel, utad_res) if utad_res.get('detected') else WyckoffEventModel(detected=False),
+            'choch': _safe_model(WyckoffEventModel, choch_res) if choch_res.get('detected') else WyckoffEventModel(detected=False),
         }
 
         if spring_res.get('detected'):
-            events['spring_upthrust'] = {'_type': 'spring', 'data': SpringModel(**spring_res)}
+            events_dict['spring_upthrust'] = DualEventModel(_type='spring', data=_safe_model(SpringModel, spring_res))
         elif upthrust_res.get('detected'):
-            events['spring_upthrust'] = {'_type': 'upthrust', 'data': UpthrustModel(**upthrust_res)}
+            events_dict['spring_upthrust'] = DualEventModel(_type='upthrust', data=_safe_model(UpthrustModel, upthrust_res))
 
         if sos_res.get('detected'):
-            events['sos_sow'] = {'_type': 'sos', 'data': SosModel(**sos_res)}
+            events_dict['sos_sow'] = DualEventModel(_type='sos', data=_safe_model(SosModel, sos_res))
         elif sow_res.get('detected'):
-            events['sos_sow'] = {'_type': 'sow', 'data': SowModel(**sow_res)}
+            events_dict['sos_sow'] = DualEventModel(_type='sow', data=_safe_model(SowModel, sow_res))
 
-        # 6.6. 应用 Phase 转换标准（孟洪涛《新威科夫操盘法》Phase A→B→C→D→E）
-        # 打通此前未接入主线的 transition_phase_with_criteria 逻辑
+        # lps_lpsy 字典已废弃，lps/lpsy 已单独存于 EventsModel.lps / .lpsy
+
+        events_model = EventsModel(**events_dict)
+
+        # 5. 运行事件序列验证（使用完整的 Pydantic 模型）
+        from .sequence_validator import SequenceValidator
+        from ..schemas import SequenceValidationModel
+        seq_val_res = SequenceValidator(events_model, self.detector.data).validate_all()
+        events_model.sequence_validation = _safe_model(SequenceValidationModel, seq_val_res)
+
+        # 6.6. 应用 Phase 转换标准
         if preliminary_phase and 'Unknown' not in preliminary_phase:
-            transitioned_phase, trans_confidence = self.transition_phase_with_criteria(preliminary_phase, events)
+            transitioned_phase, trans_confidence = self.transition_phase_with_criteria(preliminary_phase, events_model)
             if transitioned_phase != preliminary_phase:
                 logger.info(
                     f"[Phase Transition] {preliminary_phase} → {transitioned_phase} "
                     f"(置信度: {trans_confidence:.2f})"
                 )
-                events.setdefault('phase_revision_log', []).append(
+                events_model.phase_revision_log.append(
                     f"[Phase Transition] {preliminary_phase} → {transitioned_phase} (置信度:{trans_confidence:.0%})"
                 )
                 preliminary_phase = transitioned_phase
 
-        # 6.7. 将最终阶段传播到所有子检测器
         self.detector._update_all_detectors_context(preliminary_phase)
 
-        # 7. 执行证伪验证（考虑仲裁结果和突破分析）
+        # 7. 执行证伪验证
         final_phase, revision_logs = self.validate_phase_consistency(
-            preliminary_phase, events, arbitration_result, breakout_analysis
+            preliminary_phase, events_model, arbitration_result, breakout_analysis
         )
-        events['phase_revision_log'] = revision_logs
+        events_model.phase_revision_log.extend(revision_logs)
 
-        # 统一更新子检测器的最终分析上下文
         self.detector._update_all_detectors_context(final_phase)
 
-        return events
+        return events_model
 
     def _update_trading_range_from_events(self, climax_res: Dict, ar_res: Dict, phase: str, utad_res: Dict = None):
         """
@@ -378,7 +380,19 @@ class PhaseCoordinator:
         # 长周期重构检查 (避免 2 年以上长跨度机械停留在 Phase A)
         if 'Phase A' in phase and hasattr(self.detector, 'data') and self.detector.data is not None and not self.detector.data.empty:
             df = self.detector.data
-            last_date = pd.Timestamp(df.index[-1])
+            
+            # 安全处理不同类型的索引，防止强转崩溃
+            import numpy as np
+            idx_val = df.index[-1]
+            if isinstance(idx_val, pd.Timestamp):
+                last_date = idx_val
+            elif isinstance(idx_val, (int, float, np.integer, np.floating)):
+                last_date = pd.Timestamp.now()
+            else:
+                try:
+                    last_date = pd.Timestamp(idx_val)
+                except Exception:
+                    last_date = pd.Timestamp.now()
             earliest_date = None
             for res in [psy_res, ps_res, climax_res]:
                 if res and res.get('detected') and res.get('date'):
@@ -437,7 +451,7 @@ class PhaseCoordinator:
                 result += f" {description}"
             return result
 
-    def transition_phase_with_criteria(self, current_phase: str, events: Dict) -> Tuple[str, float]:
+    def transition_phase_with_criteria(self, current_phase: str, events: 'EventsModel') -> Tuple[str, float]:
         """
         新增：使用量化标准进行Phase转换
 
@@ -477,7 +491,7 @@ class PhaseCoordinator:
         else:
             return self._identify_initial_phase(events, criteria)
 
-    def _transition_from_phase_a(self, current_phase: str, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+    def _transition_from_phase_a(self, current_phase: str, events: 'EventsModel', criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """从Phase A转换的逻辑"""
         # 检查是否有完整的Phase A结构
         has_complete_structure = self._has_complete_phase_a(events)
@@ -499,7 +513,7 @@ class PhaseCoordinator:
         new_phase = self._replace_phase_type(current_phase, 'Phase B')
         return new_phase, 0.8
 
-    def _transition_from_phase_b(self, current_phase: str, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+    def _transition_from_phase_b(self, current_phase: str, events: 'EventsModel', criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """从Phase B转换的逻辑"""
         # 检查Phase C触发信号
         trigger = self._check_phase_triggers(events, criteria.B_TO_C_SIGNALS)
@@ -510,7 +524,7 @@ class PhaseCoordinator:
         # 保持Phase B
         return current_phase, 0.7
 
-    def _transition_from_phase_c(self, current_phase: str, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+    def _transition_from_phase_c(self, current_phase: str, events: 'EventsModel', criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """从Phase C转换的逻辑"""
         # 检查Phase D确认信号
         confirmations = self._check_phase_triggers(events, criteria.C_TO_D_SIGNALS)
@@ -521,7 +535,7 @@ class PhaseCoordinator:
         # 保持Phase C
         return current_phase, 0.7
 
-    def _transition_from_phase_d(self, current_phase: str, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+    def _transition_from_phase_d(self, current_phase: str, events: 'EventsModel', criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """从Phase D转换的逻辑"""
         # 检查是否有连续3天的确认
         if self._has_continuous_confirmation(criteria.D_TO_E_CONFIRMATION_DAYS):
@@ -531,54 +545,37 @@ class PhaseCoordinator:
         # 保持Phase D
         return current_phase, 0.7
 
-    def _identify_initial_phase(self, events: Dict, criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
+    def _identify_initial_phase(self, events: 'EventsModel', criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """识别初始阶段"""
-        climax_res = events.get('climax', {})
-        spring_res = events.get('spring_upthrust', {})
+        climax_res = events.climax
+        spring_res = events.spring_upthrust
 
         # 检查Phase A
         if self._has_complete_phase_a(events):
-            if self._event_get(climax_res, 'type') == 'selling_climax':
+            if climax_res and climax_res.type == 'selling_climax':
                 return 'Accumulation Phase A', 0.7
-            elif self._event_get(climax_res, 'type') == 'buying_climax':
+            elif climax_res and climax_res.type == 'buying_climax':
                 return 'Distribution Phase A', 0.7
 
         # 检查Spring/Upthrust直接进入Phase C
-        if spring_res and isinstance(spring_res, dict):
-            if spring_res.get('_type') == 'spring':
+        if spring_res:
+            if spring_res.type_ == 'spring':
                 return 'Accumulation Phase C', 0.8
-            elif spring_res.get('_type') == 'upthrust':
+            elif spring_res.type_ == 'upthrust':
                 return 'Distribution Phase C', 0.8
 
         return 'Unknown', 0.5
 
-    @staticmethod
-    def _event_detected(obj) -> bool:
-        """兼容 Pydantic Model 和 dict 的 detected 字段读取"""
-        if isinstance(obj, dict):
-            return obj.get('detected', False)
-        return getattr(obj, 'detected', False)
 
-    @staticmethod
-    def _event_get(obj, key: str, default=None):
-        """兼容 Pydantic Model 和 dict 的通用字段读取"""
-        if isinstance(obj, dict):
-            return obj.get(key, default)
-        return getattr(obj, key, default)
-
-    def _has_complete_phase_a(self, events: Dict) -> bool:
+    def _has_complete_phase_a(self, events: 'EventsModel') -> bool:
         """检查是否有完整的Phase A结构（SC/AR + ST）"""
-        climax_res = events.get('climax', {})
-        ar_res = events.get('automatic_reaction', {})
-        st_res = events.get('secondary_test', {})
-
-        has_climax = self._event_detected(climax_res)
-        has_ar = self._event_detected(ar_res)
-        has_st = self._event_detected(st_res)
+        has_climax = getattr(events.climax, 'detected', False) if events.climax else False
+        has_ar = getattr(events.automatic_reaction, 'detected', False) if events.automatic_reaction else False
+        has_st = getattr(events.secondary_test, 'detected', False) if events.secondary_test else False
 
         return has_climax and (has_ar or has_st)
 
-    def _calculate_consolidation_duration(self, events: Dict) -> int:
+    def _calculate_consolidation_duration(self, events: 'EventsModel') -> int:
         """计算震荡持续时间（从 ST 完成后开始计数）
 
         威科夫理论：震荡期应从 Phase A 结构完成后（SC/BC → AR → ST 序列结束）
@@ -590,36 +587,34 @@ class PhaseCoordinator:
                 df = self.detector.data
 
                 # 优先从 ST 日期开始计算
-                st = events.get('secondary_test', {})
-                if self._event_detected(st):
-                    st_date = self._event_get(st, 'date')
-                    if st_date is not None:
-                        df_after_st = df[df.index >= pd.Timestamp(st_date)]
-                        tr = self.detector.detect_trading_range()
-                        if tr and 'low' in tr and 'high' in tr:
-                            in_tr = df_after_st[
-                                (df_after_st['Close'] >= tr['low']) &
-                                (df_after_st['Close'] <= tr['high'])
-                            ]
-                            days = len(in_tr)
-                            if days >= 5:
-                                return days
+                st = getattr(events, 'secondary_test', None)
+                st_date = getattr(st, 'date', None) if getattr(st, 'detected', False) else None
+                if st_date is not None:
+                    df_after_st = df[df.index >= pd.Timestamp(st_date)]
+                    tr = self.detector.detect_trading_range()
+                    if tr and 'low' in tr and 'high' in tr:
+                        in_tr = df_after_st[
+                            (df_after_st['Close'] >= tr['low']) &
+                            (df_after_st['Close'] <= tr['high'])
+                        ]
+                        days = len(in_tr)
+                        if days >= 5:
+                            return days
 
                 # 降级：从 AR 日期开始
-                ar = events.get('automatic_reaction', {})
-                if isinstance(ar, dict) and ar.get('detected'):
-                    ar_date = ar.get('date')
-                    if ar_date is not None:
-                        df_after_ar = df[df.index >= pd.Timestamp(ar_date)]
-                        tr = self.detector.detect_trading_range()
-                        if tr and 'low' in tr and 'high' in tr:
-                            in_tr = df_after_ar[
-                                (df_after_ar['Close'] >= tr['low']) &
-                                (df_after_ar['Close'] <= tr['high'])
-                            ]
-                            days = len(in_tr)
-                            if days >= 5:
-                                return days
+                ar = getattr(events, 'automatic_reaction', None)
+                ar_date = getattr(ar, 'date', None) if getattr(ar, 'detected', False) else None
+                if ar_date is not None:
+                    df_after_ar = df[df.index >= pd.Timestamp(ar_date)]
+                    tr = self.detector.detect_trading_range()
+                    if tr and 'low' in tr and 'high' in tr:
+                        in_tr = df_after_ar[
+                            (df_after_ar['Close'] >= tr['low']) &
+                            (df_after_ar['Close'] <= tr['high'])
+                        ]
+                        days = len(in_tr)
+                        if days >= 5:
+                            return days
 
                 # 兜底：全区间计数
                 tr = self.detector.detect_trading_range()
@@ -634,54 +629,44 @@ class PhaseCoordinator:
 
         return 30
 
-    def _check_phase_triggers(self, events: Dict, trigger_types: List[str]) -> bool:
-        """检查Phase转换触发信号"""
-        for trigger_type in trigger_types:
-            if trigger_type == 'spring':
-                event = events.get('spring_upthrust')
-                if event and isinstance(event, dict) and event.get('_type') == 'spring':
-                    return True
-            elif trigger_type == 'upthrust':
-                event = events.get('spring_upthrust')
-                if event and isinstance(event, dict) and event.get('_type') == 'upthrust':
-                    return True
-            elif trigger_type == 'sos':
-                event = events.get('sos_sow', {})
-                if event.get('detected') and event.get('_type') == 'sos':
-                    return True
-            elif trigger_type == 'sow':
-                event = events.get('sos_sow', {})
-                if event.get('detected') and event.get('_type') == 'sow':
-                    return True
-            elif trigger_type == 'lps':
-                event = events.get('lps_lpsy', {})
-                lps = event.get('lps', {}) if isinstance(event, dict) else {}
-                if self._event_detected(lps):
-                    return True
-            elif trigger_type == 'lpsy':
-                event = events.get('lps_lpsy', {})
-                lpsy = event.get('lpsy', {}) if isinstance(event, dict) else {}
-                if self._event_detected(lpsy):
-                    return True
-            elif trigger_type == 'joc':
-                # 需要单独检查JOC
-                try:
-                    joc_result = self.detector.detect_joc()
-                    if joc_result.get('detected'):
-                        return True
-                except Exception as e:
-                    logger.debug(f"JOC trigger check failed: {e}")
-                    pass
-            elif trigger_type == 'fti':
-                # 需要单独检查FTI
-                try:
-                    fti_result = self.detector.detect_fti()
-                    if fti_result.get('detected'):
-                        return True
-                except Exception as e:
-                    logger.debug(f"FTI trigger check failed: {e}")
-                    pass
+    def _check_phase_triggers(self, events: 'EventsModel', signals: List[Any]) -> bool:
+        """检查是否触发了阶段转换信号"""
+        for sig in signals:
+            if isinstance(sig, str):
+                event_name = sig
+                expected_type = None
+            elif isinstance(sig, dict):
+                event_name = sig.get('event')
+                expected_type = sig.get('type')
+            else:
+                continue
 
+            if not event_name:
+                continue
+
+            event_obj = getattr(events, event_name, None)
+            if not event_obj:
+                continue
+
+            # 处理 DualEventModel
+            if isinstance(event_obj, DualEventModel):
+                if expected_type:
+                    if event_obj.type_ == expected_type and getattr(event_obj.data, 'detected', False):
+                        return True
+                else:
+                    if getattr(event_obj.data, 'detected', False):
+                        return True
+                continue
+
+            # 处理普通对象
+            detected = getattr(event_obj, 'detected', False)
+            if detected:
+                if expected_type:
+                    evt_type = getattr(event_obj, 'type', None)
+                    if evt_type == expected_type:
+                        return True
+                else:
+                    return True
         return False
 
     def _has_continuous_confirmation(self, days: int) -> bool:
@@ -788,10 +773,10 @@ class PhaseCoordinator:
             return preliminary_phase, revision_logs
 
         # === 优先级0: TR突破反噬规则 ===
-        breakout_analysis = events.get('breakout_analysis')
-        if breakout_analysis and breakout_analysis.get('is_breakout'):
+        breakout_analysis = events.breakout_analysis
+        if breakout_analysis and getattr(breakout_analysis, 'is_breakout', False):
             override_phase, override_reason, conf_adjust = self._apply_breakout_override(
-                preliminary_phase, events.get('trading_range', {}), breakout_analysis
+                preliminary_phase, events.trading_range, breakout_analysis
             )
 
             if override_reason:
@@ -813,14 +798,14 @@ class PhaseCoordinator:
                 return suggested_phase, revision_logs
 
         # === 优先级2: 检查是否有矛盾的证据 ===
-        spring_upthrust = events.get('spring_upthrust')
-        sos_sow = events.get('sos_sow')
+        spring_upthrust = events.spring_upthrust
+        sos_sow = events.sos_sow
 
         if spring_upthrust:
-            event_type = spring_upthrust.get('_type')
+            # Bug 1 修复：DualEventModel 使用 .type_ 属性，不是 .get('_type')
+            event_type = spring_upthrust.type_
             #  修复问题1：Phase A 与 Spring 时序矛盾
             # Wyckoff 理论：Spring 只能发生在 Phase C（吸筹区积累完成后的震仓测试）
-            # 如果阶段仍在 Phase A，但已检测到 Spring，必须强制升级为 Phase C
             if 'Phase A' in preliminary_phase and 'Accumulation' in preliminary_phase and event_type == 'spring':
                 new_phase = 'Accumulation Phase C'
                 revision_logs.append(
@@ -847,7 +832,8 @@ class PhaseCoordinator:
                 return self._replace_phase_type(preliminary_phase, 'Distribution'), revision_logs
 
         if sos_sow:
-            event_type = sos_sow.get('_type')
+            # Bug 1 修复：DualEventModel 使用 .type_ 属性
+            event_type = sos_sow.type_
             # SOS 确认吸筹
             if event_type == 'sos' and 'Accumulation' in preliminary_phase:
                 revision_logs.append(f"SOS 确认吸筹阶段: {preliminary_phase}")
@@ -860,8 +846,8 @@ class PhaseCoordinator:
     def _apply_breakout_override(
         self,
         current_phase: str,
-        trading_range,
-        breakout_analysis: Dict
+        trading_range: 'TradingRangeModel',
+        breakout_analysis: 'BreakoutAnalysisModel'
     ) -> Tuple[str, str, float]:
         """
         应用突破反噬规则
@@ -870,48 +856,37 @@ class PhaseCoordinator:
 
         Args:
             current_phase: 当前阶段
-            trading_range: 交易区间（可能是dict或Pydantic模型）
-            breakout_analysis: 突破分析结果
+            trading_range: TradingRangeModel（Pydantic 模型）
+            breakout_analysis: BreakoutAnalysisModel（Pydantic 模型）
 
         Returns:
             (新阶段, 覆盖理由, 置信度调整系数)
         """
-        if not breakout_analysis or not breakout_analysis.get('is_breakout'):
+        # Bug 2 修复：BreakoutAnalysisModel 用属性访问，不用 .get()
+        if not breakout_analysis or not getattr(breakout_analysis, 'is_breakout', False):
             return current_phase, "", 1.0
 
-        # 兼容dict和Pydantic模型
-        if hasattr(trading_range, 'dict'):
-            # Pydantic v1
-            tr_dict = trading_range.dict()
-        elif hasattr(trading_range, 'model_dump'):
-            # Pydantic v2
-            tr_dict = trading_range.model_dump()
-        elif isinstance(trading_range, dict):
-            tr_dict = trading_range
-        else:
-            tr_dict = {}
+        # TradingRangeModel 直接属性访问
+        current_price = getattr(trading_range, 'current_price', 0) or 0
+        tr_low = getattr(trading_range, 'low', 0) or 0
+        tr_high = getattr(trading_range, 'high', 0) or 0
 
-        direction = breakout_analysis.get('direction')
-        current_price = tr_dict.get('current_price', 0)
-        tr_low = tr_dict.get('low', 0)
-        tr_high = tr_dict.get('high', 0)
+        direction = getattr(breakout_analysis, 'direction', None)
 
         # 规则1：向上突破 + 派发判断 → 强制否决
         if direction == 'up' and 'Distribution' in current_phase:
-            # 检查突破质量
-            quality = breakout_analysis.get('quality', 'unknown')
-            is_upthrust = breakout_analysis.get('is_upthrust', False)
+            quality = getattr(breakout_analysis, 'quality', 'unknown') or 'unknown'
+            is_upthrust = getattr(breakout_analysis, 'is_upthrust', False)
+            conclusion = getattr(breakout_analysis, 'conclusion', '') or ''
 
             if is_upthrust:
-                # Upthrust（假突破）- 仍然可能回到区间
                 return (
                     "Trending / Range Transition",
-                    f"向上突破至{current_price:.2f}元疑似Upthrust（{breakout_analysis.get('conclusion', '')}），"
+                    f"向上突破至{current_price:.2f}元疑似Upthrust（{conclusion}），"
                     f"可能重新测试原区间{tr_high:.2f}元",
                     0.5
                 )
             else:
-                # 真实突破 - 否决派发
                 return (
                     "Trending / Reaccumulation",
                     f"TR向上突破至{current_price:.2f}元（{quality}突破），"
@@ -921,7 +896,7 @@ class PhaseCoordinator:
 
         # 规则2：向下突破 + 吸筹判断 → 强制否决
         if direction == 'down' and 'Accumulation' in current_phase:
-            quality = breakout_analysis.get('quality', 'unknown')
+            quality = getattr(breakout_analysis, 'quality', 'unknown') or 'unknown'
             return (
                 "Markdown / Trending Down",
                 f"TR向下突破至{current_price:.2f}元（{quality}突破），"
@@ -967,21 +942,27 @@ class PhaseTransitionCriteria:
     MIN_PHASE_D_DURATION = 7
 
 
-def _build_lps_sequence(self, events: dict) -> list:
+def _build_lps_sequence(self, events) -> list:
     """
     构建 LPS 序列列表（最近30天内的所有LPS信号）
-
-    Returns:
-        LPS事件列表，每个包含date, price, volume等信息
     """
     lps_list = []
-    lps_res = events.get('lps', {})
+    
+    # 兼容 dict 和 Pydantic Model
+    if isinstance(events, dict):
+        lps_res = events.get('lps', {})
+    else:
+        lps_res = getattr(events, 'lps', None)
 
-    if not lps_res.get('detected'):
+    if not lps_res:
+        return lps_list
+
+    is_detected = lps_res.get('detected') if isinstance(lps_res, dict) else getattr(lps_res, 'detected', False)
+    if not is_detected:
         return lps_list
 
     # 如果有多个LPS信号
-    if 'all_lps' in lps_res:
+    if isinstance(lps_res, dict) and 'all_lps' in lps_res:
         for lps in lps_res['all_lps']:
             lps_list.append({
                 'date': lps.get('date'),
@@ -989,33 +970,47 @@ def _build_lps_sequence(self, events: dict) -> list:
                 'volume': lps.get('volume'),
                 'detected': True
             })
+    elif hasattr(lps_res, 'all_lps') and getattr(lps_res, 'all_lps'):
+        for lps in getattr(lps_res, 'all_lps'):
+            lps_list.append({
+                'date': getattr(lps, 'date', None),
+                'price': getattr(lps, 'price', None),
+                'volume': getattr(lps, 'volume', None),
+                'detected': True
+            })
     else:
         # 单个LPS
         lps_list.append({
-            'date': lps_res.get('date'),
-            'price': lps_res.get('price'),
-            'volume': lps_res.get('volume'),
+            'date': lps_res.get('date') if isinstance(lps_res, dict) else getattr(lps_res, 'date', None),
+            'price': lps_res.get('price') if isinstance(lps_res, dict) else getattr(lps_res, 'price', None),
+            'volume': lps_res.get('volume') if isinstance(lps_res, dict) else getattr(lps_res, 'volume', None),
             'detected': True
         })
 
     return lps_list
 
 
-def _build_ut_sequence(self, events: dict) -> list:
+def _build_ut_sequence(self, events) -> list:
     """
     构建 UT 序列列表（最近30天内的所有UT信号）
-
-    Returns:
-        UT事件列表
     """
     ut_list = []
-    ut_res = events.get('upthrust', {})
+    
+    # 兼容 dict 和 Pydantic Model
+    if isinstance(events, dict):
+        ut_res = events.get('upthrust', {})
+    else:
+        ut_res = getattr(events, 'upthrust', None)
 
-    if not ut_res.get('detected'):
+    if not ut_res:
+        return ut_list
+
+    is_detected = ut_res.get('detected') if isinstance(ut_res, dict) else getattr(ut_res, 'detected', False)
+    if not is_detected:
         return ut_list
 
     # 如果有多个UT信号
-    if 'upthrusts' in ut_res:
+    if isinstance(ut_res, dict) and 'upthrusts' in ut_res:
         for ut in ut_res['upthrusts']:
             ut_list.append({
                 'date': ut.get('date'),
@@ -1023,12 +1018,24 @@ def _build_ut_sequence(self, events: dict) -> list:
                 'volume_ratio': ut.get('breakout_volume_ratio'),
                 'detected': True
             })
+    elif hasattr(ut_res, 'upthrusts') and getattr(ut_res, 'upthrusts'):
+        for ut in getattr(ut_res, 'upthrusts'):
+            ut_list.append({
+                'date': getattr(ut, 'date', None),
+                'breakout_price': getattr(ut, 'breakout_price', None),
+                'volume_ratio': getattr(ut, 'breakout_volume_ratio', None),
+                'detected': True
+            })
     else:
         # 单个UT
         ut_list.append({
-            'date': ut_res.get('date'),
-            'breakout_price': ut_res.get('breakout_price', ut_res.get('rejection_price')),
-            'volume_ratio': ut_res.get('breakout_volume_ratio', 1.0),
+            'date': ut_res.get('date') if isinstance(ut_res, dict) else getattr(ut_res, 'date', None),
+            'breakout_price': (ut_res.get('breakout_price', ut_res.get('rejection_price')) 
+                               if isinstance(ut_res, dict) 
+                               else (getattr(ut_res, 'breakout_price', None) or getattr(ut_res, 'rejection_price', None))),
+            'volume_ratio': (ut_res.get('breakout_volume_ratio', 1.0) 
+                             if isinstance(ut_res, dict) 
+                             else getattr(ut_res, 'breakout_volume_ratio', 1.0)),
             'detected': True
         })
 

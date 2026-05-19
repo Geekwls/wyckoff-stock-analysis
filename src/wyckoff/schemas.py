@@ -268,21 +268,70 @@ class ArbitrationResult(BaseModel):
     confidence_adjustment: float = Field(default=1.0, description="置信度调整系数")
 
 
+class DualEventModel(BaseModel):
+    """二选一结构包装器"""
+    type_: str = Field(alias="_type", description="事件类型")
+    data: Any = Field(description="底层事件模型数据")
+
+class BoringZoneModel(BaseModel):
+    """枯燥区检测结果"""
+    detected: bool = Field(default=False)
+    score: int = Field(default=0)
+    vol_contraction: float = Field(default=0.0)
+    atr_contraction: float = Field(default=0.0)
+    duration: int = Field(default=0)
+    high_alert: bool = Field(default=False)
+    is_eve_of_breakout: bool = Field(default=False)
+    signal_status: str = Field(default="NONE")
+    reason: Optional[str] = Field(default=None)
+
+class BreakoutAnalysisModel(BaseModel):
+    """突破质量分析结果"""
+    is_breakout: bool = Field(default=False)
+    direction: str = Field(default="none")
+    breakout_date: Optional[Any] = Field(default=None)
+    breakout_price: Optional[float] = Field(default=None)
+    breakout_volume: Optional[float] = Field(default=None)
+    quality: Optional[str] = Field(default=None)
+    quality_score: Optional[int] = Field(default=None)
+    is_upthrust: Optional[bool] = Field(default=None)
+    volume_analysis: Optional[Dict[str, Any]] = Field(default=None)
+    pullback_analysis: Optional[Dict[str, Any]] = Field(default=None)
+    post_breakout_analysis: Optional[Dict[str, Any]] = Field(default=None)
+    joc_test_status: Optional[str] = Field(default=None)
+    conclusion: Optional[str] = Field(default=None)
+    reason: Optional[str] = Field(default=None)
+
 class EventsModel(BaseModel):
-    """所有事件"""
+    """所有事件 — 所有子事件字段均为 Optional，仅 trading_range 必填"""
     trading_range: TradingRangeModel = Field(description="交易区间")
-    climax: ClimaxModel = Field(description="高潮事件")
-    automatic_reaction: WyckoffEventModel = Field(description="自动反应")
-    secondary_test: WyckoffEventModel = Field(description="二次测试")
-    spring: SpringModel = Field(description="Spring事件")
-    upthrust: UpthrustModel = Field(description="Upthrust事件")
-    sos: SosModel = Field(description="SOS事件")
-    sow: SowModel = Field(description="SOW事件")
-    lps: LpsModel = Field(description="LPS事件")
-    lpsy: LpsyModel = Field(description="LPSY事件")
+    climax: Optional[ClimaxModel] = Field(default=None, description="高潮事件")
+    automatic_reaction: Optional[WyckoffEventModel] = Field(default=None, description="自动反应")
+    secondary_test: Optional[WyckoffEventModel] = Field(default=None, description="二次测试")
+    spring: Optional[SpringModel] = Field(default=None, description="Spring事件")
+    upthrust: Optional[UpthrustModel] = Field(default=None, description="Upthrust事件")
+    sos: Optional[SosModel] = Field(default=None, description="SOS事件")
+    sow: Optional[SowModel] = Field(default=None, description="SOW事件")
+    lps: Optional[LpsModel] = Field(default=None, description="LPS事件")
+    lpsy: Optional[LpsyModel] = Field(default=None, description="LPSY事件")
     joc: Optional[JocModel] = Field(default=None, description="JOC事件")
     fti: Optional[FtiModel] = Field(default=None, description="FTI事件")
     arbitration_result: Optional[ArbitrationResult] = Field(default=None, description="事件仲裁结果")
+
+    # === 新增补充字段 ===
+    lps_list: List[Dict[str, Any]] = Field(default_factory=list, description="LPS序列列表")
+    ut_list: List[Dict[str, Any]] = Field(default_factory=list, description="UT序列列表")
+    spring_upthrust: Optional[DualEventModel] = Field(default=None, description="二选一结果")
+    sos_sow: Optional[DualEventModel] = Field(default=None, description="二选一结果")
+    lps_lpsy: Optional[Dict[str, Any]] = Field(default=None, description="LPS/LPSY字典组合")
+    boring_zone: Optional[BoringZoneModel] = Field(default=None, description="枯燥区检测")
+    phase_revision_log: List[str] = Field(default_factory=list, description="阶段修订日志")
+    breakout_analysis: Optional[BreakoutAnalysisModel] = Field(default=None, description="突破分析")
+    preliminary_support: Optional[WyckoffEventModel] = Field(default=None, description="PS事件")
+    preliminary_supply: Optional[WyckoffEventModel] = Field(default=None, description="PSY事件")
+    utad: Optional[WyckoffEventModel] = Field(default=None, description="UTAD事件")
+    choch: Optional[WyckoffEventModel] = Field(default=None, description="CHoCH事件")
+    sequence_validation: Optional[Any] = Field(default=None, description="事件序列验证")
 
 
 # ============================================================

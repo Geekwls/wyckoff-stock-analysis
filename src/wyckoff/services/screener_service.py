@@ -431,6 +431,7 @@ class ScreenerService:
         summary = {
             "total_scanned": total_scanned,
             "signal_count": signal_count,
+            "entry_count": signal_count,  # 保持对旧客户端及测试代码的向后兼容性
             "late_stage_count": late_stage_count,
             "high_score_count": high_score_count,
             "failed_count": len(failed),

@@ -24,17 +24,17 @@ class RecommendationEngine:
     - 10% 交易：只在高质量信号时行动
     """
 
-    # 耐心状态追踪（类级别，跨分析会话保持）
-    _patience_state = {
-        'consecutive_weak_signals': 0,
-        'last_signal_quality': None,
-        'waiting_mode_active': False,
-        'waiting_since': None,
-    }
-
     def __init__(self, config: WyckoffConfig = None):
         self.config = config or WyckoffConfig()
         self.thresholds = WyckoffThresholds()
+        
+        # 耐心状态追踪（实例级别，确保多标的并发沙箱隔离）
+        self._patience_state = {
+            'consecutive_weak_signals': 0,
+            'last_signal_quality': None,
+            'waiting_mode_active': False,
+            'waiting_since': None,
+        }
 
     def _calculate_patience_score(self, detected_keys: List[str], base_score: float, market_env: MarketEnvironment) -> tuple:
         """
@@ -87,25 +87,24 @@ class RecommendationEngine:
             should_wait = True
 
         # 5. 检查是否处于等待期（连续弱信号）
-        cls = self.__class__
         if base_score < 50:
-            cls._patience_state['consecutive_weak_signals'] += 1
-            if cls._patience_state['consecutive_weak_signals'] >= 3:
+            self._patience_state['consecutive_weak_signals'] += 1
+            if self._patience_state['consecutive_weak_signals'] >= 3:
                 patience_penalty -= 10
-                patience_reasons.append(f"连续{cls._patience_state['consecutive_weak_signals']}次低质量分析，进入耐心等待模式")
-                cls._patience_state['waiting_mode_active'] = True
-                if cls._patience_state['waiting_since'] is None:
+                patience_reasons.append(f"连续{self._patience_state['consecutive_weak_signals']}次低质量分析，进入耐心等待模式")
+                self._patience_state['waiting_mode_active'] = True
+                if self._patience_state['waiting_since'] is None:
                     from datetime import datetime
-                    cls._patience_state['waiting_since'] = datetime.now()
+                    self._patience_state['waiting_since'] = datetime.now()
                 should_wait = True
         else:
             # 高质量信号重置计数器
-            cls._patience_state['consecutive_weak_signals'] = 0
+            self._patience_state['consecutive_weak_signals'] = 0
             if has_high_quality:
-                cls._patience_state['waiting_mode_active'] = False
+                self._patience_state['waiting_mode_active'] = False
 
         # 6. 检查是否处于等待激活期
-        if cls._patience_state['waiting_mode_active']:
+        if self._patience_state['waiting_mode_active']:
             patience_penalty -= 15
             patience_reasons.append("系统处于耐心等待模式，只接受Spring/JOC级别的超高质量信号")
             should_wait = True
@@ -194,7 +193,16 @@ class RecommendationEngine:
         """
         计算高级加权评分 (v2.1校准：修正Phase E冲突惩罚，提升基础分)
         """
-        events = pattern_results.get('events_detected', {}) or pattern_results
+        # 兼容性转换：如果 pattern_results 是字典，且包含 'events_detected'，则从中提取核心事件和属性
+        if isinstance(pattern_results, dict):
+            events = pattern_results.get('events_detected') or pattern_results
+            seq_val = pattern_results.get('sequence_validation')
+            boring = pattern_results.get('boring_zone')
+        else:
+            events = pattern_results
+            seq_val = getattr(pattern_results, 'sequence_validation', None)
+            boring = getattr(pattern_results, 'boring_zone', None)
+
         if not events:
             return SignalQualityModel(score=0, max_score=100, confidence="低", reasons=["未检测到有效信号"])
             
@@ -221,11 +229,7 @@ class RecommendationEngine:
         detected_keys = []
 
         for key, max_weight in important_signals:
-            info = events.get(key)
-
-            if not info and '_raw_events' in events:
-                raw_events = events.get('_raw_events', {})
-                info = raw_events.get(key)
+            info = getattr(events, key, None)
 
             if not info or not self._get_attr(info, 'detected'): continue
 
@@ -241,7 +245,7 @@ class RecommendationEngine:
             if key in ['joc', 'spring', 'sos', 'lps', 'automatic_reaction']:
                 bullish_count += 1
             elif key in ['fti', 'upthrust', 'sow', 'lpsy', 'secondary_test']:
-                phase_str = pattern_results.get('phase', 'Unknown')
+                phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
                 if 'Distribution' in phase_str or '派发' in phase_str:
                     bearish_count += 1
                 elif 'Accumulation' in phase_str or '吸筹' in phase_str:
@@ -301,9 +305,8 @@ class RecommendationEngine:
             base_score += max_weight * min(quality_factor, 1.5)
 
         # --- 事件序列验证加成 ---
-        seq_val = pattern_results.get('sequence_validation', {})
-        seq_score = seq_val.get('sequence_score', {})
-        seq_rating = seq_score.get('rating', '')
+        seq_score = RecommendationEngine._get_attr(seq_val, 'sequence_score', {}) or {}
+        seq_rating = seq_score.get('rating', '') if isinstance(seq_score, dict) else getattr(seq_score, 'rating', '')
         if seq_rating == 'A':
             base_score += 15
             reasons.append("事件序列完整(评级A)：SC→AR→ST→Spring→SOS→LPS→JOC 链条完整 (+15分)")
@@ -315,16 +318,16 @@ class RecommendationEngine:
             reasons.append("事件序列部分检测(评级C)：存在部分事件但链条不完整 (+5分)")
 
         # Spring 前置结构质量加分
-        spring_val = seq_val.get('spring', {})
-        if spring_val.get('quality') == 'high':
+        spring_val = RecommendationEngine._get_attr(seq_val, 'spring', {}) or {}
+        if (spring_val.get('quality') if isinstance(spring_val, dict) else getattr(spring_val, 'quality', None)) == 'high':
             base_score += 10
             reasons.append("Spring有完整SC→AR→ST前置结构，信号质量高 (+10分)")
-        elif spring_val.get('quality') == 'medium':
+        elif (spring_val.get('quality') if isinstance(spring_val, dict) else getattr(spring_val, 'quality', None)) == 'medium':
             base_score += 5
             reasons.append("Spring有部分前置结构，质量中等 (+5分)")
 
         # 多次ST递减量缩加分 (Phase B积累确认)
-        st_res = events.get('secondary_test')
+        st_res = RecommendationEngine._get_attr(events, 'secondary_test')
         if st_res and self._get_attr(st_res, 'detected'):
             test_count = self._get_attr(st_res, 'test_count', 1)
             st_trend = self._get_attr(st_res, 'st_sequence_trend', 'stable')
@@ -336,7 +339,7 @@ class RecommendationEngine:
                 reasons.append(f"多次ST({test_count}次)确认区间 (+3分)")
 
         # PS→SC序列确认加分 (Phase A完整结构)
-        ps_res = events.get('preliminary_support') or (events.get('_raw_events', {}).get('preliminary_support'))
+        ps_res = RecommendationEngine._get_attr(events, 'preliminary_support')
         if ps_res and self._get_attr(ps_res, 'detected'):
             sc_after = self._get_attr(ps_res, 'sc_confirmed_after', False)
             if sc_after:
@@ -344,13 +347,12 @@ class RecommendationEngine:
                 reasons.append("PS→SC链条确认：初次支撑后有效恐慌抛售，Phase A结构完整 (+8分)")
 
         # 序列矛盾扣分
-        seq_conflicts = seq_val.get('conflicts', [])
+        seq_conflicts = (RecommendationEngine._get_attr(seq_val, 'conflicts', []) or []) if seq_val else []
         for conflict in seq_conflicts:
             base_score -= 10
             reasons.append(f"序列矛盾: {conflict} (-10分)")
 
         # --- 孟洪涛进阶信号：枯燥区与死角突破 ---
-        boring = pattern_results.get('boring_zone', {})
         boring_score = self._get_attr(boring, 'score', 0)
         if self._get_attr(boring, 'detected'):
             base_score += 10
@@ -359,7 +361,7 @@ class RecommendationEngine:
             # Boring Zone 联动加权 (P2 #3.1)
             if boring_score > 85:
                 for key in ['spring', 'joc']:
-                    info = events.get(key)
+                    info = getattr(events, key, None)
                     if info and self._get_attr(info, 'detected'):
                         base_score += 15 # 高质量枯燥区后的突破极具爆发力
                         reasons.append(f"🔥 高价值突破：{key.upper()} 紧随高质量枯燥区出现，爆发潜力极大")
@@ -367,7 +369,7 @@ class RecommendationEngine:
             if self._get_attr(boring, 'high_alert'):
                 reasons.append("🔥 高能预警：系统已进入「死角突破」严密监控模式")
 
-        dead_corner = pattern_results.get('dead_corner_breakout', {})
+        dead_corner = RecommendationEngine._get_attr(events, 'dead_corner_breakout') or {}
         skip_conflict_penalty = False
         if dead_corner.get('detected'):
             base_score += 25
@@ -397,7 +399,7 @@ class RecommendationEngine:
 
         # --- 冲突惩罚 (v2.1校准) ---
         if bullish_count > 0 and bearish_count > 0 and not skip_conflict_penalty:
-            phase_str = pattern_results.get('phase', 'Unknown')
+            phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
 
             # Phase E/Markup中SOW是正常回调，不应惩罚
             is_phase_e = ('Phase E' in phase_str or 'Markup' in phase_str or 'Markdown' in phase_str)
@@ -418,7 +420,7 @@ class RecommendationEngine:
                 reasons.append(f"检测到多空信号冲突 (惩罚 -{self.thresholds.CONFLICT_PENALTY}分)")
 
         # --- 市场环境加成 (v2.1校准：仅极端不匹配扣分) ---
-        phase_str = pattern_results.get('phase', 'Unknown')
+        phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
         current_side = PhaseAdapter.get_market_side(phase_str)
         is_market_strong_bullish = market_env == MarketEnvironment.STRONG_BULL
         is_market_strong_bearish = market_env == MarketEnvironment.STRONG_BEAR
@@ -463,17 +465,17 @@ class RecommendationEngine:
 
         if final_score < 10 and seq_rating in ['A', 'B'] and not has_primary_entry:
             missing_signals = []
-            phase_str = pattern_results.get('phase', 'Unknown')
+            phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
 
             if 'Accumulation' in phase_str or '吸筹' in phase_str:
-                if not events.get('spring') or not self._get_attr(events.get('spring'), 'detected'):
+                if not self._get_attr(events.spring, 'detected'):
                     missing_signals.append('Spring震仓')
-                if not events.get('sos') or not self._get_attr(events.get('sos'), 'detected'):
+                if not self._get_attr(events.sos, 'detected'):
                     missing_signals.append('SOS强势信号')
             elif 'Distribution' in phase_str or '派发' in phase_str:
-                if not events.get('sow') or not self._get_attr(events.get('sow'), 'detected'):
+                if not self._get_attr(events.sow, 'detected'):
                     missing_signals.append('SOW弱势信号')
-                if not events.get('lpsy') or not self._get_attr(events.get('lpsy'), 'detected'):
+                if not self._get_attr(events.lpsy, 'detected'):
                     missing_signals.append('LPSY最后支撑')
 
             if missing_signals:
@@ -501,10 +503,10 @@ class RecommendationEngine:
     @staticmethod
     def calculate_signal_strength(pattern_results: Dict[str, Any]) -> int:
         """计算基础信号强度 (简单计数，仅为兼容性保留)"""
-        events = pattern_results.get('events_detected', {}) or pattern_results
+        events = pattern_results  # EventsModel — 直接使用属性访问
         count = 0
         for key in ['joc', 'spring', 'sos', 'lps', 'upthrust', 'sow', 'lpsy', 'fti']:
-            event = events.get(key)
+            event = getattr(events, key, None)
             if event and RecommendationEngine._get_attr(event, 'detected'):
                 count += 1
         return count
@@ -523,22 +525,23 @@ class RecommendationEngine:
           - Phase E:   50-75% 常规仓位 (趋势已确立但部分走完)
           - Re-accumulation/Re-distribution: 50-75% (较短区间的较小因果)
         """
+        # 兼容性处理：如果 pattern_results 是字典，且包含 'events_detected'，则从中提取核心事件
+        if isinstance(pattern_results, dict):
+            events = pattern_results.get('events_detected') or pattern_results
+        else:
+            events = pattern_results
+
         current_price = data['Close'].iloc[-1]
-        joc = pattern_results.get('joc', {})
-        spring = pattern_results.get('spring', {})
-        upthrust = pattern_results.get('upthrust', {})
-        fti = pattern_results.get('fti', {})
-        sow = pattern_results.get('sow', {})
-        sos = pattern_results.get('sos', {})
-        tr = pattern_results.get('trading_range', {})
+        joc = RecommendationEngine._get_attr(events, 'joc') or {}
+        spring = RecommendationEngine._get_attr(events, 'spring') or {}
+        upthrust = RecommendationEngine._get_attr(events, 'upthrust') or {}
+        fti = RecommendationEngine._get_attr(events, 'fti') or {}
+        sow = RecommendationEngine._get_attr(events, 'sow') or {}
+        sos = RecommendationEngine._get_attr(events, 'sos') or {}
+        tr = RecommendationEngine._get_attr(events, 'trading_range') or {}
 
         # 提前提取 ATR 供所有分支使用
         atr_val = float(data['ATR'].iloc[-1]) if 'ATR' in data.columns else current_price * 0.03
-
-        def _safe_get(obj, key, default=None):
-            if obj is None: return default
-            if isinstance(obj, dict): return obj.get(key, default)
-            return getattr(obj, key, default) if hasattr(obj, key) else default
 
         def _get_swing_low(window: int = 20) -> float:
             return float(data['Low'].tail(window).min())
@@ -546,18 +549,28 @@ class RecommendationEngine:
         def _get_swing_high(window: int = 20) -> float:
             return float(data['High'].tail(window).max())
 
-        def _get_spring_low(sp_dict: dict) -> float:
-            latest = sp_dict.get('latest_spring', sp_dict.get('signals', [{}])[-1]) if sp_dict.get('signals') else {}
-            return _safe_get(latest, 'breakdown_price') or _safe_get(latest, 'price', 0)
+        def _get_spring_low(sp_obj) -> float:
+            if not sp_obj: return 0.0
+            latest = getattr(sp_obj, 'latest_spring', None)
+            if not latest:
+                signals = getattr(sp_obj, 'signals', [])
+                latest = signals[-1] if signals else None
+            if not latest: return 0.0
+            return float(getattr(latest, 'breakdown_price', None) or getattr(latest, 'price', 0))
 
-        def _get_upthrust_high(ut_dict: dict) -> float:
-            latest = ut_dict.get('latest_upthrust', ut_dict.get('upthrusts', [{}])[-1]) if ut_dict.get('upthrusts') else {}
-            return _safe_get(latest, 'breakout_price') or _safe_get(latest, 'price', 0)
+        def _get_upthrust_high(ut_obj) -> float:
+            if not ut_obj: return 0.0
+            latest = getattr(ut_obj, 'latest_upthrust', None)
+            if not latest:
+                signals = getattr(ut_obj, 'upthrusts', [])
+                latest = signals[-1] if signals else None
+            if not latest: return 0.0
+            return float(getattr(latest, 'breakout_price', None) or getattr(latest, 'price', 0))
 
         direction = "观望"
         zone = "等待形态确认"
         stop = StopLossModel(conservative=0.0, aggressive=0.0)
-        phase_str = pattern_results.get('phase', 'Unknown')
+        phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
 
         def _get_lps_low(window: int = 15) -> float:
             return float(data['Low'].tail(window).min())
@@ -592,7 +605,7 @@ class RecommendationEngine:
             )
         elif sos.get('detected') and not joc.get('detected') and not spring.get('detected'):
             direction = "做多"
-            sos_price = _safe_get(sos, 'price', current_price)
+            sos_price = getattr(sos, 'price', current_price) or current_price
             zone = f"{sos_price:.2f} 附近 (SOS突破)"
             lps_low = _get_lps_low(15)
             cons_stop = min(lps_low, sos_price * 0.99)
@@ -626,7 +639,7 @@ class RecommendationEngine:
             )
         elif sow.get('detected') and not fti.get('detected') and not upthrust.get('detected'):
             direction = "做空"
-            sow_price = _safe_get(sow, 'price', current_price)
+            sow_price = getattr(sow, 'price', current_price) or current_price
             zone = f"{sow_price:.2f} 附近 (SOW跌破)"
             lpsy_high = _get_lpsy_high(15)
             cons_stop = max(lpsy_high, sow_price * 1.01)
@@ -972,7 +985,7 @@ class RecommendationEngine:
         # 1. 目标位检查
         target_2 = targets.get('target_2', targets.get('likely_target', 0))
         target_1 = targets.get('target_1', targets.get('minimum_target', 0))
-        direction = pattern_results.get('direction', '观望')
+        direction = getattr(pattern_results, 'direction', None) or '观望'
 
         if direction == '做多':
             if target_2 > 0 and current_price >= target_2:
@@ -1016,24 +1029,28 @@ class RecommendationEngine:
         if sot_detected:
             exit_signals.append(sot_desc)
 
+        # 兼容性处理：如果 pattern_results 是字典，且包含 'events_detected'，则从中提取核心事件
+        if isinstance(pattern_results, dict):
+            events = pattern_results.get('events_detected') or pattern_results
+        else:
+            events = pattern_results
+
         # 4. UTAD (终极推力) 检测 — Phase E 耗尽信号
-        raw_events = pattern_results.get('_raw_events', {})
-        utad = raw_events.get('utad', {})
-        utad_detected = utad.get('detected', False) if isinstance(utad, dict) else False
+        utad = RecommendationEngine._get_attr(events, 'utad')
+        utad_detected = getattr(utad, 'detected', False) if utad else False
         if utad_detected:
-            utad_type = utad.get('type', '')
+            utad_type = getattr(utad, 'type', '')
             if direction == '做多' and utad_type == 'buying_climax':
                 exit_signals.append("检测到UTAD(买入高潮)：最后的追高需求，上升动能耗尽，建议止盈")
             elif direction == '做空' and utad_type == 'selling_climax':
                 exit_signals.append("检测到UTAD(抛售高潮)：最后的恐慌供应，下跌动能耗尽，建议止盈")
 
         # 5. LPSY/PSY 检测 — Phase A 反转信号
-        lps_lpsy = pattern_results.get('lps_lpsy', {})
-        lpsy = lps_lpsy.get('lpsy', {}) if isinstance(lps_lpsy, dict) else {}
-        if lpsy.get('detected', False):
+        lpsy = RecommendationEngine._get_attr(events, 'lpsy')
+        if getattr(lpsy, 'detected', False) if lpsy else False:
             exit_signals.append("检测到LPSY(最后供应点)：供应重新出现，趋势面临反转风险，建议减仓")
-        ps = raw_events.get('preliminary_support', {})
-        ps_detected = ps.get('detected', False) if isinstance(ps, dict) else False
+        ps = RecommendationEngine._get_attr(events, 'preliminary_support')
+        ps_detected = getattr(ps, 'detected', False) if ps else False
         if direction == '做空' and ps_detected:
             exit_signals.append("检测到PSY(初次支撑)：需求开始进入，下跌趋势可能终结，建议止盈")
 

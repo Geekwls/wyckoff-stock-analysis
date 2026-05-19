@@ -410,10 +410,32 @@ class BreakoutAnalyzer:
         has_rally = (post_data['High'].max() >= rally_zone_low).all() and \
                     (post_data['High'].max() <= rally_zone_high).all()
 
-        return {
-            'has_rally': has_rally,
-            'interpretation': '有反弹测试' if has_rally else '无反弹'
-        }
+        if has_rally:
+            # 找到反弹最高点所在的那天
+            rally_point = post_data[post_data['High'] >= rally_zone_low].iloc[0]
+            rally_vol = rally_point['Volume']
+
+            breakout_vol = self.data.loc[breakout_point, 'Volume']
+            rally_vol_ratio = rally_vol / breakout_vol if breakout_vol > 0 else 1.0
+
+            # 健康的反弹测试：反弹成交量萎缩 且 收盘价受阻于下沿(阻力位)下方
+            price_close = rally_point['Close']
+            is_healthy = (rally_vol_ratio < 0.8) and (price_close <= rally_zone_high)
+
+            return {
+                'has_rally': True,
+                'rally_date': rally_point.name,
+                'rally_price': float(rally_point['High']),
+                'rally_volume_ratio': round(rally_vol_ratio, 2),
+                'is_healthy': is_healthy,
+                'interpretation': '健康缩量反弹测试(受阻)' if is_healthy else '反弹测试存在风险(放量或收复区间)'
+            }
+        else:
+            return {
+                'has_rally': False,
+                'interpretation': '无反弹(极度强势)',
+                'strength': 'strong'
+            }
 
     def _calculate_downside_breakout_quality(
         self,
@@ -433,7 +455,10 @@ class BreakoutAnalyzer:
 
         # 反弹测试
         if rally_test.get('has_rally'):
-            score += 20  # 有反弹测试是正常的
+            if rally_test.get('is_healthy'):
+                score += 20  # 健康缩量反弹受阻
+            else:
+                score += 10  # 放量或收复区间
         else:
             score += 25  # 无反弹说明抛压强
 

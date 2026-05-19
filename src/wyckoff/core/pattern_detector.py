@@ -283,20 +283,16 @@ class WyckoffPatternDetector:
         phase_result = self.phase_identifier.identify(events)
 
         # 附加事件序列验证结果
-        phase_result['sequence_validation'] = events.get('sequence_validation', {})
+        phase_result['sequence_validation'] = getattr(events, 'sequence_validation', {})
 
         # 构建 events_detected（供 scoring 引擎使用）
-        # 直接使用原始检测 dict，避免 Pydantic 丢弃 volume_ratio 等字段
-        raw = events.get('_raw_events', {})
-        
-        # 将独立的吸收检测加入 events
+        # 直接使用强类型 EventsModel
+        phase_result['events_detected'] = events
+
+        # 将独立的吸收检测加入结果
         abs_res = self.detect_absorption()
-        if abs_res.get('detected'):
-            raw['absorption'] = abs_res
-            
-        events_detected = {k: v for k, v in raw.items()
-                           if isinstance(v, dict) and v.get('detected')}
-        phase_result['events_detected'] = events_detected
+        if abs_res and abs_res.get('detected'):
+            phase_result['absorption'] = abs_res
 
         # 集成孟洪涛核心证据分析
         evidence_analysis = self.analyze_phase_a_evidence()
