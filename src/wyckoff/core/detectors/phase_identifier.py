@@ -428,6 +428,32 @@ class PhaseIdentifier(BaseDetector):
 
         return default
 
+    def _normalize_date(self, date) -> Optional[pd.Timestamp]:
+        """
+        统一时间戳处理为 pd.Timestamp 类型
+
+        解决问题：事件中的date字段可能是多种类型
+        - pd.Timestamp (来自 df.index)
+        - str (字符串)
+        - datetime.date
+        - numpy.datetime64
+
+        Args:
+            date: 各种格式的日期
+
+        Returns:
+            统一的 pd.Timestamp，如果输入为None则返回None
+        """
+        if date is None:
+            return None
+        if isinstance(date, pd.Timestamp):
+            return date
+        try:
+            return pd.Timestamp(date)
+        except Exception as e:
+            logger.debug(f"Failed to normalize date {date}: {e}")
+            return None
+
     def _get_phase_a_penalty_factor(self, completeness_score: int) -> float:
         """根据Phase A完整性得分计算惩罚因子"""
         if completeness_score == 1:
