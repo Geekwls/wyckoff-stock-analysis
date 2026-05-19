@@ -91,6 +91,7 @@ class SOSSOWAnalyzer:
         # 获取SOW的信号类型
         sow_signal_type = sow.get('signal_type', '')
         sow_price = sow.get('price', current_price)
+        sos_price = sos.get('price', current_price)
         sow_low = sow.get('low', current_price)
 
         # 获取交易区间信息

@@ -164,8 +164,8 @@ class PhaseCoordinator:
         arbitration_result = self._arbitrate_events(raw_events)
 
         #  新增：构建 LPS/UT 序列列表供 Phase B 检测使用
-        lps_list = self._build_lps_sequence(raw_events, self.detector.data)
-        ut_list = self._build_ut_sequence(raw_events, self.detector.data)
+        lps_list = self._build_lps_sequence(raw_events)
+        ut_list = self._build_ut_sequence(raw_events)
 
         # 6. 统一使用强类型模型封装
         # 安全地构造Pydantic模型：过滤掉dict中模型不存在的字段
@@ -967,7 +967,7 @@ class PhaseTransitionCriteria:
     MIN_PHASE_D_DURATION = 7
 
 
-def _build_lps_sequence(self, events: dict, data: pd.DataFrame) -> list:
+def _build_lps_sequence(self, events: dict) -> list:
     """
     构建 LPS 序列列表（最近30天内的所有LPS信号）
 
@@ -1001,7 +1001,7 @@ def _build_lps_sequence(self, events: dict, data: pd.DataFrame) -> list:
     return lps_list
 
 
-def _build_ut_sequence(self, events: dict, data: pd.DataFrame) -> list:
+def _build_ut_sequence(self, events: dict) -> list:
     """
     构建 UT 序列列表（最近30天内的所有UT信号）
 

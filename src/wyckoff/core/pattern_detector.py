@@ -226,12 +226,6 @@ class WyckoffPatternDetector:
     def detect_sos(self, window: int = 40) -> Dict:
         return self.sw_detector.detect_sos(window)
 
-    def detect_sow(self, window: int = 40) -> Dict:
-        return self.sw_detector.detect_sow(window)
-
-    def detect_sos_variants(self) -> Dict:
-        return self.sw_detector.detect_sos_variants()
-
     def detect_sow_variants(self) -> Dict:
         return self.sw_detector.detect_sow_variants()
 
@@ -715,58 +709,6 @@ class WyckoffPatternDetector:
         except Exception as e:
             logger.exception(f"AR检测失败: 未知异常: {e}")
             raise PatternDetectionError("AR", f"未知异常: {e}") from e
-
-    def _find_downtrend_start(self, data: pd.DataFrame) -> Optional[int]:
-        """找到主跌段起点（价格跌破MA20的位置）"""
-        ma20 = data['Close'].rolling(window=20).mean()
-        downtrend_mask = data['Close'] < ma20
-        if not downtrend_mask.any():
-            return None
-        for i in range(len(data)):
-            if downtrend_mask.iloc[i]:
-                return i
-        return None
-
-    def _evaluate_ps_candidate(self, current, prev, next_day, vol_ma,
-                                 ps_vol_threshold, ps_vol_strong_threshold) -> Optional[Dict]:
-        """评估单个K线是否为PS候选"""
-        vol_ratio = current['Volume'] / vol_ma if vol_ma > 0 else 0
-        vol_heavy = vol_ratio > ps_vol_threshold
-        price_stabilized = (current['Close'] > prev['Close']) or (current['Close'] > current['Open'])
-        body = abs(current['Close'] - current['Open'])
-        lower_shadow = min(current['Open'], current['Close']) - current['Low']
-        shadow_resistance = lower_shadow > body * 0.5 if body > 0 else lower_shadow > 0
-        
-        if not (vol_heavy and price_stabilized and shadow_resistance):
-            return None
-        
-        confidence = 50
-        if vol_ratio > ps_vol_strong_threshold:
-            confidence += 15
-        if current['Close'] > current['Open']:
-            confidence += 10
-        if lower_shadow > body:
-            confidence += 10
-        if next_day is not None and next_day['Close'] > current['Close']:
-            confidence += 15
-        
-        return {
-            'vol_ratio': float(vol_ratio),
-            'lower_shadow_ratio': float(lower_shadow / (body + 0.001)),
-            'confidence': min(100, confidence)
-        }
-
-    def _verify_ps_with_sc(self, data: pd.DataFrame, best_ps: Dict) -> Tuple[bool, Optional[float]]:
-        """验证PS之后是否有SC（恐慌抛售）"""
-        ps_idx = best_ps['idx']
-        post_ps_data = data.iloc[ps_idx + 1:]
-        for i in range(len(post_ps_data)):
-            row = post_ps_data.iloc[i]
-            if row['Low'] < best_ps['low']:
-                vol_ma = row.get('Volume_MA20', data['Volume'].iloc[:ps_idx + i + 1].tail(20).mean())
-                if row['Volume'] > vol_ma * 1.5:
-                    return True, float(row['Low'])
-        return False, None
 
     def detect_preliminary_support(self, lookback_days: int = 90) -> Dict:
         """

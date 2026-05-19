@@ -512,7 +512,8 @@ class ReversalDetector(BaseDetector):
                     'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
                     'spring_type': spring_type,
                     'needs_secondary_test': needs_secondary_test,
-                    'penetration_depth': round(float(penetration_depth), 2)
+                    'penetration_depth': round(float(penetration_depth), 2),
+                    'confidence': 0.8 if spring_type == 'type_3_safe' else 0.5
                 })
         return springs
 
@@ -581,7 +582,8 @@ class ReversalDetector(BaseDetector):
                     'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
                     'spring_type': spring_type,
                     'needs_secondary_test': needs_secondary_test,
-                    'penetration_depth': round(float(penetration_depth), 2)
+                    'penetration_depth': round(float(penetration_depth), 2),
+                    'confidence': 0.8 if spring_type == 'type_3_safe' else 0.5
                 })
         return springs
 
@@ -793,35 +795,6 @@ class ReversalDetector(BaseDetector):
                 f"{'有前置派发结构 ✓' if distribution_detected else '无前置派发结构 ⚠️'}"
             )
         }
-
-
-def _unify_quality_score(spring_or_ut_result: dict) -> int:
-    """
-    统一 Spring/UT 质量评分为 1-100 分
-    
-   威科夫理论质量标准：
-    - type_3_safe: 85-100分 (可立即行动)
-    - type_2_neutral: 50-84分 (需等待确认)
-    - type_1_dangerous: 1-49分 (避免行动)
-    """
-    if not spring_or_ut_result.get('detected'):
-        return 0
-    
-    signal_type = spring_or_ut_result.get('spring_type') or spring_or_ut_result.get('upthrust_type', '')
-    
-    if signal_type == 'type_3_safe':
-        base_score = 85
-    elif signal_type == 'type_2_neutral':
-        base_score = 50
-    elif signal_type == 'type_1_dangerous':
-        base_score = 20
-    else:
-        base_score = 50
-    
-    # 根据置信度微调
-    confidence = spring_or_ut_result.get('confidence', 0.5)
-    return min(int(base_score + confidence * 15), 100)
-
     def detect_stopping_volume(self) -> Dict:
         """
         检测停止成交量 (Stopping Volume)
@@ -847,12 +820,14 @@ def _unify_quality_score(spring_or_ut_result: dict) -> int:
 
         df = self.data.tail(40).copy()
         vol_ma = df['Volume'].rolling(20).mean()
+        fallback_vol_ma = df['Volume'].mean()
 
         stopping_signals = []
 
         for idx in df.index:
             row = df.loc[idx]
-            vol_ratio = row['Volume'] / vol_ma.loc[idx] if pd.notna(vol_ma.loc[idx]) else 1.0
+            current_vol_ma = vol_ma.loc[idx] if pd.notna(vol_ma.loc[idx]) else fallback_vol_ma
+            vol_ratio = row['Volume'] / current_vol_ma if current_vol_ma > 0 else 1.0
 
             # 波段计算
             rng = row['High'] - row['Low']
@@ -893,3 +868,31 @@ def _unify_quality_score(spring_or_ut_result: dict) -> int:
             'all_signals': stopping_signals,
             'signal_count': len(stopping_signals)
         }
+
+
+def _unify_quality_score(spring_or_ut_result: dict) -> int:
+    """
+    统一 Spring/UT 质量评分为 1-100 分
+    
+   威科夫理论质量标准：
+    - type_3_safe: 85-100分 (可立即行动)
+    - type_2_neutral: 50-84分 (需等待确认)
+    - type_1_dangerous: 1-49分 (避免行动)
+    """
+    if not spring_or_ut_result.get('detected'):
+        return 0
+    
+    signal_type = spring_or_ut_result.get('spring_type') or spring_or_ut_result.get('upthrust_type', '')
+    
+    if signal_type == 'type_3_safe':
+        base_score = 85
+    elif signal_type == 'type_2_neutral':
+        base_score = 50
+    elif signal_type == 'type_1_dangerous':
+        base_score = 20
+    else:
+        base_score = 50
+    
+    # 根据置信度微调
+    confidence = spring_or_ut_result.get('confidence', 0.5)
+    return min(int(base_score + confidence * 15), 100)
