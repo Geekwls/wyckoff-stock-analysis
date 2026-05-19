@@ -790,3 +790,31 @@ class ReversalDetector(BaseDetector):
                 f"{'有前置派发结构 ✓' if distribution_detected else '无前置派发结构 ⚠️'}"
             )
         }
+
+
+def _unify_quality_score(spring_or_ut_result: dict) -> int:
+    """
+    统一 Spring/UT 质量评分为 1-100 分
+    
+   威科夫理论质量标准：
+    - type_3_safe: 85-100分 (可立即行动)
+    - type_2_neutral: 50-84分 (需等待确认)
+    - type_1_dangerous: 1-49分 (避免行动)
+    """
+    if not spring_or_ut_result.get('detected'):
+        return 0
+    
+    signal_type = spring_or_ut_result.get('spring_type') or spring_or_ut_result.get('upthrust_type', '')
+    
+    if signal_type == 'type_3_safe':
+        base_score = 85
+    elif signal_type == 'type_2_neutral':
+        base_score = 50
+    elif signal_type == 'type_1_dangerous':
+        base_score = 20
+    else:
+        base_score = 50
+    
+    # 根据置信度微调
+    confidence = spring_or_ut_result.get('confidence', 0.5)
+    return min(int(base_score + confidence * 15), 100)

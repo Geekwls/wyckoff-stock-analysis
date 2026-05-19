@@ -163,6 +163,10 @@ class PhaseCoordinator:
         # 5.5. 运行事件仲裁（解决信号冲突）
         arbitration_result = self._arbitrate_events(raw_events)
 
+        #  新增：构建 LPS/UT 序列列表供 Phase B 检测使用
+        lps_list = self._build_lps_sequence(raw_events, self.detector.data)
+        ut_list = self._build_ut_sequence(raw_events, self.detector.data)
+
         # 6. 统一使用强类型模型封装
         # 安全地构造Pydantic模型：过滤掉dict中模型不存在的字段
         def _safe_model(model_cls, data: dict):
@@ -193,6 +197,8 @@ class PhaseCoordinator:
         events = {
             'trading_range': trading_range_model,
             '_raw_events': raw_events_map,
+            'lps_list': lps_list,      # 新增：LPS序列
+            'ut_list': ut_list,         # 新增：UT序列
             'climax': _safe_model(ClimaxModel, climax_res),
             'automatic_reaction': _safe_model(WyckoffEventModel, ar_res) if ar_res.get('detected') else WyckoffEventModel(detected=False),
             'secondary_test': _safe_model(WyckoffEventModel, st_res) if st_res.get('detected') else WyckoffEventModel(detected=False),
@@ -959,3 +965,76 @@ class PhaseTransitionCriteria:
     MIN_PHASE_B_DURATION = 15
     MIN_PHASE_C_DURATION = 10
     MIN_PHASE_D_DURATION = 7
+
+
+def _build_lps_sequence(events: dict, data: pd.DataFrame) -> list:
+    """
+    构建 LPS 序列列表（最近30天内的所有LPS信号）
+
+    Returns:
+        LPS事件列表，每个包含date, price, volume等信息
+    """
+    lps_list = []
+    lps_res = events.get('lps', {})
+
+    if not lps_res.get('detected'):
+        return lps_list
+
+    # 如果有多个LPS信号
+    if 'all_lps' in lps_res:
+        for lps in lps_res['all_lps']:
+            lps_list.append({
+                'date': lps.get('date'),
+                'price': lps.get('price'),
+                'volume': lps.get('volume'),
+                'detected': True
+            })
+    else:
+        # 单个LPS
+        lps_list.append({
+            'date': lps_res.get('date'),
+            'price': lps_res.get('price'),
+            'volume': lps_res.get('volume'),
+            'detected': True
+        })
+
+    return lps_list
+
+
+def _build_ut_sequence(events: dict, data: pd.DataFrame) -> list:
+    """
+    构建 UT 序列列表（最近30天内的所有UT信号）
+
+    Returns:
+        UT事件列表
+    """
+    ut_list = []
+    ut_res = events.get('upthrust', {})
+
+    if not ut_res.get('detected'):
+        return ut_list
+
+    # 如果有多个UT信号
+    if 'upthrusts' in ut_res:
+        for ut in ut_res['upthrusts']:
+            ut_list.append({
+                'date': ut.get('date'),
+                'breakout_price': ut.get('breakout_price'),
+                'volume_ratio': ut.get('breakout_volume_ratio'),
+                'detected': True
+            })
+    else:
+        # 单个UT
+        ut_list.append({
+            'date': ut_res.get('date'),
+            'breakout_price': ut_res.get('breakout_price', ut_res.get('rejection_price')),
+            'volume_ratio': ut_res.get('breakout_volume_ratio', 1.0),
+            'detected': True
+        })
+
+    return ut_list
+
+
+# 将函数绑定到PhaseCoordinator类
+PhaseCoordinator._build_lps_sequence = _build_lps_sequence
+PhaseCoordinator._build_ut_sequence = _build_ut_sequence

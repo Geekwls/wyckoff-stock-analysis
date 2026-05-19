@@ -113,6 +113,40 @@ class TrendDetector(BaseDetector):
 
         strength_info = self._classify_joc_strength({'test_detected': test_detected, 'test_depth_pct': test_depth_pct, 'test_count': test_count, 'volume_ratio': volume_ratio, 'breakout_pct': breakout_pct})
         confidence = 0.50 + (0.2 if volume_ratio >= 2.0 else 0.1 if volume_ratio >= 1.5 else 0) + (0.1 if breakout_pct >= 0.03 else 0) + (0.2 if test_detected else 0) + strength_info['confidence_boost']
+
+        #  新增：JOC 失败检测（威科夫理论：JOC后回落到Creek以下 = 失败，可能回到Phase C）
+        joc_failed = False
+        failure_reason = None
+        current_price = self.data['Close'].iloc[-1]
+
+        # 检查JOC后是否回落到Creek以下
+        if current_price < creek_level * 0.98:  # 容差2%
+            joc_failed = True
+            failure_reason = 'price_fell_back_below_creek'
+        # 检查JOC后是否有连续3天收在Creek以下
+        elif len(df_after_joc) >= 3:
+            recent_closes = df_after_joc['Close'].tail(3)
+            if (recent_closes < creek_level * 0.98).all():
+                joc_failed = True
+                failure_reason = 'consecutive_closes_below_creek'
+
+        # 如果JOC失败，返回失败信息
+        if joc_failed:
+            return {
+                'detected': True,
+                'date': joc_idx,
+                'creek_level': round(creek_level, 3),
+                'close_price': round(joc_row['Close'], 3),
+                'breakout_pct': round(breakout_pct * 100, 2),
+                'volume_ratio': round(volume_ratio, 2),
+                'joc_failed': True,
+                'failure_reason': failure_reason,
+                'current_price': round(current_price, 3),
+                'implication': 'JOC_FAILED_POTENTIAL_PHASE_C_RETURN',
+                'description': f'JOC失败：价格回落至Creek({creek_level:.2f})以下，可能回到Phase C重新积累',
+                'confidence': round(min(confidence, 1.0), 2)
+            }
+
         return {
             'detected': True, 'date': joc_idx, 'creek_level': round(creek_level, 3), 'close_price': round(joc_row['Close'], 3),
             'breakout_pct': round(breakout_pct * 100, 2), 'volume_ratio': round(volume_ratio, 2),
@@ -120,6 +154,7 @@ class TrendDetector(BaseDetector):
             'test_depth_pct': round(test_depth_pct * 100, 2), 'test_count': test_count,
             'strength': strength_info['strength'], 'strength_description': strength_info['description'],
             'trading_implication': strength_info['trading_implication'],
+            'joc_failed': False,
             'description': strength_info['description'],
             'confidence': round(min(confidence, 1.0), 2)
         }

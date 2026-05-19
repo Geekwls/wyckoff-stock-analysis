@@ -309,6 +309,7 @@ class PhaseIdentifier(BaseDetector):
         - 多次 LPS（Last Point Support）/ UT（Upthrust）交替
         - 量能规律性缩放
         - 价格在 TR 中部震荡
+        - VSA 枯竭信号（no_supply/no_demand）
         """
         # 获取关键事件
         lps_events = events.get('lps_list', [])
@@ -332,10 +333,25 @@ class PhaseIdentifier(BaseDetector):
         total_tests = lps_count + ut_count
         has_st = self._safe_check_detected(st)
 
+        #  新增：检查 VSA 枯竭信号
+        vsa_signals = events.get('vsa_signals', {})
+        has_no_supply = vsa_signals.get('is_no_supply', False)
+        has_no_demand = vsa_signals.get('is_no_demand', False)
+
+        # VSA 枯竭 + TR 中 = Phase B 强信号
+        if (has_no_supply or has_no_demand) and total_tests >= 1:
+            climax_type = getattr(climax, 'type', 'selling_climax') if has_climax else 'selling_climax'
+            if climax_type == 'selling_climax':
+                return (
+                    'Accumulation Phase B (VSA供应枯竭测试)',
+                    WyckoffPhase.PHASE_B,
+                    0.70
+                )
+
         if total_tests >= 2 or has_st:
             # 检查是否在 TR 中震荡
             tr_info = events.get('trading_range', {})
-            in_tr = tr_info.get('is_consolidation', False) if tr_info else False
+            in_tr = tr_info.get('is_consolidation', False) if hasattr(tr_info, 'get') else False
 
             if in_tr or total_tests >= 2:
                 climax_type = getattr(climax, 'type', 'selling_climax') if has_climax else 'selling_climax'
