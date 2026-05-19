@@ -259,6 +259,11 @@ class PhaseIdentifier(BaseDetector):
         if ambiguous_phase:
             return ambiguous_phase  # 返回更精确的阶段标签
 
+        #  新增：Phase B 主动检测逻辑
+        phase_b_result = self._detect_phase_b_active(events)
+        if phase_b_result:
+            return phase_b_result
+
         # 标准阶段识别逻辑
         su_info = events.get('spring_upthrust') or {}
         su_data = su_info.get('data')
@@ -294,6 +299,61 @@ class PhaseIdentifier(BaseDetector):
             return 'Distribution Phase B (派发期测试)', WyckoffPhase.PHASE_B, 0.60
 
         return 'Unknown', WyckoffPhase.UNKNOWN, 0.30
+
+    def _detect_phase_b_active(self, events: Dict) -> Optional[Tuple[str, WyckoffPhase, float]]:
+        """
+        Phase B 主动检测逻辑
+
+        威科夫理论 Phase B 特征：
+        - 震荡测试区间（Trading Range 形成）
+        - 多次 LPS（Last Point Support）/ UT（Upthrust）交替
+        - 量能规律性缩放
+        - 价格在 TR 中部震荡
+        """
+        # 获取关键事件
+        lps_events = events.get('lps_list', [])
+        ut_events = events.get('ut_list', [])
+        climax = events.get('climax')
+        ar = events.get('automatic_reaction')
+        st = events.get('secondary_test')
+
+        # 检查是否有基础结构（至少有 Climax + AR）
+        has_climax = self._safe_check_detected(climax)
+        has_ar = self._safe_check_detected(ar)
+
+        if not (has_climax and has_ar):
+            return None
+
+        # 统计 LPS 和 UT 数量
+        lps_count = sum(1 for e in lps_events if self._safe_check_detected(e)) if lps_events else 0
+        ut_count = sum(1 for e in ut_events if self._safe_check_detected(e)) if ut_events else 0
+
+        # Phase B 判定：至少有 2 次支撑测试或多次震荡
+        total_tests = lps_count + ut_count
+        has_st = self._safe_check_detected(st)
+
+        if total_tests >= 2 or has_st:
+            # 检查是否在 TR 中震荡
+            tr_info = events.get('trading_range', {})
+            in_tr = tr_info.get('is_consolidation', False) if tr_info else False
+
+            if in_tr or total_tests >= 2:
+                climax_type = getattr(climax, 'type', 'selling_climax') if has_climax else 'selling_climax'
+
+                if climax_type == 'selling_climax':
+                    return (
+                        'Accumulation Phase B (积累区震荡测试)',
+                        WyckoffPhase.PHASE_B,
+                        0.65 + min(total_tests * 0.05, 0.15)  # 测试次数越多置信度越高
+                    )
+                else:
+                    return (
+                        'Distribution Phase B (派发区震荡测试)',
+                        WyckoffPhase.PHASE_B,
+                        0.65 + min(total_tests * 0.05, 0.15)
+                    )
+
+        return None
 
     def _check_ambiguous_phase_structure(self, events: Dict) -> Optional[Tuple[str, WyckoffPhase, float]]:
         """
