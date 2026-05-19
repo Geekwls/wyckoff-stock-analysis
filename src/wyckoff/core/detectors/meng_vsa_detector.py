@@ -33,13 +33,17 @@ class MengVsaDetector(BaseDetector):
         ns, nd, sv = [], [], []
         t = self.thresholds
         
+        # 🔧 优化：在循环外部一次性计算移动平均线，彻底解决每次循环内全量重算的严重性能漏洞
+        ma20 = df['MA20'] if 'MA20' in df.columns else df['Close'].rolling(20).mean()
+        ma50 = df['MA50'] if 'MA50' in df.columns else df['Close'].rolling(50).mean()
+        
         for i in range(10, len(df)):
             pr = df['High'].iloc[i] - df['Low'].iloc[i]
             if pr <= 0: continue
             body_pct, vol_r = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / pr, df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
             
             #  修复#6a: No Supply 检测 - 量比<0.5，收盘位置>60%
-            if df['Close'].iloc[i] > df.get('MA20', df['Close'].rolling(20).mean()).iloc[i]:
+            if df['Close'].iloc[i] > ma20.iloc[i]:
                 if body_pct < t.MENG_VSA_BODY_RATIO:
                     cp = (df['Close'].iloc[i] - df['Low'].iloc[i]) / pr
                     # 孟洪涛要求：量比<50%，收盘在中高位（>60%）
@@ -47,7 +51,7 @@ class MengVsaDetector(BaseDetector):
                         ns.append({"date": df.index[i], "vol_ratio": round(vol_r, 2), "close_position": round(cp * 100, 1)})
             
             #  修复#6b: No Demand 检测 - 添加位置约束和趋势判断
-            if df['Close'].iloc[i] < df.get('MA20', df['Close'].rolling(20).mean()).iloc[i]:
+            if df['Close'].iloc[i] < ma20.iloc[i]:
                 if body_pct < 0.3 and vol_r < 0.5:
                     cp = (df['Close'].iloc[i] - df['Low'].iloc[i]) / pr
                     # 孟洪涛要求：出现在下跌中，收盘在低位（<40%）
@@ -55,7 +59,7 @@ class MengVsaDetector(BaseDetector):
                         nd.append({"date": df.index[i], "vol_ratio": round(vol_r, 2), "close_position": round(cp * 100, 1)})
             
             #  修复#6c: Stopping Volume 检测 - 量比>2.0
-            if df['Close'].iloc[i] < df.get('MA50', df['Close'].rolling(50).mean()).iloc[i]:
+            if df['Close'].iloc[i] < ma50.iloc[i]:
                 # 孟洪涛要求：成交量显著放大（>2.0 倍）
                 if vol_r > 2.0 and (abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / pr < 0.3):
                     ls = min(df['Open'].iloc[i], df['Close'].iloc[i]) - df['Low'].iloc[i]
