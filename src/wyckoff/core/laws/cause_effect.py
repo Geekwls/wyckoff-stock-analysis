@@ -3,6 +3,7 @@ import logging
 from typing import Dict, Optional, Tuple
 from ...exceptions import InsufficientDataError, LawAnalysisError
 from ..point_and_figure import calculate_cause_effect_from_pnf
+from ..weis_wave import WeisWaveGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -338,17 +339,11 @@ class CauseEffectMixin:
         # 2. 突破质量加权 (JOC/FTI 质量)
         quality_score = 0
         joc = self.pattern_detector.detect_joc_menhongtao() if self.pattern_detector else {}
-        
+
         if joc.get('detected'):
-            vol_ratio = joc.get('breakout_volume_ratio', 1.0)
-            close_pos = joc.get('close_position', 0.5)
-            
-            # 【待升级】Weis Wave 波段评估：目前先使用单根 K 线作为降级方案
-            # TODO: 待 Weis Wave 模块稳定后，此处应改为波段累加量评估
-            if vol_ratio > 1.5 and close_pos > 0.8:
-                quality_score = 0.15
-            elif vol_ratio < 1.2 or close_pos < 0.6:
-                quality_score = -0.2
+            #  Weis Wave 波段累加量评估（替换原单K线降级方案）
+            weis_quality = self._get_weis_wave_breakout_quality(joc.get('date'))
+            quality_score = weis_quality.get('quality_score', 0)
                 
         final_prob = base_prob + quality_score
         
@@ -448,3 +443,84 @@ class CauseEffectMixin:
             }
         except Exception as e:
             raise LawAnalysisError("因果分析", str(e)) from e
+
+
+    def _get_weis_wave_breakout_quality(self, breakout_date: pd.Timestamp) -> dict:
+        """
+        使用 Weis Wave 波段累加量评估 JOC 突破质量
+
+        威科夫理论（David Weis）：
+        - 突破的质量应由整个波段的努力（累加量）决定，而非单根K线
+        - 真正的突破需要波段量能配合
+
+        Returns:
+            {
+                'wave_volume_ratio': 波段量比（相对于平均量）,
+                'wave_thrust': 波段推力百分比,
+                'quality_score': 质量得分 (-0.2 到 +0.15)
+            }
+        """
+        try:
+            # 生成 Weis Wave 波段
+            wave_gen = WeisWaveGenerator(self.data, atr_multiplier=2.0, fallback_pct=0.03)
+            waves = wave_gen.generate()
+
+            if not waves:
+                # 无波段数据，使用降级方案
+                return {'quality_score': 0, 'note': 'no_waves_fallback'}
+
+            # 找到包含突破日期的波段
+            breakout_wave = None
+            for wave in waves:
+                if isinstance(wave.start_idx, pd.Timestamp) and isinstance(wave.end_idx, pd.Timestamp):
+                    if wave.start_idx <= breakout_date <= wave.end_idx:
+                        breakout_wave = wave
+                        break
+                else:
+                    # 处理整数索引情况
+                    if hasattr(self.data, 'loc'):
+                        try:
+                            wave_data = self.data.loc[wave.start_idx:wave.end_idx]
+                            if breakout_date in wave_data.index:
+                                breakout_wave = wave
+                                break
+                        except Exception:
+                            pass
+
+            if not breakout_wave:
+                return {'quality_score': 0, 'note': 'breakout_not_in_wave'}
+
+            # 计算波段量比
+            avg_volume = self.data['Volume'].mean()
+            wave_volume_ratio = breakout_wave.volume / avg_volume if avg_volume > 0 else 1.0
+
+            # 波段推力已是百分比形式
+            wave_thrust = breakout_wave.thrust
+
+            # 质量评分逻辑（David Weis标准）
+            quality_score = 0
+
+            # 优质突破：大推力 + 放量
+            if wave_thrust > 0.03 and wave_volume_ratio > 1.5:
+                quality_score = 0.15
+            # 中等突破
+            elif wave_thrust > 0.02 and wave_volume_ratio > 1.2:
+                quality_score = 0.08
+            # 弱突破：推力不足 或 缩量
+            elif wave_thrust < 0.01 or wave_volume_ratio < 0.8:
+                quality_score = -0.15
+            # 危险突破：缩量虚破
+            elif wave_thrust < 0.015 and wave_volume_ratio < 0.6:
+                quality_score = -0.2
+
+            return {
+                'wave_volume_ratio': round(wave_volume_ratio, 2),
+                'wave_thrust': round(wave_thrust, 4),
+                'quality_score': quality_score,
+                'wave_direction': breakout_wave.direction,
+                'wave_duration': breakout_wave.duration
+            }
+
+        except Exception as e:
+            logger.warning(f"Weis Wave 质量评估失败，使用降级方案: {e}")
+            return {'quality_score': 0, 'note': 'weis_fallback'}
