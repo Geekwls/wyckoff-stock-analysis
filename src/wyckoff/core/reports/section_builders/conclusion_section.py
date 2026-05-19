@@ -68,6 +68,20 @@ class ConclusionSection(BaseSectionBuilder):
         # Market Context (P0 Optimization)
         report += self._build_market_context_section(market_env)
 
+        # 增加信号冲突自检逻辑 (JOC/Spring/SOS 与 Upthrust/SOW/FTI 共存时)
+        has_bullish_signal = (joc and joc.get('detected')) or (spring and spring.get('detected')) or (sos and sos.get('detected'))
+        has_bearish_signal = (upthrust and upthrust.get('detected')) or (sow and sow.get('detected')) or (fti and fti.get('detected'))
+        if has_bullish_signal and has_bearish_signal:
+            report += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【⚠️ 信号冲突警示：市场多空分歧剧烈】
+💡 威科夫提醒：当前盘面在相同周期内同时检测到了强烈的多头信号与空头信号，反映出大资金 (Composite Operator) 内部多空分歧极其剧烈，或者市场正处于诱多/诱空的敏感过渡带。
+建议：
+- 严格遵循观望纪律，绝对不可轻举妄动。
+- 等待价格突破或跌破关键防守轴并确认后再作右侧跟随。
+"""
+
         # Core Conclusion
         report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【核心结论】\n"
         

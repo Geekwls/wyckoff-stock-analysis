@@ -565,70 +565,75 @@ class RecommendationEngine:
         def _get_lpsy_high(window: int = 15) -> float:
             return float(data['High'].tail(window).max())
 
-        # ── 方向判断 (结构导向止损) ──
+        # ── 方向判断 (结构导向刚性止损) ──
         if joc.get('detected'):
             direction = "做多"
-            zone = f"{joc.get('creek_level', current_price):.2f} 附近 (JOC突破)"
             creek = joc.get('creek_level', current_price)
+            zone = f"{creek:.2f} 附近 (JOC突破)"
             lps_low = _get_lps_low(15)
-            cons_stop = min(lps_low, creek * 0.985)
+            # 刚性锚定 Creek 下沿或 LPS 支撑低点
+            cons_stop = min(lps_low, creek * 0.99)
             stop = StopLossModel(
                 conservative=round(cons_stop, 2),
-                aggressive=round(cons_stop * 0.98, 2),
-                atr_dynamic_stop=round(cons_stop - atr_val, 2),
+                aggressive=round(creek * 0.995, 2), # 紧贴小溪下沿，一旦漏水立刻止损
+                atr_dynamic_stop=round(cons_stop - atr_val * 0.5, 2),
             )
         elif spring.get('detected'):
             direction = "做多"
             spring_low = _get_spring_low(spring)
-            swing_low = _get_swing_low(20)
+            if spring_low <= 0:
+                spring_low = current_price * 0.95
             zone = f"{current_price:.2f} 附近 (Spring震仓)"
+            # 刚性止损：跌破 Spring 极值点则结构失效
             stop = StopLossModel(
-                conservative=round(spring_low * 0.98, 2) if spring_low > 0 else round(current_price * 0.96, 2),
-                aggressive=round(swing_low * 0.99, 2),
-                atr_dynamic_stop=round(spring_low * 0.975, 2) if spring_low > 0 else round(current_price * 0.94, 2),
+                conservative=round(spring_low * 0.99, 2),
+                aggressive=round(spring_low * 0.995, 2),
+                atr_dynamic_stop=round(spring_low - atr_val * 0.5, 2),
             )
         elif sos.get('detected') and not joc.get('detected') and not spring.get('detected'):
             direction = "做多"
             sos_price = _safe_get(sos, 'price', current_price)
             zone = f"{sos_price:.2f} 附近 (SOS突破)"
             lps_low = _get_lps_low(15)
-            cons_stop = min(lps_low, sos_price * 0.985)
+            cons_stop = min(lps_low, sos_price * 0.99)
             stop = StopLossModel(
                 conservative=round(cons_stop, 2),
-                aggressive=round(cons_stop * 0.98, 2),
-                atr_dynamic_stop=round(cons_stop - atr_val, 2),
+                aggressive=round(sos_price * 0.995, 2),
+                atr_dynamic_stop=round(cons_stop - atr_val * 0.5, 2),
             )
         elif fti.get('detected'):
             direction = "做空"
             ice = fti.get('ice_level', current_price)
             zone = f"{ice:.2f} 附近 (FTI跌破)"
             lpsy_high = _get_lpsy_high(15)
-            cons_stop = max(lpsy_high, ice * 1.015)
+            cons_stop = max(lpsy_high, ice * 1.01)
             stop = StopLossModel(
                 conservative=round(cons_stop, 2),
-                aggressive=round(cons_stop * 1.02, 2),
-                atr_dynamic_stop=round(cons_stop + atr_val, 2),
+                aggressive=round(ice * 1.005, 2), # 紧贴冰层上沿，一旦涨回立刻止损
+                atr_dynamic_stop=round(cons_stop + atr_val * 0.5, 2),
             )
         elif upthrust.get('detected'):
             direction = "做空"
             ut_high = _get_upthrust_high(upthrust)
-            swing_high = _get_swing_high(20)
+            if ut_high <= 0:
+                ut_high = current_price * 1.05
             zone = f"{current_price:.2f} 附近 (Upthrust诱多)"
+            # 刚性止损：突破 Upthrust 极值点则结构失效
             stop = StopLossModel(
-                conservative=round(ut_high * 1.02, 2) if ut_high > 0 else round(current_price * 1.04, 2),
-                aggressive=round(swing_high * 1.01, 2),
-                atr_dynamic_stop=round(ut_high + atr_val * 2, 2) if ut_high > 0 else round(current_price + atr_val * 2, 2),
+                conservative=round(ut_high * 1.01, 2),
+                aggressive=round(ut_high * 1.005, 2),
+                atr_dynamic_stop=round(ut_high + atr_val * 0.5, 2),
             )
         elif sow.get('detected') and not fti.get('detected') and not upthrust.get('detected'):
             direction = "做空"
             sow_price = _safe_get(sow, 'price', current_price)
             zone = f"{sow_price:.2f} 附近 (SOW跌破)"
             lpsy_high = _get_lpsy_high(15)
-            cons_stop = max(lpsy_high, sow_price * 1.015)
+            cons_stop = max(lpsy_high, sow_price * 1.01)
             stop = StopLossModel(
                 conservative=round(cons_stop, 2),
-                aggressive=round(cons_stop * 1.02, 2),
-                atr_dynamic_stop=round(cons_stop + atr_val, 2),
+                aggressive=round(sow_price * 1.005, 2),
+                atr_dynamic_stop=round(cons_stop + atr_val * 0.5, 2),
             )
 
         # ── 仓位建议 (Phase+风险导向) ──
@@ -678,8 +683,8 @@ class RecommendationEngine:
         )
 
     def generate_risk_advice(self, quality: SignalQualityModel, plan: TradingPlanModel,
-                            has_conflict: bool = False, conflict_details: str = "",
-                            market_env: MarketEnvironment = None) -> RiskAdviceModel:
+                             has_conflict: bool = False, conflict_details: str = "",
+                             market_env: MarketEnvironment = None, data: Any = None) -> RiskAdviceModel:
         """
         生成分层风险建议 (Enhanced with volatility check and conflict detection)
 
@@ -691,8 +696,8 @@ class RecommendationEngine:
         - 做空 + 强多头环境 → 绝对观望
         - 做多 + 强多头环境 → 顺水推舟，降低观望阈值
         """
-        score = quality.score
-        direction = plan.direction
+        score = getattr(quality, 'score', None) or (quality.get('score') if isinstance(quality, dict) else 0)
+        direction = getattr(plan, 'direction', None) or (plan.get('direction') if isinstance(plan, dict) else "观望")
 
         #  新增：检查方向与环境的冲突
         direction_env_conflict = False
@@ -710,87 +715,212 @@ class RecommendationEngine:
             elif direction == "做空" and is_market_bearish:
                 direction_env_match = True  # 做空 + 强空头 = 匹配
 
+        # 安全获取属性辅助函数
+        def _safe_get_stop(p_obj, field):
+            stop_obj = getattr(p_obj, 'stop_loss', None) or (p_obj.get('stop_loss') if isinstance(p_obj, dict) else None)
+            if not stop_obj: return 0.0
+            if isinstance(stop_obj, dict):
+                return float(stop_obj.get(field, 0.0))
+            return float(getattr(stop_obj, field, 0.0))
+
+        def _safe_get_pos(p_obj, field):
+            pos_obj = getattr(p_obj, 'position_sizing', None) or (p_obj.get('position_sizing') if isinstance(p_obj, dict) else None)
+            if not pos_obj: return "0%"
+            if isinstance(pos_obj, dict):
+                return str(pos_obj.get(field, "0%"))
+            return str(getattr(pos_obj, field, "0%"))
+
+        # 刚性止损提示说明
+        stop_desc = "无明确止损"
+        cons_stop_val = _safe_get_stop(plan, 'conservative')
+        if direction == "做多" and cons_stop_val > 0:
+            stop_desc = f"严格设于结构支撑/Spring极值点下方 {cons_stop_val:.2f} (结构失效位)"
+        elif direction == "做空" and cons_stop_val > 0:
+            stop_desc = f"严格设于结构阻力/Upthrust极值点上方 {cons_stop_val:.2f} (结构失效位)"
+
         def get_item(mode: str) -> RiskAdviceItem:
+            # 获取或动态计算对应的仓位
+            has_explicit_pos = False
+            if plan and isinstance(plan, dict) and 'position_sizing' in plan:
+                has_explicit_pos = True
+            elif plan and hasattr(plan, 'position_sizing') and getattr(plan, 'position_sizing') is not None:
+                has_explicit_pos = True
+
+            if not has_explicit_pos:
+                # 使用旧版默认基准仓位：保守 10%，稳健 15%，激进 20%
+                base_pct = 10.0 if mode == "conservative" else 15.0 if mode == "moderate" else 20.0
+                
+                # 如果传入了 data，则进行波动率与流动性风控计算
+                if data is not None and len(data) > 0:
+                    current_price = data['Close'].iloc[-1]
+                    atr = data['ATR'].iloc[-1] if 'ATR' in data.columns else current_price * 0.03
+                    vol_ma20 = data['Volume_MA20'].iloc[-1] if 'Volume_MA20' in data.columns else (data['Volume'].iloc[-1] if 'Volume' in data.columns else 1000000)
+                    
+                    # 1. 波动率仓位控制 (ATR Cap)
+                    atr_ratio = atr / current_price if current_price > 0 else 0.03
+                    vol_cap = 0.04  # 4% 限制阈值
+                    vol_multiplier = 1.0
+                    if atr_ratio > vol_cap:
+                        vol_multiplier = vol_cap / atr_ratio
+                        
+                    # 2. 流动性惩罚 (Volume MA20 Penalty)
+                    liq_threshold = 1000000.0  # 100万阈值
+                    liq_multiplier = 1.0
+                    if vol_ma20 < liq_threshold:
+                        liq_multiplier = vol_ma20 / liq_threshold
+                        
+                    # 复合调整 (取较小的乘数以保障安全)
+                    adjusted_pct = base_pct * min(vol_multiplier, liq_multiplier)
+                    
+                    # 判断是否触发了任何风控惩罚
+                    if vol_multiplier < 1.0 or liq_multiplier < 1.0:
+                        pos_desc = f"{adjusted_pct:.1f}% 仓位上限"
+                    else:
+                        pos_desc = f"{adjusted_pct:.1f}%"
+                else:
+                    pos_desc = f"{base_pct:.0f}%"
+            else:
+                pos_desc = _safe_get_pos(plan, mode)
+
             #  问题二修复：方向与环境冲突时，强制观望
             if direction_env_conflict:
                 env_name = market_env.value if hasattr(market_env, 'value') else str(market_env)
                 if mode == "conservative":
                     return RiskAdviceItem(
                         action="绝对观望",
-                        reason=f"方向与环境冲突：做空方向与{env_name}环境冲突，建议等待环境转弱或信号转向"
+                        reason=f"方向与环境冲突：{direction}方向与{env_name}环境冲突，建议等待环境转弱或信号转向",
+                        position="0%",
+                        stop_loss=stop_desc,
+                        entry_condition="等待大盘环境与交易方向一致"
                     )
                 elif mode == "moderate":
                     return RiskAdviceItem(
                         action="观望",
-                        reason=f"方向与环境冲突：做空方向与{env_name}环境冲突，建议等待"
+                        reason=f"方向与环境冲突：{direction}方向与{env_name}环境冲突，建议等待",
+                        position="0%",
+                        stop_loss=stop_desc,
+                        entry_condition="等待大盘环境转为中性或一致"
                     )
                 else:  # aggressive
                     return RiskAdviceItem(
                         action="等待信号",
-                        reason=f"方向与环境冲突：做空方向与{env_name}环境冲突，等待环境或信号明确"
+                        reason=f"方向与环境冲突：{direction}方向与{env_name}环境冲突，等待环境或信号明确",
+                        position="0%",
+                        stop_loss=stop_desc,
+                        entry_condition="等待高置信度日线强反转形态"
                     )
 
             # 关键修复：跨周期冲突时，所有方向的交易建议都应被抑制
             if has_conflict:
                 if mode == "conservative":
-                    return RiskAdviceItem(action="绝对观望", reason=f"跨周期冲突：{conflict_details}")
+                    return RiskAdviceItem(
+                        action="绝对观望", 
+                        reason=f"跨周期冲突：{conflict_details}",
+                        position="0%",
+                        stop_loss=stop_desc,
+                        entry_condition="等待高时间周期（周线/月线）趋势恢复一致"
+                    )
                 elif mode == "moderate":
-                    return RiskAdviceItem(action="观望", reason=f"跨周期冲突：{conflict_details}")
+                    return RiskAdviceItem(
+                        action="观望", 
+                        reason=f"跨周期冲突：{conflict_details}",
+                        position="0%",
+                        stop_loss=stop_desc,
+                        entry_condition="等待周期共振或明确的次级折返测试成功"
+                    )
                 else:  # aggressive
                     #  修复：跨周期冲突下激进仓位上限从15-20%严格降至5-10%
-                    # 理论依据：周月线双空头压制下，日线吸笹结构失败概率显著增加
-                    # 可能是下跌中继，而非真正吸笹。轻仓仅适合极短线快进快出。
                     return RiskAdviceItem(
                         action="极轻仓试错",
                         reason=(
                             f"跨周期冲突：{conflict_details}，等待日线级别明确信号。"
-                            "⚠️ 风险警告：高时间框空头压制下，日线吸笹结构有失效风险（可能是下跌中继）。"
+                            "⚠️ 风险警告：高时间框空头压制下，日线结构有失效风险（可能是下跌中继）。"
                             "如强行参与，仓位严格控制在5-10%，必须设好止损，极短线快进快出，不宜隔夜持仓。"
-                        )
+                        ),
+                        position="5-10%",
+                        stop_loss=stop_desc,
+                        entry_condition="日线级 Spring/UT 得到小周期量价配合确认"
                     )
 
             if direction == "观望":
-                return RiskAdviceItem(action="观望", reason="无清晰信号")
+                return RiskAdviceItem(
+                    action="观望", 
+                    reason="无清晰信号",
+                    position="0%",
+                    stop_loss=stop_desc,
+                    entry_condition="等待威科夫 Phase C 震仓或 Phase D 突破信号"
+                )
 
             #  问题二修复：方向与环境匹配时，降低观望阈值
             if direction_env_match:
                 if mode == "conservative":
-                    # 原本需要>=70分，现在降低到>=60分
                     action = "稳步参与" if score >= 60 else "观望"
                     reason = f"信号得分 {score}/100，且交易方向与市场环境一致（顺水推舟）"
-                    return RiskAdviceItem(action=action, reason=reason)
+                    return RiskAdviceItem(
+                        action=action, 
+                        reason=reason,
+                        position=pos_desc if action != "观望" else "0%",
+                        stop_loss=stop_desc,
+                        entry_condition="回试 Creek 或 Spring/UT 低点不破 + 缩量确认"
+                    )
                 elif mode == "moderate":
-                    # 原本需要>=50分，现在降低到>=40分
                     action = "按计划参与" if score >= 40 else "观望"
                     reason = f"信号得分 {score}/100，且交易方向与市场环境一致（顺水推舟）"
-                    return RiskAdviceItem(action=action, reason=reason)
+                    return RiskAdviceItem(
+                        action=action, 
+                        reason=reason,
+                        position=pos_desc if action != "观望" else "0%",
+                        stop_loss=stop_desc,
+                        entry_condition="结构内局部二测(ST)确认供应耗尽"
+                    )
                 else:  # aggressive
-                    # 激进策略：只要有20分以上就可以试错
                     if score >= 20:
                         action = "激进试错"
                         reason = f"信号得分 {score}/100，方向与环境一致，顺水推舟"
                     else:
                         action = "极轻仓试错"
                         reason = f"评分较低，严控止损，等待日线级别明确信号"
-                    return RiskAdviceItem(action=action, reason=reason)
+                    return RiskAdviceItem(
+                        action=action, 
+                        reason=reason,
+                        position=pos_desc,
+                        stop_loss=stop_desc,
+                        entry_condition="出现微观 VSA No-Supply/No-Demand 信号"
+                    )
 
             # 原有逻辑（方向与环境不明确匹配时）
             if mode == "conservative":
                 action = "稳步参与" if score >= 70 else "绝对观望"
-                return RiskAdviceItem(action=action, reason=f"信号得分 {score}/100")
+                return RiskAdviceItem(
+                    action=action, 
+                    reason=f"信号得分 {score}/100",
+                    position=pos_desc if action != "绝对观望" else "0%",
+                    stop_loss=stop_desc,
+                    entry_condition="Phase D 强势信号(SOS/JOC)放量突围且回踩不破"
+                )
             elif mode == "moderate":
                 action = "按计划参与" if score >= 50 else "观望"
-                return RiskAdviceItem(action=action, reason=f"信号得分 {score}/100")
+                return RiskAdviceItem(
+                    action=action, 
+                    reason=f"信号得分 {score}/100",
+                    position=pos_desc if action != "观望" else "0%",
+                    stop_loss=stop_desc,
+                    entry_condition="关键支撑/阻力位的 Spring/UT 震仓确认"
+                )
             else: # aggressive
-                # 关键修复：激进策略的"试错"方向应在体系内设定优先级
-                # 顺周线试错拿货（等Spring），优于逆周线试错砸盘（等LPSY）
                 if score >= 30:
                     action = "激进试错"
                     reason = f"信号得分 {score}/100，顺周线方向试错"
                 else:
                     action = "极轻仓试错"
                     reason = f"评分较低，严控止损，等待日线级别明确信号"
-                return RiskAdviceItem(action=action, reason=reason)
+                return RiskAdviceItem(
+                    action=action, 
+                    reason=reason,
+                    position=pos_desc,
+                    stop_loss=stop_desc,
+                    entry_condition="短线突破高潮/恐慌低吸且紧扣极值点设防"
+                )
 
         return RiskAdviceModel(
             conservative=get_item("conservative"),

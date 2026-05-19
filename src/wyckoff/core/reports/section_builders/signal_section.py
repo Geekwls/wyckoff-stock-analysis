@@ -116,7 +116,52 @@ class SignalSection(BaseSectionBuilder):
             sig = vsa.get(k, {})
             if sig.get('detected'):
                 d = sig['date'].strftime('%Y-%m-%d') if hasattr(sig.get('date'), 'strftime') else str(sig.get('date', ''))
-                vsa_lines.append(f"   {icon} {label}: {d} 量比{sig.get('vol_ratio', 0):.2f}x → 辅助确认")
+                quality_note = f" [{sig.get('quality', 'neutral').upper()}]" if sig.get('quality') else ""
+                vsa_lines.append(f"   {icon} {label}: {d} 量比{sig.get('vol_ratio', 0):.2f}x{quality_note}")
+                if sig.get('note'):
+                    vsa_lines.append(f"      └─ {sig['note']}")
+
+        # Bag Holding (接盘) 信号
+        bag = vsa.get('bag_holding', {})
+        if bag.get('detected'):
+            d = bag['date'].strftime('%Y-%m-%d') if hasattr(bag.get('date'), 'strftime') else str(bag.get('date', ''))
+            vsa_lines.append(f"   [🔥] Bag Holding（接盘）: {d} 量比{bag.get('vol_ratio', 0):.2f}x → 大资金全力进场接盘")
+
+        # Shakeout (震仓) 信号
+        shakeout = vsa.get('shakeout', {})
+        if shakeout.get('detected'):
+            d = shakeout['date'].strftime('%Y-%m-%d') if hasattr(shakeout.get('date'), 'strftime') else str(shakeout.get('date', ''))
+            depth = shakeout.get('depth', 0)
+            vsa_lines.append(f"   [⚡] Shakeout（震仓）: {d} 深度{depth:.1f}% → 剧烈洗盘后快速回收")
+
+        # Divergence (背离) 信号
+        divergence = vsa.get('divergence', {})
+        if divergence.get('detected'):
+            dtype = divergence.get('type', 'unknown')
+            d_label = '顶背离' if dtype == 'top_divergence' else '底背离' if dtype == 'bottom_divergence' else '背离'
+            conf = divergence.get('confidence', 0) * 100
+            vsa_lines.append(f"   [🔄] Divergence（{d_label}）: 置信度{conf:.0f}% → 趋势减弱信号")
+
+        # Volume Trend (成交量趋势)
+        vol_trend = vsa.get('volume_trend', {})
+        if vol_trend and vol_trend.get('trend') != 'unknown':
+            trend_labels = {
+                'expanding': ('📈', '放量趋势', '资金积极参与'),
+                'contracting': ('📉', '缩量趋势', '市场观望情绪'),
+                'stable': ('➡️', '成交量平稳', '市场处于平衡状态')
+            }
+            icon, tlabel, meaning = trend_labels.get(vol_trend.get('trend'), ('❓', vol_trend.get('trend', ''), ''))
+            strength = vol_trend.get('strength', 0)
+            vsa_lines.append(f"   {icon} {tlabel}: 强度{strength:.0f}/100 → {meaning}")
+
+        # WIE 3.0 微观结构信号
+        wie3_summary = vsa.get('wie3_summary', {})
+        if wie3_summary:
+            if wie3_summary.get('is_hidden_absorption'):
+                vsa_lines.append(f"   [🔍] Hidden Absorption（隐藏吸收）: EvR={wie3_summary.get('evr_divergence', 0):.2f}, CLV={wie3_summary.get('clv', 0):.2f} → 主力暗中吸收")
+            if wie3_summary.get('is_supply_dominance'):
+                vsa_lines.append(f"   [⚠️] Supply Dominance（供应主导）: Spread-Z={wie3_summary.get('spread_zscore', 0):.2f}, CLV={wie3_summary.get('clv', 0):.2f} → 供应占优")
+
         if vsa_lines:
             report += "\n📊 VSA辅助信号（量价微观分析）:\n" + "\n".join(vsa_lines) + "\n"
 

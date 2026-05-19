@@ -967,7 +967,7 @@ class PhaseTransitionCriteria:
     MIN_PHASE_D_DURATION = 7
 
 
-def _build_lps_sequence(events: dict, data: pd.DataFrame) -> list:
+def _build_lps_sequence(self, events: dict, data: pd.DataFrame) -> list:
     """
     构建 LPS 序列列表（最近30天内的所有LPS信号）
 
@@ -1001,7 +1001,7 @@ def _build_lps_sequence(events: dict, data: pd.DataFrame) -> list:
     return lps_list
 
 
-def _build_ut_sequence(events: dict, data: pd.DataFrame) -> list:
+def _build_ut_sequence(self, events: dict, data: pd.DataFrame) -> list:
     """
     构建 UT 序列列表（最近30天内的所有UT信号）
 

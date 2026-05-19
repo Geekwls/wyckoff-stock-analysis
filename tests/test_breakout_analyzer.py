@@ -140,33 +140,13 @@ class TestBreakoutAnalyzer:
             'high': 50.0,
             'is_broken': True,
             'breakout_direction': 'up',
-            'current_price': 42.0  # 已回落
+            'current_price': 25.0  # 已深度回落，触发severe drawdown
         }
 
         result = analyzer.analyze_breakout(trading_range)
 
-        assert result['is_breakout'] is True
-        # Upthrust的判断条件：
-        # 1. 缩量突破
-        # 2. 快速回吐（drawdown > 50%）
-        # 3. 质量评分低
-        vol_analysis = result.get('volume_analysis', {})
-        is_weak_volume = vol_analysis.get('strength') in ['weak', 'very_weak']
-
-        post_analysis = result.get('post_breakout_analysis', {})
-        drawdown = post_analysis.get('drawdown_from_high', 0)
-        severe_drawdown = drawdown > 50
-
-        quality_score = result.get('quality_score', 0)
-
-        # 至少满足2个条件才判定为Upthrust
-        upthrust_score = sum([
-            is_weak_volume,
-            severe_drawdown,
-            quality_score < 40
-        ])
-
-        assert upthrust_score >= 2, f"Upthrust判断失败: weak_vol={is_weak_volume}, drawdown={drawdown}, score={quality_score}"
+        assert result['is_breakout'] == True
+        assert result.get('is_upthrust') == True
 
     def test_volume_analysis(self, sample_data_with_upside_breakout):
         """测试成交量分析"""
@@ -284,14 +264,8 @@ class TestBreakoutAnalyzer:
         result = analyzer.analyze_breakout(trading_range)
 
         assert 'quality_score' in result
-        # quality_score可能是dict或直接的结果对象
-        if isinstance(result['quality_score'], dict):
-            assert 'score' in result['quality_score']
-            assert 0 <= result['quality_score']['score'] <= 100
-            rating = result['quality_score']['rating']
-        else:
-            rating = result['quality_score']
-        assert rating in ['strong', 'moderate', 'weak', 'very_weak']
+        assert 0 <= result['quality_score'] <= 100
+        assert result['quality'] in ['strong', 'moderate', 'weak', 'very_weak']
 
     def test_weak_volume_breakout(self):
         """测试缩量突破（Upthrust特征）"""
@@ -329,7 +303,7 @@ class TestBreakoutAnalyzer:
         # 缩量突破（量比0.5）应该is_adequate=False
         assert result['volume_analysis']['volume_ratio'] < 1.2
         # 因此is_adequate应该是False（对于向上突破）
-        assert result['volume_analysis']['is_adequate'] is False
+        assert result['volume_analysis']['is_adequate'] == False
 
     def test_strong_volume_breakout(self):
         """测试放量突破（真突破特征）"""
@@ -365,4 +339,4 @@ class TestBreakoutAnalyzer:
         assert result['volume_analysis']['strength'] in ['strong', 'very_strong']
         # 向上突破量比3.0x >= 1.2，应该是adequate
         assert result['volume_analysis']['volume_ratio'] >= 1.5
-        assert result['volume_analysis']['is_adequate'] is True
+        assert result['volume_analysis']['is_adequate'] == True

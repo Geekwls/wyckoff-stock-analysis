@@ -37,6 +37,11 @@ class MengPatternEnhancer(BaseDetector):
         return self.trend.detect_joc_enhanced()
 
     def detect_vsa_signals(self) -> Dict:
+        """孟洪涛增强版VSA信号检测（含成交量趋势上下文）"""
+        return self.vsa.detect_vsa_with_trend_context()
+
+    def detect_vsa_basic(self) -> Dict:
+        """基础VSA信号检测（不含趋势上下文）"""
         return self.vsa.detect_vsa_signals()
 
     def detect_boring_zone(self, window: int = 14) -> Dict:

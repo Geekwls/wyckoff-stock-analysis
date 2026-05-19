@@ -18,6 +18,64 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 from src.wyckoff.wyckoff_analyzer import WyckoffAnalyzer
 from src.wyckoff.config.settings import WyckoffConfig
+from src.wyckoff.core.pattern_detector import WyckoffPatternDetector
+from src.wyckoff.core.law_analyzer import WyckoffLawAnalyzer
+from src.wyckoff.core.multi_timeframe_analyzer import MultiTimeframeAnalyzer
+from src.wyckoff.core.relative_strength_analyzer import RelativeStrengthAnalyzer
+import numpy as np
+
+def mock_fetch_data(self, frequency: str = "1d") -> pd.DataFrame:
+    # 模拟一个非常好看的吸筹区间并伴有 Spring 和 JOC
+    dates = pd.date_range(start='2024-01-01', periods=200, freq='D')
+    prices = []
+    volumes = []
+    
+    base_price = 20.0
+    for i in range(200):
+        # 1-100天：在19.5 - 20.5区间震荡
+        if i < 100:
+            prices.append(20.0 + np.sin(i * 0.1) * 0.5)
+            volumes.append(1000000 + (i % 3) * 100000)
+        # 101-105天：跌破支撑位到 18.8 (Spring)，量极大，但最后拉回
+        elif i < 106:
+            prices.append(19.0 + (i - 100) * 0.2) # 拉回
+            volumes.append(2500000)
+        # 106-150天：温和反弹到 20.2 附近，量缩
+        elif i < 151:
+            prices.append(20.0 + (i - 106) * 0.005)
+            volumes.append(800000)
+        # 151-155天：跃过小溪 JOC，突破到 22.0，放量
+        elif i < 156:
+            prices.append(20.5 + (i - 150) * 0.4)
+            volumes.append(3000000)
+        # 156-200天：在22.0以上震荡回踩
+        else:
+            prices.append(22.0 + np.sin(i * 0.1) * 0.1)
+            volumes.append(1200000)
+
+    df = pd.DataFrame({
+        'Open': [p * 0.99 for p in prices],
+        'High': [p * 1.01 for p in prices],
+        'Low': [p * 0.98 for p in prices],
+        'Close': prices,
+        'Volume': volumes
+    }, index=dates)
+    
+    df['Volume_MA20'] = df['Volume'].rolling(20).mean().fillna(1000000.0)
+    df['MA20'] = df['Close'].rolling(20).mean().fillna(20.0)
+    df['MA50'] = df['Close'].rolling(50).mean().fillna(20.0)
+    df['MA200'] = df['Close'].rolling(200).mean().fillna(20.0)
+    df['ATR'] = (df['High'] - df['Low']).rolling(14).mean().fillna(0.4)
+    
+    self.data = df
+    self.pattern_detector = WyckoffPatternDetector(self.data, self.config, self._analysis_cache)
+    self.law_analyzer = WyckoffLawAnalyzer(self.data, self.config, self.pattern_detector)
+    self.mtf_analyzer = MultiTimeframeAnalyzer(self.data, self.pattern_detector)
+    self.rs_analyzer = RelativeStrengthAnalyzer(self.data, self.symbol)
+    
+    return self.data
+
+WyckoffAnalyzer.fetch_data = mock_fetch_data
 
 
 def test_spring_enhanced():

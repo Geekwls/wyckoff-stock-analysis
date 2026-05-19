@@ -296,6 +296,9 @@ class SignalQualityModel(BaseModel):
     confidence: str = Field(description="信心级别")
     reasons: List[str] = Field(default_factory=list, description="评分原因")
 
+    def __getitem__(self, item):
+        return getattr(self, item)
+
 
 # ============================================================
 # 交易计划模型
@@ -343,12 +346,18 @@ class RiskAdviceItem(BaseModel):
     stop_loss: Optional[str] = Field(default=None, description="止损")
     entry_condition: Optional[str] = Field(default=None, description="入场条件")
 
+    def __getitem__(self, item):
+        return getattr(self, item)
+
 
 class RiskAdviceModel(BaseModel):
     """风险分层建议"""
     conservative: RiskAdviceItem = Field(description="保守型")
     moderate: RiskAdviceItem = Field(description="稳健型")
     aggressive: RiskAdviceItem = Field(description="激进型")
+
+    def __getitem__(self, item):
+        return getattr(self, item)
 
 
 # ============================================================

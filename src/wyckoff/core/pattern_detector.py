@@ -250,7 +250,16 @@ class WyckoffPatternDetector:
             }
         #  缺隗6修复：传递TR数据，让子检测器能用TR上沿作为Creek水位
         tr = self.range_detector.detect()
-        return self.classic_detector.detect_joc(lookback, trading_range=tr)
+        joc_res = self.classic_detector.detect_joc(lookback, trading_range=tr)
+        
+        # 联动“吸收”检测，增强置信度
+        if joc_res.get('detected'):
+            absorption_res = self.detect_absorption()
+            if absorption_res.get('detected'):
+                joc_res['absorption_confirmed'] = True
+                joc_res['confidence'] = float(min(1.0, joc_res.get('confidence', 0.7) * 1.25))
+                joc_res['description'] = joc_res.get('description', '') + f" | 🌟 [主力强力吸收确认] 突破前有 {absorption_res['consecutive_days']} 天完美的蓄势吸收，此突破极大概率为真实突破 (JOC)"
+        return joc_res
 
     def detect_fti(self, lookback: int = 90) -> Dict:
         # 联动逻辑：如遇超卖刺穿+放量，则抑制普通 FTI，改报趋势耗尽
@@ -285,6 +294,12 @@ class WyckoffPatternDetector:
         # 构建 events_detected（供 scoring 引擎使用）
         # 直接使用原始检测 dict，避免 Pydantic 丢弃 volume_ratio 等字段
         raw = events.get('_raw_events', {})
+        
+        # 将独立的吸收检测加入 events
+        abs_res = self.detect_absorption()
+        if abs_res.get('detected'):
+            raw['absorption'] = abs_res
+            
         events_detected = {k: v for k, v in raw.items()
                            if isinstance(v, dict) and v.get('detected')}
         phase_result['events_detected'] = events_detected
@@ -366,15 +381,45 @@ class WyckoffPatternDetector:
     def detect_vsa_menhongtao(self) -> Dict:
         """
         孟洪涛VSA（Volume Spread Analysis）微观分析
+        集成孟洪涛增强信号 + 经典VSA信号（Bag Holding, Shakeout, Divergence）
         """
         try:
-            return self.meng_enhancer.detect_vsa_signals()
+            # 获取孟洪涛增强VSA信号（含成交量趋势上下文）
+            vsa_signals = self.meng_enhancer.detect_vsa_signals()
+
+            # 集成经典VSA信号
+            try:
+                bag_holding = self.classic_detector.detect_bag_holding()
+                vsa_signals['bag_holding'] = bag_holding
+            except Exception as e:
+                logger.debug(f"Bag Holding检测失败: {e}")
+                vsa_signals['bag_holding'] = {"detected": False}
+
+            try:
+                shakeout = self.classic_detector.detect_shakeout(self.sw_detector)
+                vsa_signals['shakeout'] = shakeout
+            except Exception as e:
+                logger.debug(f"Shakeout检测失败: {e}")
+                vsa_signals['shakeout'] = {"detected": False}
+
+            try:
+                divergence = self.classic_detector.detect_divergence()
+                vsa_signals['divergence'] = divergence
+            except Exception as e:
+                logger.debug(f"Divergence检测失败: {e}")
+                vsa_signals['divergence'] = {"detected": False}
+
+            return vsa_signals
         except Exception as e:
             logger.exception(f"VSA检测失败: {e}")
             return {
                 "no_supply": {"detected": False, "error": str(e)},
                 "no_demand": {"detected": False, "error": str(e)},
-                "stopping_vol": {"detected": False, "error": str(e)}
+                "stopping_vol": {"detected": False, "error": str(e)},
+                "bag_holding": {"detected": False},
+                "shakeout": {"detected": False},
+                "divergence": {"detected": False},
+                "volume_trend": {"trend": "unknown"}
             }
 
     def detect_boring_zone(self) -> Dict:
@@ -453,6 +498,17 @@ class WyckoffPatternDetector:
             sc_row = recent_data.loc[sc_idx]
             vol_ratio = sc_row['Volume'] / vol_ma.loc[sc_idx]
 
+            # 计算当时是否是 squat bar (蹲坐柱)
+            sc_vol = sc_row['Volume']
+            sc_spread = sc_row['High'] - sc_row['Low']
+            sc_vol_ma20 = vol_ma.loc[sc_idx]
+            sc_spread_ma20 = avg_range.loc[sc_idx] if not pd.isna(avg_range.loc[sc_idx]) else sc_spread
+            
+            is_sc_squat = (sc_vol > sc_vol_ma20 * 2.0) and (sc_spread < sc_spread_ma20 * 0.8)
+            sc_squat_dir = "none"
+            if is_sc_squat:
+                sc_squat_dir = "bullish" if sc_row['Close'] >= (sc_row['High'] + sc_row['Low']) / 2.0 else "bearish"
+
             #  修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
             sc_close_pos = (sc_row['Close'] - sc_row['Low']) / max(sc_row['High'] - sc_row['Low'], 1e-9)
             base_confidence = self._calculate_climax_confidence(vol_ratio, sc_close_pos)
@@ -461,10 +517,15 @@ class WyckoffPatternDetector:
             price_progress = (sc_row['Close'] - sc_row['Open']) / sc_row['Open']
             is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, sc_close_pos)
 
-            if warning:
-                logger.warning(f"[SC Effort vs Result] {warning}")
+            # 联动 Squat Bar：如果检测到看涨蹲坐柱，豁免背离惩罚并提升置信度
+            if is_sc_squat and sc_squat_dir == "bullish":
+                is_valid = True
+                penalty = 1.0  # 豁免惩罚
+                base_confidence = min(1.0, base_confidence * 1.15)
+                logger.info("[SC 蹲坐柱联动] 检测到看涨蹲坐柱作为SC，豁免背离惩罚并提升置信度")
 
-            confidence = base_confidence * penalty
+            if warning and not (is_sc_squat and sc_squat_dir == "bullish"):
+                logger.warning(f"[SC Effort vs Result] {warning}")
 
             confidence = base_confidence * penalty
 
@@ -504,6 +565,7 @@ class WyckoffPatternDetector:
             
             # 计算收盘位置分位和上影线比例
             range_size = recent_data['High'] - recent_data['Low']
+            avg_range = range_size.rolling(20).mean()
             close_pos = (recent_data['Close'] - recent_data['Low']) / range_size.replace(0, 1e-9)
             upper_shadow = recent_data['High'] - recent_data[['Open', 'Close']].max(axis=1)
             upper_shadow_ratio = upper_shadow / range_size.replace(0, 1e-9)
@@ -535,6 +597,18 @@ class WyckoffPatternDetector:
 
             bc_row = recent_data.loc[bc_idx]
             vol_ratio = bc_row['Volume'] / vol_ma.loc[bc_idx]
+
+            # 计算当时是否是 squat bar (蹲坐柱)
+            bc_vol = bc_row['Volume']
+            bc_spread = bc_row['High'] - bc_row['Low']
+            bc_vol_ma20 = vol_ma.loc[bc_idx]
+            bc_spread_ma20 = avg_range.loc[bc_idx] if not pd.isna(avg_range.loc[bc_idx]) else bc_spread
+            
+            is_bc_squat = (bc_vol > bc_vol_ma20 * 2.0) and (bc_spread < bc_spread_ma20 * 0.8)
+            bc_squat_dir = "none"
+            if is_bc_squat:
+                bc_squat_dir = "bullish" if bc_row['Close'] >= (bc_row['High'] + bc_row['Low']) / 2.0 else "bearish"
+
             #  修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
             bc_close_pos = (bc_row['Close'] - bc_row['Low']) / max(bc_row['High'] - bc_row['Low'], 1e-9)
             base_confidence = self._calculate_climax_confidence(vol_ratio, bc_close_pos)
@@ -543,10 +617,15 @@ class WyckoffPatternDetector:
             price_progress = (bc_row['Close'] - bc_row['Open']) / bc_row['Open']
             is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, bc_close_pos)
 
-            if warning:
-                logger.warning(f"[BC Effort vs Result] {warning}")
+            # 联动 Squat Bar：如果检测到看跌蹲坐柱，豁免背离惩罚并提升置信度
+            if is_bc_squat and bc_squat_dir == "bearish":
+                is_valid = True
+                penalty = 1.0  # 豁免惩罚
+                base_confidence = min(1.0, base_confidence * 1.15)
+                logger.info("[BC 蹲坐柱联动] 检测到看跌蹲坐柱作为BC，豁免背离惩罚并提升置信度")
 
-            confidence = base_confidence * penalty
+            if warning and not (is_bc_squat and bc_squat_dir == "bearish"):
+                logger.warning(f"[BC Effort vs Result] {warning}")
 
             confidence = base_confidence * penalty
 
@@ -922,4 +1001,89 @@ class WyckoffPatternDetector:
         except Exception as e:
             logger.exception(f"SOT检测失败: 未知异常: {e}")
             raise PatternDetectionError("SOT", f"未知异常: {e}") from e
+
+    def detect_absorption(self, lookback_days: int = 15) -> Dict:
+        """
+        检测独立的“吸收（Absorption）”行为
+        理论依据：大卫·维斯极度强调在阻力位（Creek）下方的吸收行为。
+        即价格紧贴阻力位，连续高量但拒绝显著回落，这是 JOC 之前最强的看涨前置信号。
+        """
+        try:
+            if self.data is None or len(self.data) < 20:
+                return {"detected": False, "reason": "insufficient_data"}
+
+            # 1. 寻找 Creek 水位 (阻力位)
+            tr = self.range_detector.detect()
+            if tr.get("is_consolidation") and tr.get("high") is not None:
+                creek_level = float(tr["high"])
+            else:
+                # 降级：使用近60日的高点作为 Creek 水位
+                creek_level = float(self.data['High'].tail(60).max())
+
+            df = self.data.tail(lookback_days).copy()
+            n = len(df)
+            if n < 3:
+                return {"detected": False, "reason": "insufficient_lookback"}
+
+            closes = df['Close'].values
+            highs = df['High'].values
+            lows = df['Low'].values
+            volumes = df['Volume'].values
+            
+            # 计算 20日均量与ATR
+            import numpy as np
+            vol_ma20_s = self.data['Volume_MA20'].values if 'Volume_MA20' in self.data.columns else self.data['Volume'].rolling(20).mean().values
+            atr_s = self.data['ATR'].values if 'ATR' in self.data.columns else (self.data['High'] - self.data['Low']).rolling(14).mean().values
+            
+            vol_ma = vol_ma20_s[-n:]
+            atr = atr_s[-n:]
+
+            # 我们要寻找是否有连续至少3天符合吸收特征的 K 线序列
+            is_near_creek = highs > creek_level * 0.95
+            is_high_volume = np.zeros(n, dtype=bool)
+            is_narrow_range = np.zeros(n, dtype=bool)
+            is_high_close = np.zeros(n, dtype=bool)
+            
+            for i in range(n):
+                v_ma = vol_ma[i] if not pd.isna(vol_ma[i]) else volumes[i]
+                a_val = atr[i] if not pd.isna(atr[i]) else (highs[i] - lows[i])
+                
+                is_high_volume[i] = volumes[i] > v_ma * 1.3  # 放宽到 1.3倍均量
+                is_narrow_range[i] = (highs[i] - lows[i]) < a_val * 0.85  # 窄幅，小于0.85倍ATR
+                is_high_close[i] = closes[i] >= (highs[i] + lows[i]) / 2.0  # 收盘中位以上
+                
+            is_absorption_bar = is_near_creek & is_high_volume & is_narrow_range & is_high_close
+            
+            # 寻找是否有连续 >= 3 天的 is_absorption_bar
+            consecutive_count = 0
+            best_streak = 0
+            end_idx = -1
+            
+            for i in range(n):
+                if is_absorption_bar[i]:
+                    consecutive_count += 1
+                    if consecutive_count > best_streak:
+                        best_streak = consecutive_count
+                        end_idx = i
+                else:
+                    consecutive_count = 0
+                    
+            if best_streak >= 3:
+                absorption_dates = [df.index[j] for j in range(end_idx - best_streak + 1, end_idx + 1)]
+                avg_vol_multiplier = float(np.mean(volumes[end_idx - best_streak + 1:end_idx + 1] / vol_ma[end_idx - best_streak + 1:end_idx + 1]))
+                
+                return {
+                    "detected": True,
+                    "creek_level": creek_level,
+                    "consecutive_days": best_streak,
+                    "dates": [d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d) for d in absorption_dates],
+                    "avg_volume_ratio": round(avg_vol_multiplier, 2),
+                    "confidence": float(min(1.0, 0.5 + (best_streak - 3) * 0.15 + (avg_vol_multiplier - 1.5) * 0.2)),
+                    "description": f"🎯 发现主力【蓄势吸收】特征：在阻力位 {creek_level:.2f} 下方连续 {best_streak} 天放量窄幅横盘，收盘强劲，说明所有抛盘已被多头主动蚕食吸收，即将向上跃过小溪 (JOC)"
+                }
+                
+            return {"detected": False, "reason": "no_consecutive_absorption_sequence"}
+        except Exception as e:
+            logger.exception(f"吸收检测失败: {e}")
+            return {"detected": False, "error": str(e)}
 

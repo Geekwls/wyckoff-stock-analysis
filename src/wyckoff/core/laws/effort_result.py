@@ -393,6 +393,7 @@ class EffortResultMixin:
         检测微观 VSA (Volume Spread Analysis) 关键确认信号
         - 无供应柱 (No Supply Bar): 收盘下跌，价差缩小，成交量低于前两日
         - 无需求柱 (No Demand Bar): 收盘上涨，价差缩小，成交量低于前两日
+        - 蹲坐柱 (Squat Bar): 巨量但窄幅，多空交锋剧烈 (看涨/看跌)
         """
         if self.data is None or len(self.data) < 5:
             return {"status": "insufficient_data"}
@@ -416,10 +417,38 @@ class EffortResultMixin:
         is_up_close = curr['Close'] > prev1['Close']
         no_demand = is_up_close and is_narrow_spread and is_low_volume
         
+        # 计算 20日均量与均价差以判定 Squat Bar (蹲坐柱)
+        full_df = self.data
+        if len(full_df) >= 20:
+            vol_ma20 = full_df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in full_df.columns else full_df['Volume'].rolling(20).mean().iloc[-1]
+            spreads = full_df['High'] - full_df['Low']
+            spread_ma20 = spreads.rolling(20).mean().iloc[-1]
+        else:
+            vol_ma20 = full_df['Volume'].mean()
+            spreads = full_df['High'] - full_df['Low']
+            spread_ma20 = spreads.mean()
+            
+        # Volume > Vol_MA20 * 2.0 且 价差 < 20日均价差 * 0.8
+        is_squat = (curr['Volume'] > vol_ma20 * 2.0) and (curr_spread < spread_ma20 * 0.8)
+        
+        squat_direction = "none"
+        desc_squat = ""
+        if is_squat:
+            mid_price = (curr['High'] + curr['Low']) / 2.0
+            if curr['Close'] >= mid_price:
+                squat_direction = "bullish"
+                desc_squat = "检测到看涨【蹲坐柱】(Squat Bar)：巨量窄幅且收于中高位，说明多空交锋剧烈，但下方的恐慌供应正在被主力吸收 (看涨)"
+            else:
+                squat_direction = "bearish"
+                desc_squat = "检测到看跌【蹲坐柱】(Squat Bar)：巨量窄幅且收于中低位，说明虽有巨量努力但无价格结果，需求已被庞大供应消耗 (看跌)"
+        
         signal = "none"
         desc = "未检测到微观VSA枯竭信号"
         
-        if no_supply:
+        if is_squat:
+            signal = "squat_bar"
+            desc = desc_squat
+        elif no_supply:
             signal = "no_supply"
             desc = "检测到【无供应柱】(No Supply)：缩量窄幅回落，供应枯竭，是二次测试(ST)或破底翻的绝佳微观确认"
         elif no_demand:
@@ -431,7 +460,9 @@ class EffortResultMixin:
             "signal": signal,
             "description": desc,
             "is_no_supply": bool(no_supply),
-            "is_no_demand": bool(no_demand)
+            "is_no_demand": bool(no_demand),
+            "is_squat_bar": bool(is_squat),
+            "squat_direction": squat_direction
         }
 
     def validate_climax_with_effort_result(

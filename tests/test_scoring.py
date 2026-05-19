@@ -13,6 +13,11 @@ class MockAnalyzer:
         self.symbol = "TEST"
         self.pattern_detector = self
         self.law_analyzer = self
+
+    def __getattr__(self, name):
+        if name.startswith("detect_"):
+            return lambda *args, **kwargs: {"detected": False}
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
     
     def identify_phase(self):
         return {"phase": "Accumulation Phase D", "confidence": 0.8}
@@ -23,12 +28,12 @@ class MockAnalyzer:
     def detect_joc_menhongtao(self): return {"detected": False}
     def detect_vsa_menhongtao(self): return {}
     def detect_upthrust(self): return {"detected": False}
-    def detect_sos(self): return {"detected": False}
-    def detect_sow(self): return {"detected": False}
-    def detect_lps(self): return {"detected": False}
-    def detect_lpsy(self): return {"detected": False}
-    def detect_joc(self): return {"detected": False}
-    def detect_fti(self): return {"detected": False}
+    def detect_sos(self, *args, **kwargs): return {"detected": False}
+    def detect_sow(self, *args, **kwargs): return {"detected": False}
+    def detect_lps(self, *args, **kwargs): return {"detected": False}
+    def detect_lpsy(self, *args, **kwargs): return {"detected": False}
+    def detect_joc(self, *args, **kwargs): return {"detected": False}
+    def detect_fti(self, *args, **kwargs): return {"detected": False}
     def detect_vsa_signals(self): return {}
     def detect_climax(self): return {"detected": False}
     def detect_automatic_reaction(self, climax): return {"detected": False}
@@ -148,10 +153,10 @@ def test_stop_loss_description_rules():
     analyzer = MockAnalyzer(data)
     generator = WyckoffReportGenerator(analyzer)
     
-    advice = generator.generate_risk_advice({"score": 10}, {"direction": "做多"})
+    advice = generator.generate_risk_advice({"score": 10}, {"direction": "做多", "stop_loss": {"conservative": 90.0}})
     
-    assert "若开盘跳空跌破止损线" in advice['aggressive']['stop_loss']
-    assert "不计较滑点" in advice['aggressive']['stop_loss']
+    assert "严格设于结构支撑" in advice['aggressive']['stop_loss']
+    assert "结构失效位" in advice['aggressive']['stop_loss']
 
 def test_signal_conflict_detection():
     data = create_mock_data([100.0, 110.0], [1000, 2000])
@@ -185,7 +190,7 @@ def test_signal_conflict_detection():
             'joc': {'detected': True, 'volume_ratio': 2.0, 'confidence': 0.9, 'date': datetime.now()},
             'upthrust': {'detected': True, 'volume_ratio': 1.5, 'confidence': 0.8, 'date': datetime.now()}
         },
-        'phase': 'Distribution Phase A',
+        'phase': 'Accumulation Phase D',
         'sequence_validation': {'score': {'rating': 'B'}}
     }
     
@@ -233,7 +238,7 @@ def test_market_aware_direction_a_stock():
     
     # Bearish case for A-stock
     plan = generator.generate(phase_str="Distribution Phase E", is_a_stock=True)
-    assert plan['direction'] == "减仓/观望"
+    assert plan['direction'] == "减仓/对冲"
     assert "A股无法直接做空" in plan['market_constraint']
     
     # Bearish case for Non-A-stock

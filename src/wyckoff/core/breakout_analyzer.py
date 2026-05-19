@@ -102,7 +102,7 @@ class BreakoutAnalyzer:
         )
 
         # 5. 判断是否为Upthrust（假突破）
-        is_upthrust = self._is_upthrust(vol_analysis, pullback_analysis, quality_score)
+        is_upthrust = self._is_upthrust(vol_analysis, post_breakout_analysis, quality_score)
 
         #  新增：检测Test of JOC（突破后的回测确认）
         joc_test_status = self._detect_joc_test(
@@ -302,7 +302,7 @@ class BreakoutAnalyzer:
     def _is_upthrust(
         self,
         vol_analysis: Dict,
-        pullback_analysis: Dict,
+        post_breakout_analysis: Dict,
         quality_score: Dict
     ) -> bool:
         """
@@ -318,7 +318,7 @@ class BreakoutAnalyzer:
         weak_volume = not vol_analysis.get('is_adequate', False)
 
         # 特征2：快速回吐（如果有足够数据）
-        drawdown = pullback_analysis.get('drawdown_from_high', 0)
+        drawdown = post_breakout_analysis.get('drawdown_from_high', 0)
         severe_drawdown = drawdown > 50  # 回吐超过50%
 
         # 特征3：质量评分低
