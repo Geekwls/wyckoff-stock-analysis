@@ -449,7 +449,9 @@ class ReversalDetector(BaseDetector):
         daily_ranges = highs[1:-1] - lows[1:-1]
         safe_ranges = np.where(daily_ranges == 0, 1.0, daily_ranges)
         close_positions = (closes[1:-1] - lows[1:-1]) / safe_ranges
-        high_close = close_positions >= 0.7
+        #  孟洪涛阈值：使用 MENG_SPRING_RECOVERY_CLOSE_POS 替代硬编码 0.7
+        recovery_close_threshold = self.thresholds.MENG_SPRING_RECOVERY_CLOSE_POS
+        high_close = close_positions >= recovery_close_threshold
         spring_candidates = valid_breakdown & recovery_mask & bullish_recovery & valid_volume & high_close
         candidate_indices = np.where(spring_candidates)[0]
         springs = []
@@ -528,7 +530,8 @@ class ReversalDetector(BaseDetector):
             if recovery_vol_r <= 1.0: continue
             nxt_range = nxt['High'] - nxt['Low']
             nxt_close_pos = (nxt['Close'] - nxt['Low']) / nxt_range if nxt_range > 0 else 0.5
-            if nxt_close_pos < 0.7: continue
+            #  孟洪涛阈值：使用 MENG_SPRING_RECOVERY_CLOSE_POS 替代硬编码 0.7
+            if nxt_close_pos < self.thresholds.MENG_SPRING_RECOVERY_CLOSE_POS: continue
             follow_score = self._calculate_spring_follow_score(nxt, d2)
             recovery_pct = (nxt['Close'] - support) / support * 100 if support > 0 else 0
             actual_recovery_days = self._count_recovery_days(recent, i, support)
@@ -818,3 +821,75 @@ def _unify_quality_score(spring_or_ut_result: dict) -> int:
     # 根据置信度微调
     confidence = spring_or_ut_result.get('confidence', 0.5)
     return min(int(base_score + confidence * 15), 100)
+
+    def detect_stopping_volume(self) -> Dict:
+        """
+        检测停止成交量 (Stopping Volume)
+
+        孟洪涛理论：在吸筹末期，出现异常放量的长下影线K线
+        - 量能显著放大（>平均量的1.5倍）
+        - 实体较小（<波段的30%）
+        - 下影线较长（>波段的30%）
+        - 收盘位置较高（>波段中点）
+
+        Returns:
+            {
+                'detected': bool,
+                'date': timestamp,
+                'volume_ratio': float,
+                'body_ratio': float,
+                'shadow_ratio': float,
+                'close_position': float
+            }
+        """
+        if self.data is None or len(self.data) < 20:
+            return {'detected': False, 'reason': 'insufficient_data'}
+
+        df = self.data.tail(40).copy()
+        vol_ma = df['Volume'].rolling(20).mean()
+
+        stopping_signals = []
+
+        for idx in df.index:
+            row = df.loc[idx]
+            vol_ratio = row['Volume'] / vol_ma.loc[idx] if pd.notna(vol_ma.loc[idx]) else 1.0
+
+            # 波段计算
+            rng = row['High'] - row['Low']
+            if rng <= 0:
+                continue
+
+            body = abs(row['Close'] - row['Open'])
+            lower_shadow = min(row['Close'], row['Open']) - row['Low']
+            upper_shadow = row['High'] - max(row['Close'], row['Open'])
+
+            body_ratio = body / rng
+            lower_shadow_ratio = lower_shadow / rng
+            close_position = (row['Close'] - row['Low']) / rng
+
+            # 孟洪涛阈值判断
+            has_stopping_volume = vol_ratio >= self.thresholds.MENG_STOPPING_VOL_RATIO
+            has_small_body = body_ratio <= self.thresholds.MENG_STOPPING_BODY_RATIO
+            has_lower_shadow = lower_shadow_ratio >= self.thresholds.MENG_STOPPING_SHADOW_RATIO
+            high_close = close_position >= self.thresholds.MENG_VSA_CLOSE_POS
+
+            if has_stopping_volume and has_small_body and (has_lower_shadow or high_close):
+                stopping_signals.append({
+                    'date': idx,
+                    'volume_ratio': round(vol_ratio, 2),
+                    'body_ratio': round(body_ratio, 3),
+                    'shadow_ratio': round(lower_shadow_ratio, 3),
+                    'close_position': round(close_position, 3)
+                })
+
+        if not stopping_signals:
+            return {'detected': False, 'signals': []}
+
+        # 返回最新的信号
+        latest = stopping_signals[-1]
+        return {
+            'detected': True,
+            **latest,
+            'all_signals': stopping_signals,
+            'signal_count': len(stopping_signals)
+        }
