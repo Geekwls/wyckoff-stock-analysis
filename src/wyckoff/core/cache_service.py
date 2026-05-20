@@ -25,6 +25,7 @@ from typing import Any, Optional, Dict, Callable
 from datetime import datetime, timedelta
 from collections import OrderedDict
 import logging
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -487,6 +488,79 @@ class LegacyLRUAdapter:
             self._cache_service.delete(self._namespace, *self._parts(key))
             return
         self._cache_service.invalidate_namespace(self._namespace)
+
+
+class IndexDataCache:
+    """
+    指数数据全局缓存 (P1.1)
+
+    解决问题：在批量扫描时，每只股票都会独立创建 WyckoffAnalyzer 并 fetch 指数数据，
+    导致同一指数（如 sh.000001）被重复请求 N 次。
+
+    用法：
+        cache = IndexDataCache()
+        # 在 batch_scan 入口处预加载
+        cache.prefetch_index_data("sh.000001", "1y", fetch_fn)
+        # 在 WyckoffAnalyzer 中获取
+        df = cache.get_index_data("sh.000001", "1y")
+    """
+
+    def __init__(self):
+        self._cache: Dict[str, pd.DataFrame] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _make_key(symbol: str, period: str) -> str:
+        return f"{symbol}:{period}"
+
+    def get_index_data(self, symbol: str, period: str) -> Optional[pd.DataFrame]:
+        """获取缓存的指数数据"""
+        key = self._make_key(symbol, period)
+        with self._lock:
+            return self._cache.get(key)
+
+    def set_index_data(self, symbol: str, period: str, data: pd.DataFrame):
+        """缓存指数数据"""
+        key = self._make_key(symbol, period)
+        with self._lock:
+            self._cache[key] = data
+
+    def prefetch_index_data(self, symbol: str, period: str, fetch_fn) -> Optional[pd.DataFrame]:
+        """
+        预加载指数数据（若已缓存则直接返回）
+
+        Args:
+            symbol: 指数代码
+            period: 数据周期
+            fetch_fn: 数据获取函数，签名为 (symbol, period) -> (resolved_symbol, DataFrame)
+
+        Returns:
+            DataFrame 或 None
+        """
+        cached = self.get_index_data(symbol, period)
+        if cached is not None:
+            logger.debug(f"指数数据已缓存: {symbol} {period}")
+            return cached
+
+        try:
+            resolved, data = fetch_fn(symbol, period)
+            if data is not None and not data.empty:
+                self.set_index_data(resolved, period, data)
+                logger.info(f"指数数据预加载完成: {resolved} {period}")
+                return data
+        except Exception as e:
+            logger.warning(f"指数数据预加载失败 {symbol}: {e}")
+        return None
+
+    def clear(self):
+        """清空所有缓存"""
+        with self._lock:
+            self._cache.clear()
+
+    @property
+    def size(self) -> int:
+        with self._lock:
+            return len(self._cache)
 
 
 class CachedDataFetcher:

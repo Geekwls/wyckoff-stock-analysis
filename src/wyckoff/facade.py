@@ -8,6 +8,7 @@ Wyckoff Analyzer - Facade for Orchestrator and Detectors
 """
 
 import pandas as pd
+import numpy as np
 import logging
 from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
 from datetime import datetime
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 # 库层内部导入
 from .config.settings import WyckoffConfig, WyckoffThresholds
 from .core.enums import MarketEnvironment, WyckoffPhase
-from .core.cache_service import CacheService
+from .core.cache_service import CacheService, IndexDataCache
 from .core.orchestrator import WyckoffOrchestrator
 from .core.pattern_detector import WyckoffPatternDetector
 from .core.law_analyzer import WyckoffLawAnalyzer
@@ -29,8 +30,23 @@ from .core.report_generator import WyckoffReportGenerator
 from .core.point_and_figure import PointAndFigureCalculator, calculate_cause_effect_from_pnf
 from .core.sos_sow_analyzer import SOSSOWAnalyzer
 from .core.market_context_analyzer import MarketContextAnalyzer
+from .exceptions import (
+    WyckoffError, DataError, CalculationError, PatternNotFoundError,
+    DataFetchError, InsufficientDataError
+)
 
 logger = logging.getLogger(__name__)
+
+
+class _IndexDataWrapper:
+    """
+    轻量级指数数据包装器 (P1.1)
+
+    当使用共享 IndexDataCache 时，不需要创建完整的 WyckoffAnalyzer 实例，
+    只需要一个提供 .data 属性的对象即可。
+    """
+    def __init__(self, data: pd.DataFrame):
+        self.data = data
 
 
 class WyckoffAnalyzer:
@@ -49,10 +65,12 @@ class WyckoffAnalyzer:
         period: str = "1y",
         config: WyckoffConfig = None,
         cache_service: Optional[CacheService] = None,
+        index_data_cache: Optional['IndexDataCache'] = None,
     ):
         self.symbol = symbol
         self.period = period
         self.config = config or WyckoffConfig()
+        self.index_data_cache = index_data_cache
         
         # 提取市场类型并注入动态阈值系统
         from .core.symbol_resolver import SymbolResolver
@@ -209,28 +227,46 @@ class WyckoffAnalyzer:
                 df_rs['idx_log_return'] = 0.0
                 df_rs['asset_log_return'] = 0.0
 
-            # 6. 状态机推演 (序列化更新，从头遍历以累积贝叶斯后验)
+            # 6. 状态机推演 (P1.2: 向量化批量更新)
             # 必须重置状态机，确保每次 analyze 都是从先验开始，而不是从上次的脏状态开始
             from .core.state_engine import EventDrivenStateEngine
             self.wie3_state_engine = EventDrivenStateEngine()
 
             n_rows = len(df_rs)
-            for i in range(n_rows):
-                row_dict = df_rs.iloc[i].to_dict()
-                row_dict['close'] = self.data['Close'].iloc[i] if 'Close' in self.data.columns else row_dict.get('close', 0)
-                
-                v_dict = df_vsa.iloc[i].to_dict()
-                a_dict = df_aps.iloc[i].to_dict()
-                rg_dict = df_regime.iloc[i].to_dict()
-                rs_dict = df_rs.iloc[i].to_dict()
-                
-                # 兼容旧逻辑
-                if 'event_flag' not in rg_dict:
-                    rg_dict['event_flag'] = 'NORMAL'
-                
-                self.wie3_market_state = self.wie3_state_engine.update(
-                    row_dict, v_dict, a_dict, rg_dict, rs_dict
-                )
+            
+            # 准备向量化输入数组
+            closes = self.data['Close'].values if 'Close' in self.data.columns else df_rs['close'].values
+            aps_vals = df_aps['aps'].values if 'aps' in df_aps.columns else np.zeros(n_rows)
+            cds_vals = df_regime['cds'].values if 'cds' in df_regime.columns else np.zeros(n_rows)
+            lcs_vals = df_regime['lcs'].values if 'lcs' in df_regime.columns else np.zeros(n_rows)
+            vpocs = df_regime['vpoc_price'].values if 'vpoc_price' in df_regime.columns else np.zeros(n_rows)
+            exp_effs = df_vsa['expansion_efficiency'].values if 'expansion_efficiency' in df_vsa.columns else np.zeros(n_rows)
+            clvs = df_vsa['clv'].values if 'clv' in df_vsa.columns else np.zeros(n_rows)
+            retentions = df_rs['liquidity_retention'].values if 'liquidity_retention' in df_rs.columns else np.ones(n_rows)
+            hs = df_rs['hidden_strength'].values if 'hidden_strength' in df_rs.columns else np.zeros(n_rows, dtype=bool)
+            hw = df_rs['hidden_weakness'].values if 'hidden_weakness' in df_rs.columns else np.zeros(n_rows, dtype=bool)
+            
+            # 处理 event_flag
+            if 'event_flag' in df_regime.columns:
+                event_flags = df_regime['event_flag'].astype(str).tolist()
+            else:
+                event_flags = ['NORMAL'] * n_rows
+            
+            # 处理 timestamps
+            if hasattr(df_rs.index, 'strftime'):
+                timestamps = [str(idx) for idx in df_rs.index]
+            else:
+                timestamps = [str(i) for i in range(n_rows)]
+            
+            # 执行向量化批量更新
+            all_states = self.wie3_state_engine.batch_update(
+                closes, aps_vals, cds_vals, lcs_vals, vpocs,
+                exp_effs, clvs, retentions, hs, hw, event_flags, timestamps
+            )
+            
+            # 取最后一个状态作为最终结果
+            if all_states:
+                self.wie3_market_state = all_states[-1]
 
             logger.info(
                 f"[WIE 3.0 MVP] 状态机序列推演完成: {self.wie3_market_state.regime} "
@@ -240,8 +276,15 @@ class WyckoffAnalyzer:
 
             return self.wie3_market_state
 
-        except Exception as e:
+        except (DataError, CalculationError) as e:
             logger.error(f"[WIE 3.0 MVP] 微观结构分析失败: {e}", exc_info=True)
+            if not self.config.silent_fail:
+                raise
+            return None
+        except Exception as e:
+            logger.error(f"[WIE 3.0 MVP] 未知异常: {e}", exc_info=True)
+            if not self.config.silent_fail:
+                raise CalculationError("WIE3_MVP", str(e)) from e
             return None
 
     def get_wie3_summary(self) -> Dict[str, Any]:
@@ -339,6 +382,8 @@ class WyckoffAnalyzer:
                 if wie3_state:
                     bg_regime = wie3_state.regime
                     bg_entropy = round(float(wie3_state.state_entropy), 4)
+            except (DataError, CalculationError):
+                logger.warning("[WIE 3.0 MVP] 微观结构分析辅助失败 (数据/计算错误)")
             except Exception as e:
                 logger.warning(f"[WIE 3.0 MVP] 微观结构分析辅助失败: {e}")
 
@@ -355,9 +400,15 @@ class WyckoffAnalyzer:
                 'background_entropy': bg_entropy,
             }, ensure_ascii=False, indent=2)
 
+        except (DataError, CalculationError, PatternNotFoundError) as e:
+            import json as _json
+            return _json.dumps({'error': str(e), 'symbol': self.symbol, 'error_type': type(e).__name__}, ensure_ascii=False)
         except Exception as e:
             import json as _json
-            return _json.dumps({'error': str(e), 'symbol': self.symbol}, ensure_ascii=False)
+            logger.exception(f"generate_phase_json 未知异常: {e}")
+            if not self.config.silent_fail:
+                raise
+            return _json.dumps({'error': f"Unexpected: {e}", 'symbol': self.symbol}, ensure_ascii=False)
 
     def generate_levels_json(self) -> str:
         """
@@ -413,6 +464,8 @@ class WyckoffAnalyzer:
                             'derivation': 'max_high_in_60d_range',
                             'note': '前期交易区间上沿阻力位'
                         }
+            except (DataError, CalculationError):
+                logger.warning("SOS关键确认位获取失败 (数据/计算错误)")
             except Exception:
                 pass
 
@@ -430,9 +483,15 @@ class WyckoffAnalyzer:
                 'atr': round(atr, 3),
             }, ensure_ascii=False, indent=2)
 
+        except (DataError, CalculationError, PatternNotFoundError) as e:
+            import json as _json
+            return _json.dumps({'error': str(e), 'symbol': self.symbol, 'error_type': type(e).__name__}, ensure_ascii=False)
         except Exception as e:
             import json as _json
-            return _json.dumps({'error': str(e), 'symbol': self.symbol}, ensure_ascii=False)
+            logger.exception(f"generate_levels_json 未知异常: {e}")
+            if not self.config.silent_fail:
+                raise
+            return _json.dumps({'error': f"Unexpected: {e}", 'symbol': self.symbol}, ensure_ascii=False)
 
     def generate_conflict_json(self) -> str:
         """
@@ -468,9 +527,15 @@ class WyckoffAnalyzer:
             
             return _json.dumps(res, ensure_ascii=False, indent=2)
             
+        except (DataError, CalculationError, PatternNotFoundError) as e:
+            import json as _json
+            return _json.dumps({'error': str(e), 'symbol': self.symbol, 'error_type': type(e).__name__}, ensure_ascii=False)
         except Exception as e:
             import json as _json
-            return _json.dumps({'error': str(e), 'symbol': self.symbol}, ensure_ascii=False)
+            logger.exception(f"generate_conflict_json 未知异常: {e}")
+            if not self.config.silent_fail:
+                raise
+            return _json.dumps({'error': f"Unexpected: {e}", 'symbol': self.symbol}, ensure_ascii=False)
 
     # ----------------------------------------------------------
     # 代理旧方法 (为了兼容性)
@@ -483,7 +548,7 @@ class WyckoffAnalyzer:
         """检测交易区间"""
         return self.pattern_detector.detect_trading_range()
 
-    def _get_baseline_index_symbol(self) -> str:
+    def _get_baseline_index_symbol(self) -> Optional[str]:
         """
         获取基准指数代码
         
@@ -493,9 +558,25 @@ class WyckoffAnalyzer:
         - 深证主板：000/001/002/003开头 → sz.399001 (深证成指)
         - 创业板：300/301开头 → sz.399006 (创业板指)
         - 北交所：8/4开头 → bj.899050 (北证50)
+        
+        返回 None 如果当前标的本身就是指数（避免递归分析）
         """
         from .core.symbol_resolver import SymbolResolver, MarketType
         info = SymbolResolver().resolve(self.symbol)
+        
+        # 指数代码白名单 (避免递归分析)
+        INDEX_SYMBOLS = {
+            'sh.000001', 'sh.000300', 'sh.000688', 'sh.000016',
+            'sz.399001', 'sz.399006', 'sz.399005', 'sz.399673',
+            'bj.899050',
+            '^HSI', '^GSPC', '^DJI', '^IXIC',  # 港股/美股指数
+            'BTC-USD', 'ETH-USD',  # 加密货币基准
+        }
+        
+        normalized = info.normalized if hasattr(info, 'normalized') else self.symbol
+        if normalized in INDEX_SYMBOLS or self.symbol in INDEX_SYMBOLS:
+            return None
+        
         if info.market == MarketType.A_SHARE:
             code = info.normalized.split('.')[-1]
             prefix = info.normalized.split('.')[0]
@@ -551,6 +632,13 @@ class WyckoffAnalyzer:
             context_analyzer = MarketContextAnalyzer(idx_analyzer.data, index_symbol)
             return context_analyzer.analyze()
             
+        except (DataError, CalculationError) as e:
+            logger.warning(f"专家级市场环境分析失败 (数据/计算错误): {e}")
+            return {
+                "environment": MarketEnvironment.UNKNOWN,
+                "reason": f"数据异常: {str(e)}",
+                "index_symbol": self._get_baseline_index_symbol()
+            }
         except Exception as e:
             logger.warning(f"专家级市场环境分析失败: {e}")
             return {
@@ -586,6 +674,9 @@ class WyckoffAnalyzer:
         if self.pattern_detector:
             try:
                 phase_result = self.identify_phase()
+            except (DataError, CalculationError, PatternNotFoundError) as e:
+                logger.warning(f'Phase识别失败 (数据/计算错误): {e}')
+                phase_result = {'phase': 'unknown'}
             except Exception as e:
                 logger.warning(f'Failed to identify phase in multi-timeframe view, fallback to unknown: {e}')
                 phase_result = {'phase': 'unknown'}
@@ -627,12 +718,28 @@ class WyckoffAnalyzer:
             return self._index_analyzer_cache
 
         index_symbol = self._get_baseline_index_symbol()
+        if index_symbol is None:
+            logger.debug(f"当前标的 {self.symbol} 为指数，跳过基准指数分析")
+            return None
+        
         try:
-            # 创建指数分析器（注意：避免递归创建指数的指数）
+            # 优先使用共享指数缓存 (P1.1)
+            if self.index_data_cache is not None:
+                index_df = self.index_data_cache.get_index_data(index_symbol, self.period)
+                if index_df is not None:
+                    logger.debug(f"使用共享指数缓存: {index_symbol}")
+                    # 创建一个轻量级包装器，只提供 .data 属性
+                    self._index_analyzer_cache = _IndexDataWrapper(index_df)
+                    return self._index_analyzer_cache
+
+            # 回退：创建完整的指数分析器
             idx_analyzer = WyckoffAnalyzer(index_symbol, self.period, self.config, self.cache_service)
             idx_analyzer.fetch_data()
             self._index_analyzer_cache = idx_analyzer
             return idx_analyzer
+        except (DataError, CalculationError) as e:
+            logger.warning(f"指数分析器初始化失败 {index_symbol}: {e}")
+            return None
         except Exception as e:
             logger.warning(f"Failed to initialize index analyzer for {index_symbol}: {e}")
             return None
@@ -713,11 +820,13 @@ class WyckoffAnalyzer:
                 'theory': '威科夫因果法则：水平积累宽度 × 波动率收缩 → 垂直目标'
             }
 
-        except Exception as e:
-            logger.warning(f"点数图计算失败，使用备用方法: {e}")
+        except (DataError, CalculationError) as e:
+            logger.warning(f"点数图计算失败 (数据/计算错误): {e}")
+            if not self.config.silent_fail:
+                raise
             cause_bars = tr.get('consolidation_duration_days', 40)
-            base_price = tr['high']
-            price_range = tr['high'] - tr['low']
+            base_price = tr.get('high', 0)
+            price_range = tr.get('high', 0) - tr.get('low', 0)
             potential_move = price_range * 1.0
 
             return {

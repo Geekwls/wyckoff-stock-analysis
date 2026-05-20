@@ -10,10 +10,11 @@ import pandas as pd
 
 from ..facade import WyckoffAnalyzer
 from ..config.settings import WyckoffConfig
-from ..exceptions import AnalysisError
+from ..exceptions import AnalysisError, DataError, CalculationError, PatternNotFoundError
 from ..core.recommendation_engine import RecommendationEngine
 from ..core.enums import MarketEnvironment
 from ..core.utils import PhaseAdapter
+from ..core.cache_service import IndexDataCache
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class ScreenerService:
         """
         self.config = config or WyckoffConfig()
         self._analyzers: Dict[str, WyckoffAnalyzer] = {}
+        self._index_cache = IndexDataCache()  # P1.1: 全局指数数据缓存
         self.rec_engine = RecommendationEngine(self.config)
     
     def quick_scan(self, symbols: List[str], period: str = "1y",
@@ -87,6 +89,9 @@ class ScreenerService:
                     if result.get('strength', 0) >= 1:
                         self._print_signal(result)
                         
+                except (DataError, CalculationError) as exc:
+                    logger.warning("quick_scan: 数据/计算错误跳过 %s: %s", futures[future], exc)
+                    failed_symbols.append(f"{futures[future]}: DataError/CalculationError - {exc}")
                 except Exception as exc:
                     logger.warning("quick_scan: 跳过失败的股票: %s", exc)
                     failed_symbols.append(str(exc))
@@ -127,7 +132,7 @@ class ScreenerService:
     
     def _scan_single(self, symbol: str, period: str) -> Dict:
         """
-        扫描单个股票
+        扫描单个股票 (P1.1: 使用共享指数缓存)
         
         Args:
             symbol: 股票代码
@@ -137,7 +142,10 @@ class ScreenerService:
             扫描结果
         """
         try:
-            analyzer = WyckoffAnalyzer(symbol, period, self.config)
+            analyzer = WyckoffAnalyzer(
+                symbol, period, self.config,
+                index_data_cache=self._index_cache  # P1.1: 注入共享缓存
+            )
             
             data = analyzer.fetch_data()
             if data is None or data.empty:
@@ -163,20 +171,46 @@ class ScreenerService:
                 'is_late_stage': PhaseAdapter.is_late_stage(phase_res.get('phase_enum'))
             }
             
+        except (DataError, CalculationError) as exc:
+            raise DataError(f"扫描 {symbol} 失败: {str(exc)}", symbol=symbol) from exc
         except Exception as exc:
             raise AnalysisError(f"扫描 {symbol} 失败: {str(exc)}") from exc
     
     def _load_stocks(self, symbols: List[str], period: str):
-        """加载股票数据"""
+        """加载股票数据 (P1.1: 使用共享指数缓存)"""
         self._analyzers.clear()
+        self._index_cache.clear()
+
+        # 预加载常用指数数据
+        common_indices = ["sh.000001", "sz.399001", "sz.399006", "sh.000688"]
+        for idx_symbol in common_indices:
+            self._prefetch_index_if_needed(idx_symbol, period)
         
         for symbol in symbols:
             try:
-                analyzer = WyckoffAnalyzer(symbol, period, self.config)
+                analyzer = WyckoffAnalyzer(
+                    symbol, period, self.config,
+                    index_data_cache=self._index_cache  # P1.1: 注入共享缓存
+                )
                 if analyzer.fetch_data() is not None:
                     self._analyzers[symbol] = analyzer
+            except (DataError, CalculationError) as e:
+                logger.warning("加载 %s 失败 (数据/计算错误): %s", symbol, e)
             except Exception as e:
                 logger.warning("加载 %s 失败: %s", symbol, e)
+
+    def _prefetch_index_if_needed(self, index_symbol: str, period: str):
+        """预加载指数数据（如果缓存中不存在）"""
+        if self._index_cache.get_index_data(index_symbol, period) is None:
+            try:
+                from ..core.data_fetcher import WyckoffDataFetcher
+                fetcher = WyckoffDataFetcher(self.config)
+                resolved, data = fetcher.fetch_data(index_symbol, period)
+                if data is not None and not data.empty:
+                    self._index_cache.set_index_data(resolved, period, data)
+                    logger.info(f"指数数据预加载: {resolved}")
+            except Exception as e:
+                logger.debug(f"指数预加载跳过 {index_symbol}: {e}")
     
     def _screen_accumulation(self) -> List[Dict]:
         """筛选处于积累期（特别是 C/D 阶段）的股票"""

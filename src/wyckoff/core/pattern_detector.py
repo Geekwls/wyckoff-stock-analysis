@@ -16,7 +16,10 @@ from ..schemas import (
     SosModel, SowModel, LpsModel, LpsyModel, TradingRangeModel,
     JocModel, FtiModel
 )
-from ..exceptions import PatternDetectionError, AnalysisError
+from ..exceptions import (
+    PatternDetectionError, PatternNotFoundError, AnalysisError,
+    DataError, MissingFieldError, CalculationError
+)
 from .utils import TypeConverter
 import logging
 
@@ -436,207 +439,182 @@ class WyckoffPatternDetector:
         """检测初次供应 (Preliminary Supply, PSY)"""
         return self.meng_enhancer.detect_preliminary_supply(lookback)
 
+    def _handle_detection_error(self, pattern_type: str, exc: Exception) -> Dict:
+        """
+        统一异常处理逻辑 (P0 重构)
+
+        根据 silent_fail 配置决定是抛出异常还是返回降级结果。
+        """
+        if isinstance(exc, (DataError, MissingFieldError)):
+            # 数据层错误：始终向上传播，除非开启静默模式
+            if self.config.silent_fail:
+                logger.error(f"[{pattern_type}] 数据异常 (静默模式): {exc}")
+                return {"detected": False, "error": f"DataError: {exc}", "error_code": exc.error_code.value}
+            raise exc
+        elif isinstance(exc, (CalculationError, PatternDetectionError)):
+            # 计算/逻辑错误：始终向上传播
+            if self.config.silent_fail:
+                logger.error(f"[{pattern_type}] 计算异常 (静默模式): {exc}")
+                return {"detected": False, "error": str(exc)}
+            raise
+        elif isinstance(exc, PatternNotFoundError):
+            # 业务性"无信号"：返回正常结果
+            return {"detected": False, "reason": exc.reason}
+        else:
+            # 未知异常
+            if self.config.silent_fail:
+                logger.exception(f"[{pattern_type}] 未知异常 (静默模式): {exc}")
+                return {"detected": False, "error": f"Unexpected: {exc}"}
+            raise PatternDetectionError(pattern_type, str(exc)) from exc
+
     # ============================================================
     # 孟洪涛核心证据检测（Core Evidence Detection）
     # ============================================================
+
+    def _detect_climax(self, direction: str, lookback_days: int = 60) -> Dict:
+        """
+        通用高潮检测核心逻辑 (P2.2 DRY)
+
+        Args:
+            direction: 'selling' (SC) 或 'buying' (BC)
+            lookback_days: 回溯天数
+        """
+        is_selling = direction == 'selling'
+        label = "SC" if is_selling else "BC"
+        climax_type = "selling_climax" if is_selling else "buying_climax"
+
+        # 检查必要字段
+        required_cols = {'Close', 'Open', 'Volume', 'High', 'Low'}
+        missing = required_cols - set(self.data.columns)
+        if missing:
+            raise MissingFieldError(f"缺失必要列: {missing}")
+
+        recent_data = self.data.tail(lookback_days)
+        vol_ma = recent_data['Volume_MA20'] if 'Volume_MA20' in recent_data.columns else recent_data['Volume'].rolling(20).mean()
+        high_low_range = recent_data['High'] - recent_data['Low']
+        avg_range = high_low_range.rolling(20).mean()
+
+        # 动态阈值
+        climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
+        fallback_vol_threshold = self._get_dynamic_volume_threshold(2.5)
+
+        if is_selling:
+            # SC: 阴线 + 价差放大
+            climax_range_threshold = self._get_dynamic_volume_threshold(1.8)
+            candidates = recent_data[
+                (recent_data['Volume'] > vol_ma * climax_vol_threshold) &
+                (high_low_range > avg_range * climax_range_threshold) &
+                (recent_data['Close'] < recent_data['Open'])
+            ]
+            if candidates.empty:
+                min_idx = recent_data['Low'].idxmin()
+                min_row = recent_data.loc[min_idx]
+                vol_ratio = min_row['Volume'] / vol_ma.loc[min_idx] if vol_ma.loc[min_idx] > 0 else 1.0
+                if vol_ratio > fallback_vol_threshold:
+                    climax_idx = min_idx
+                else:
+                    return {"detected": False, "reason": "No climactic volume found at lows"}
+            else:
+                climax_idx = candidates.index[-1]
+        else:
+            # BC: 收盘偏低 或 长上影线
+            range_size = recent_data['High'] - recent_data['Low']
+            close_pos = (recent_data['Close'] - recent_data['Low']) / range_size.replace(0, 1e-9)
+            upper_shadow = recent_data['High'] - recent_data[['Open', 'Close']].max(axis=1)
+            upper_shadow_ratio = upper_shadow / range_size.replace(0, 1e-9)
+
+            candidates = recent_data[
+                (recent_data['Volume'] > vol_ma * climax_vol_threshold) &
+                ((close_pos < 0.5) | (upper_shadow_ratio > 0.4))
+            ]
+            if candidates.empty:
+                max_idx = recent_data['High'].idxmax()
+                max_row = recent_data.loc[max_idx]
+                vol_ratio = max_row['Volume'] / vol_ma.loc[max_idx] if vol_ma.loc[max_idx] > 0 else 1.0
+                max_close_pos = (max_row['Close'] - max_row['Low']) / max(max_row['High'] - max_row['Low'], 1e-9)
+                max_upper_shadow = (max_row['High'] - max(max_row['Open'], max_row['Close'])) / max(max_row['High'] - max_row['Low'], 1e-9)
+                if vol_ratio > fallback_vol_threshold and (max_close_pos < 0.6 or max_upper_shadow > 0.3):
+                    climax_idx = max_idx
+                else:
+                    return {"detected": False, "reason": "No climactic volume found at highs with poor close"}
+            else:
+                climax_idx = candidates.index[-1]
+
+        row = recent_data.loc[climax_idx]
+        vol_ratio = row['Volume'] / vol_ma.loc[climax_idx]
+
+        # Squat Bar 检测
+        bar_vol = row['Volume']
+        bar_spread = row['High'] - row['Low']
+        bar_vol_ma20 = vol_ma.loc[climax_idx]
+        bar_spread_ma20 = avg_range.loc[climax_idx] if not pd.isna(avg_range.loc[climax_idx]) else bar_spread
+
+        is_squat = (bar_vol > bar_vol_ma20 * 2.0) and (bar_spread < bar_spread_ma20 * 0.8)
+        squat_dir = "none"
+        if is_squat:
+            squat_dir = "bullish" if row['Close'] >= (row['High'] + row['Low']) / 2.0 else "bearish"
+
+        # 置信度计算
+        close_pos = (row['Close'] - row['Low']) / max(row['High'] - row['Low'], 1e-9)
+        base_confidence = self._calculate_climax_confidence(vol_ratio, close_pos)
+
+        # Effort vs Result 验证
+        price_progress = (row['Close'] - row['Open']) / row['Open']
+        is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, close_pos)
+
+        # Squat Bar 联动
+        if is_selling and is_squat and squat_dir == "bullish":
+            is_valid = True
+            penalty = 1.0
+            base_confidence = min(1.0, base_confidence * 1.15)
+            logger.info(f"[{label} 蹲坐柱联动] 检测到看涨蹲坐柱，豁免背离惩罚并提升置信度")
+        elif not is_selling and is_squat and squat_dir == "bearish":
+            is_valid = True
+            penalty = 1.0
+            base_confidence = min(1.0, base_confidence * 1.15)
+            logger.info(f"[{label} 蹲坐柱联动] 检测到看跌蹲坐柱，豁免背离惩罚并提升置信度")
+
+        if warning and not ((is_selling and is_squat and squat_dir == "bullish") or (not is_selling and is_squat and squat_dir == "bearish")):
+            logger.warning(f"[{label} Effort vs Result] {warning}")
+
+        confidence = base_confidence * penalty
+        price_key = 'Low' if is_selling else 'High'
+
+        result = {
+            "detected": True,
+            "date": climax_idx,
+            "price": float(row[price_key]),
+            "volume": float(row['Volume']),
+            "type": climax_type,
+            "volume_ratio": float(vol_ratio),
+            "confidence": float(confidence)
+        }
+        self.classic_detector.reversal._verify_climax_confirmation(result)
+        return result
 
     def detect_climax_panic_selling(self, lookback_days: int = 60) -> Dict:
         """
         检测恐慌性抛售（Selling Climax, SC）
         理论依据：主跌段末端，成交量极度放大，价差扩大，通常伴随长下影线。
-        
-        使用动态阈值：基于ATR适配不同波动率的资产
         """
         try:
-            recent_data = self.data.tail(lookback_days)
-            # 不直接取最低点，而是寻找符合高潮特征的 Bar
-            vol_ma = recent_data['Volume_MA20'] if 'Volume_MA20' in recent_data.columns else recent_data['Volume'].rolling(20).mean()
-            
-            # 计算价差 ATR 参考
-            high_low_range = recent_data['High'] - recent_data['Low']
-            avg_range = high_low_range.rolling(20).mean()
-            
-            # 动态阈值：基于ATR适配
-            # 威科夫理论：SC必须伴随巨幅放量，通常为均量2倍以上
-            #  修复 P0-1: SC 至少需要 2.5x 巨量，fallback 也需要 2.5x
-            climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
-            climax_range_threshold = self._get_dynamic_volume_threshold(1.8)
-            fallback_vol_threshold = self._get_dynamic_volume_threshold(2.5)  #  取消低量 fallback，强制 2.5x
-            
-            # 高潮候选者：成交量 > 动态阈值倍均量 且 价差 > 动态阈值倍均价差
-            candidates = recent_data[
-                (recent_data['Volume'] > vol_ma * climax_vol_threshold) & 
-                (high_low_range > avg_range * climax_range_threshold) &
-                (recent_data['Close'] < recent_data['Open']) # 必须是阴线或低收
-            ]
-            
-            if candidates.empty:
-                # 降级：如果找不到完美高潮，找最低点且量能尚可的
-                min_idx = recent_data['Low'].idxmin()
-                min_row = recent_data.loc[min_idx]
-                vol_ratio = min_row['Volume'] / vol_ma.loc[min_idx] if vol_ma.loc[min_idx] > 0 else 1.0
-                if vol_ratio > fallback_vol_threshold:
-                    is_climax = True
-                    sc_idx = min_idx
-                else:
-                    return {"detected": False, "reason": "No climactic volume found at lows"}
-            else:
-                # 取最后一个符合条件的作为 SC (通常 SC 后会有 AR)
-                sc_idx = candidates.index[-1]
-                is_climax = True
-
-            sc_row = recent_data.loc[sc_idx]
-            vol_ratio = sc_row['Volume'] / vol_ma.loc[sc_idx]
-
-            # 计算当时是否是 squat bar (蹲坐柱)
-            sc_vol = sc_row['Volume']
-            sc_spread = sc_row['High'] - sc_row['Low']
-            sc_vol_ma20 = vol_ma.loc[sc_idx]
-            sc_spread_ma20 = avg_range.loc[sc_idx] if not pd.isna(avg_range.loc[sc_idx]) else sc_spread
-            
-            is_sc_squat = (sc_vol > sc_vol_ma20 * 2.0) and (sc_spread < sc_spread_ma20 * 0.8)
-            sc_squat_dir = "none"
-            if is_sc_squat:
-                sc_squat_dir = "bullish" if sc_row['Close'] >= (sc_row['High'] + sc_row['Low']) / 2.0 else "bearish"
-
-            #  修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
-            sc_close_pos = (sc_row['Close'] - sc_row['Low']) / max(sc_row['High'] - sc_row['Low'], 1e-9)
-            base_confidence = self._calculate_climax_confidence(vol_ratio, sc_close_pos)
-
-            #  修复 P2-1: Effort vs Result 验证
-            price_progress = (sc_row['Close'] - sc_row['Open']) / sc_row['Open']
-            is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, sc_close_pos)
-
-            # 联动 Squat Bar：如果检测到看涨蹲坐柱，豁免背离惩罚并提升置信度
-            if is_sc_squat and sc_squat_dir == "bullish":
-                is_valid = True
-                penalty = 1.0  # 豁免惩罚
-                base_confidence = min(1.0, base_confidence * 1.15)
-                logger.info("[SC 蹲坐柱联动] 检测到看涨蹲坐柱作为SC，豁免背离惩罚并提升置信度")
-
-            if warning and not (is_sc_squat and sc_squat_dir == "bullish"):
-                logger.warning(f"[SC Effort vs Result] {warning}")
-
-            confidence = base_confidence * penalty
-
-            result = {
-                "detected": is_climax,
-                "date": sc_idx, # 保持 Timestamp 类型以供其他检测器使用
-                "price": float(sc_row['Low']),
-                "volume": float(sc_row['Volume']),
-                "type": "selling_climax",
-                "volume_ratio": float(vol_ratio),
-                "confidence": float(confidence)
-            }
-            # P1 修复：增加 AR 确认逻辑
-            self.classic_detector.reversal._verify_climax_confirmation(result)
-            return result
-        except (KeyError, ValueError, TypeError) as e:
-            logger.exception(f"SC检测失败: {e}")
-            return {"detected": False, "error": str(e)}
+            return self._detect_climax('selling', lookback_days)
+        except (DataError, MissingFieldError, CalculationError, PatternDetectionError, PatternNotFoundError):
+            raise
         except Exception as e:
-            logger.exception(f"SC检测失败: 未知异常: {e}")
-            raise PatternDetectionError("SC", f"未知异常: {e}") from e
+            return self._handle_detection_error("SC", e)
 
     def detect_climax_buying(self, lookback_days: int = 60) -> Dict:
         """
         检测买入高潮（Buying Climax, BC）
-        理论依据：主升段末端，成交量异常放大，价格创阶段新高，但收盘表现疲软（长上影线或收盘位置偏低），代表需求被庞大的派发供应吸收。
-        使用动态阈值：基于ATR适配不同波动率的资产
+        理论依据：主升段末端，成交量异常放大，价格创阶段新高，但收盘表现疲软。
         """
         try:
-            recent_data = self.data.tail(lookback_days)
-            vol_ma = recent_data['Volume_MA20'] if 'Volume_MA20' in recent_data.columns else recent_data['Volume'].rolling(20).mean()
-            
-            # 动态阈值
-            #  修复 P0-1: BC 至少需要 2.5x 巨量，fallback 也需要 2.5x
-            climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
-            fallback_vol_threshold = self._get_dynamic_volume_threshold(2.5)  #  取消低量 fallback，强制 2.5x
-            
-            # 计算收盘位置分位和上影线比例
-            range_size = recent_data['High'] - recent_data['Low']
-            avg_range = range_size.rolling(20).mean()
-            close_pos = (recent_data['Close'] - recent_data['Low']) / range_size.replace(0, 1e-9)
-            upper_shadow = recent_data['High'] - recent_data[['Open', 'Close']].max(axis=1)
-            upper_shadow_ratio = upper_shadow / range_size.replace(0, 1e-9)
-            
-            # 高潮候选者：成交量大 且 (收盘偏低 或 长上影线) 且 必须是阳线或高开(可选，主要是放量冲高回落)
-            candidates = recent_data[
-                (recent_data['Volume'] > vol_ma * climax_vol_threshold) & 
-                ((close_pos < 0.5) | (upper_shadow_ratio > 0.4))
-            ]
-            
-            if candidates.empty:
-                # 降级：找最高点且量能尚可的
-                max_idx = recent_data['High'].idxmax()
-                max_row = recent_data.loc[max_idx]
-                vol_ratio = max_row['Volume'] / vol_ma.loc[max_idx] if vol_ma.loc[max_idx] > 0 else 1.0
-                # 验证最高点是否符合偏弱收盘
-                max_close_pos = (max_row['Close'] - max_row['Low']) / max(max_row['High'] - max_row['Low'], 1e-9)
-                max_upper_shadow = (max_row['High'] - max(max_row['Open'], max_row['Close'])) / max(max_row['High'] - max_row['Low'], 1e-9)
-                
-                if vol_ratio > fallback_vol_threshold and (max_close_pos < 0.6 or max_upper_shadow > 0.3):
-                    is_climax = True
-                    bc_idx = max_idx
-                else:
-                    return {"detected": False, "reason": "No climactic volume found at highs with poor close"}
-            else:
-                # 取最后一个符合条件的作为 BC
-                bc_idx = candidates.index[-1]
-                is_climax = True
-
-            bc_row = recent_data.loc[bc_idx]
-            vol_ratio = bc_row['Volume'] / vol_ma.loc[bc_idx]
-
-            # 计算当时是否是 squat bar (蹲坐柱)
-            bc_vol = bc_row['Volume']
-            bc_spread = bc_row['High'] - bc_row['Low']
-            bc_vol_ma20 = vol_ma.loc[bc_idx]
-            bc_spread_ma20 = avg_range.loc[bc_idx] if not pd.isna(avg_range.loc[bc_idx]) else bc_spread
-            
-            is_bc_squat = (bc_vol > bc_vol_ma20 * 2.0) and (bc_spread < bc_spread_ma20 * 0.8)
-            bc_squat_dir = "none"
-            if is_bc_squat:
-                bc_squat_dir = "bullish" if bc_row['Close'] >= (bc_row['High'] + bc_row['Low']) / 2.0 else "bearish"
-
-            #  修复 P0-2: 使用新的 confidence 计算方法，基于量比分层
-            bc_close_pos = (bc_row['Close'] - bc_row['Low']) / max(bc_row['High'] - bc_row['Low'], 1e-9)
-            base_confidence = self._calculate_climax_confidence(vol_ratio, bc_close_pos)
-
-            #  修复 P2-1: Effort vs Result 验证
-            price_progress = (bc_row['Close'] - bc_row['Open']) / bc_row['Open']
-            is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, bc_close_pos)
-
-            # 联动 Squat Bar：如果检测到看跌蹲坐柱，豁免背离惩罚并提升置信度
-            if is_bc_squat and bc_squat_dir == "bearish":
-                is_valid = True
-                penalty = 1.0  # 豁免惩罚
-                base_confidence = min(1.0, base_confidence * 1.15)
-                logger.info("[BC 蹲坐柱联动] 检测到看跌蹲坐柱作为BC，豁免背离惩罚并提升置信度")
-
-            if warning and not (is_bc_squat and bc_squat_dir == "bearish"):
-                logger.warning(f"[BC Effort vs Result] {warning}")
-
-            confidence = base_confidence * penalty
-
-            result = {
-                "detected": is_climax,
-                "date": bc_idx,
-                "price": float(bc_row['High']),
-                "volume": float(bc_row['Volume']),
-                "type": "buying_climax",
-                "volume_ratio": float(vol_ratio),
-                "confidence": float(confidence)
-            }
-            # P1 修复：增加回落确认逻辑
-            self.classic_detector.reversal._verify_climax_confirmation(result)
-            return result
-        except (KeyError, ValueError, TypeError) as e:
-            logger.exception(f"BC检测失败: {e}")
-            return {"detected": False, "error": str(e)}
+            return self._detect_climax('buying', lookback_days)
+        except (DataError, MissingFieldError, CalculationError, PatternDetectionError, PatternNotFoundError):
+            raise
         except Exception as e:
-            logger.exception(f"BC检测失败: 未知异常: {e}")
-            raise PatternDetectionError("BC", f"未知异常: {e}") from e
+            return self._handle_detection_error("BC", e)
 
     def detect_automatic_rally(self, lookback_days: int = 60) -> Dict:
         """
@@ -699,12 +677,10 @@ class WyckoffPatternDetector:
                 "ar_window_bars": 3 if ar_idx in after_sc.head(3).index else 5,
                 "confidence": min(100, max(0, (rebound_pct - 1) * 12)) if is_ar else 0
             }
-        except (KeyError, ValueError, TypeError) as e:
-            logger.exception(f"AR检测失败: {e}")
-            return {"detected": False, "error": str(e)}
+        except (DataError, MissingFieldError, CalculationError, PatternDetectionError, PatternNotFoundError):
+            raise
         except Exception as e:
-            logger.exception(f"AR检测失败: 未知异常: {e}")
-            raise PatternDetectionError("AR", f"未知异常: {e}") from e
+            return self._handle_detection_error("AR", e)
 
     def detect_preliminary_support(self, lookback_days: int = 90) -> Dict:
         """
@@ -886,6 +862,12 @@ class WyckoffPatternDetector:
         每一天的基准成交量只使用该天及之前的数据计算
         """
         try:
+            # 检查必要字段
+            required_cols = {'Close', 'Open', 'Volume', 'High', 'Low'}
+            missing = required_cols - set(self.data.columns)
+            if missing:
+                raise MissingFieldError(f"缺失必要列: {missing}")
+
             recent_data = self.data.tail(lookback_days)
             if len(recent_data) < 10:
                 return {"detected": False, "reason": "Insufficient data"}
@@ -933,12 +915,10 @@ class WyckoffPatternDetector:
                         }
                     }
             return {"detected": False, "reason": "No SOT pattern found"}
-        except (KeyError, ValueError, TypeError) as e:
-            logger.exception(f"SOT检测失败: {e}")
-            return {"detected": False, "error": str(e)}
+        except (DataError, MissingFieldError, CalculationError, PatternDetectionError, PatternNotFoundError):
+            raise
         except Exception as e:
-            logger.exception(f"SOT检测失败: 未知异常: {e}")
-            raise PatternDetectionError("SOT", f"未知异常: {e}") from e
+            return self._handle_detection_error("SOT", e)
 
     def detect_absorption(self, lookback_days: int = 15) -> Dict:
         """
@@ -947,6 +927,12 @@ class WyckoffPatternDetector:
         即价格紧贴阻力位，连续高量但拒绝显著回落，这是 JOC 之前最强的看涨前置信号。
         """
         try:
+            # 检查必要字段
+            required_cols = {'Close', 'Open', 'Volume', 'High', 'Low'}
+            missing = required_cols - set(self.data.columns)
+            if missing:
+                raise MissingFieldError(f"缺失必要列: {missing}")
+
             if self.data is None or len(self.data) < 20:
                 return {"detected": False, "reason": "insufficient_data"}
 
@@ -969,7 +955,6 @@ class WyckoffPatternDetector:
             volumes = df['Volume'].values
             
             # 计算 20日均量与ATR
-            import numpy as np
             vol_ma20_s = self.data['Volume_MA20'].values if 'Volume_MA20' in self.data.columns else self.data['Volume'].rolling(20).mean().values
             atr_s = self.data['ATR'].values if 'ATR' in self.data.columns else (self.data['High'] - self.data['Low']).rolling(14).mean().values
             
@@ -1021,7 +1006,8 @@ class WyckoffPatternDetector:
                 }
                 
             return {"detected": False, "reason": "no_consecutive_absorption_sequence"}
+        except (DataError, MissingFieldError, CalculationError, PatternDetectionError, PatternNotFoundError):
+            raise
         except Exception as e:
-            logger.exception(f"吸收检测失败: {e}")
-            return {"detected": False, "error": str(e)}
+            return self._handle_detection_error("Absorption", e)
 

@@ -911,6 +911,98 @@ class PhaseCoordinator:
             0.7  # 突破后降低置信度
         )
 
+    def _build_lps_sequence(self, events) -> list:
+        """
+        构建 LPS 序列列表（最近30天内的所有LPS信号）
+        """
+        lps_list = []
+        
+        if isinstance(events, dict):
+            lps_res = events.get('lps', {})
+        else:
+            lps_res = getattr(events, 'lps', None)
+
+        if not lps_res:
+            return lps_list
+
+        is_detected = lps_res.get('detected') if isinstance(lps_res, dict) else getattr(lps_res, 'detected', False)
+        if not is_detected:
+            return lps_list
+
+        if isinstance(lps_res, dict) and 'all_lps' in lps_res:
+            for lps in lps_res['all_lps']:
+                lps_list.append({
+                    'date': lps.get('date'),
+                    'price': lps.get('price'),
+                    'volume': lps.get('volume'),
+                    'detected': True
+                })
+        elif hasattr(lps_res, 'all_lps') and getattr(lps_res, 'all_lps'):
+            for lps in getattr(lps_res, 'all_lps'):
+                lps_list.append({
+                    'date': getattr(lps, 'date', None),
+                    'price': getattr(lps, 'price', None),
+                    'volume': getattr(lps, 'volume', None),
+                    'detected': True
+                })
+        else:
+            lps_list.append({
+                'date': lps_res.get('date') if isinstance(lps_res, dict) else getattr(lps_res, 'date', None),
+                'price': lps_res.get('price') if isinstance(lps_res, dict) else getattr(lps_res, 'price', None),
+                'volume': lps_res.get('volume') if isinstance(lps_res, dict) else getattr(lps_res, 'volume', None),
+                'detected': True
+            })
+
+        return lps_list
+
+    def _build_ut_sequence(self, events) -> list:
+        """
+        构建 UT 序列列表（最近30天内的所有UT信号）
+        """
+        ut_list = []
+        
+        if isinstance(events, dict):
+            ut_res = events.get('upthrust', {})
+        else:
+            ut_res = getattr(events, 'upthrust', None)
+
+        if not ut_res:
+            return ut_list
+
+        is_detected = ut_res.get('detected') if isinstance(ut_res, dict) else getattr(ut_res, 'detected', False)
+        if not is_detected:
+            return ut_list
+
+        if isinstance(ut_res, dict) and 'upthrusts' in ut_res:
+            for ut in ut_res['upthrusts']:
+                ut_list.append({
+                    'date': ut.get('date'),
+                    'breakout_price': ut.get('breakout_price'),
+                    'volume_ratio': ut.get('breakout_volume_ratio'),
+                    'detected': True
+                })
+        elif hasattr(ut_res, 'upthrusts') and getattr(ut_res, 'upthrusts'):
+            for ut in getattr(ut_res, 'upthrusts'):
+                ut_list.append({
+                    'date': getattr(ut, 'date', None),
+                    'breakout_price': getattr(ut, 'breakout_price', None),
+                    'volume_ratio': getattr(ut, 'breakout_volume_ratio', None),
+                    'detected': True
+                })
+        else:
+            ut_list.append({
+                'date': ut_res.get('date') if isinstance(ut_res, dict) else getattr(ut_res, 'date', None),
+                'breakout_price': (ut_res.get('breakout_price', ut_res.get('rejection_price')) 
+                                   if isinstance(ut_res, dict) 
+                                   else (getattr(ut_res, 'breakout_price', None) or getattr(ut_res, 'rejection_price', None))),
+                'volume_ratio': (ut_res.get('breakout_volume_ratio', 1.0) 
+                                 if isinstance(ut_res, dict) 
+                                 else getattr(ut_res, 'breakout_volume_ratio', 1.0)),
+                'detected': True
+            })
+
+        return ut_list
+
 
 class PhaseTransitionCriteria:
     """
@@ -940,108 +1032,3 @@ class PhaseTransitionCriteria:
     MIN_PHASE_B_DURATION = 15
     MIN_PHASE_C_DURATION = 10
     MIN_PHASE_D_DURATION = 7
-
-
-def _build_lps_sequence(self, events) -> list:
-    """
-    构建 LPS 序列列表（最近30天内的所有LPS信号）
-    """
-    lps_list = []
-    
-    # 兼容 dict 和 Pydantic Model
-    if isinstance(events, dict):
-        lps_res = events.get('lps', {})
-    else:
-        lps_res = getattr(events, 'lps', None)
-
-    if not lps_res:
-        return lps_list
-
-    is_detected = lps_res.get('detected') if isinstance(lps_res, dict) else getattr(lps_res, 'detected', False)
-    if not is_detected:
-        return lps_list
-
-    # 如果有多个LPS信号
-    if isinstance(lps_res, dict) and 'all_lps' in lps_res:
-        for lps in lps_res['all_lps']:
-            lps_list.append({
-                'date': lps.get('date'),
-                'price': lps.get('price'),
-                'volume': lps.get('volume'),
-                'detected': True
-            })
-    elif hasattr(lps_res, 'all_lps') and getattr(lps_res, 'all_lps'):
-        for lps in getattr(lps_res, 'all_lps'):
-            lps_list.append({
-                'date': getattr(lps, 'date', None),
-                'price': getattr(lps, 'price', None),
-                'volume': getattr(lps, 'volume', None),
-                'detected': True
-            })
-    else:
-        # 单个LPS
-        lps_list.append({
-            'date': lps_res.get('date') if isinstance(lps_res, dict) else getattr(lps_res, 'date', None),
-            'price': lps_res.get('price') if isinstance(lps_res, dict) else getattr(lps_res, 'price', None),
-            'volume': lps_res.get('volume') if isinstance(lps_res, dict) else getattr(lps_res, 'volume', None),
-            'detected': True
-        })
-
-    return lps_list
-
-
-def _build_ut_sequence(self, events) -> list:
-    """
-    构建 UT 序列列表（最近30天内的所有UT信号）
-    """
-    ut_list = []
-    
-    # 兼容 dict 和 Pydantic Model
-    if isinstance(events, dict):
-        ut_res = events.get('upthrust', {})
-    else:
-        ut_res = getattr(events, 'upthrust', None)
-
-    if not ut_res:
-        return ut_list
-
-    is_detected = ut_res.get('detected') if isinstance(ut_res, dict) else getattr(ut_res, 'detected', False)
-    if not is_detected:
-        return ut_list
-
-    # 如果有多个UT信号
-    if isinstance(ut_res, dict) and 'upthrusts' in ut_res:
-        for ut in ut_res['upthrusts']:
-            ut_list.append({
-                'date': ut.get('date'),
-                'breakout_price': ut.get('breakout_price'),
-                'volume_ratio': ut.get('breakout_volume_ratio'),
-                'detected': True
-            })
-    elif hasattr(ut_res, 'upthrusts') and getattr(ut_res, 'upthrusts'):
-        for ut in getattr(ut_res, 'upthrusts'):
-            ut_list.append({
-                'date': getattr(ut, 'date', None),
-                'breakout_price': getattr(ut, 'breakout_price', None),
-                'volume_ratio': getattr(ut, 'breakout_volume_ratio', None),
-                'detected': True
-            })
-    else:
-        # 单个UT
-        ut_list.append({
-            'date': ut_res.get('date') if isinstance(ut_res, dict) else getattr(ut_res, 'date', None),
-            'breakout_price': (ut_res.get('breakout_price', ut_res.get('rejection_price')) 
-                               if isinstance(ut_res, dict) 
-                               else (getattr(ut_res, 'breakout_price', None) or getattr(ut_res, 'rejection_price', None))),
-            'volume_ratio': (ut_res.get('breakout_volume_ratio', 1.0) 
-                             if isinstance(ut_res, dict) 
-                             else getattr(ut_res, 'breakout_volume_ratio', 1.0)),
-            'detected': True
-        })
-
-    return ut_list
-
-
-# 将函数绑定到PhaseCoordinator类
-PhaseCoordinator._build_lps_sequence = _build_lps_sequence
-PhaseCoordinator._build_ut_sequence = _build_ut_sequence

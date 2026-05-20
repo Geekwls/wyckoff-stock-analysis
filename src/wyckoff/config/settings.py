@@ -134,6 +134,17 @@ class WyckoffThresholds(BaseModel):
     SCORING: ScoringConfig = Field(default_factory=ScoringConfig)
     POSITION_SIZING: PositionSizingConfig = Field(default_factory=PositionSizingConfig)
     
+    # ── WIE 3.0 状态机阈值 (P2.3) ──────────────────────────
+    STATE_ENTROPY_DEGRADED_THRESHOLD: float = Field(
+        1.55,
+        description="状态熵降级阈值 (6状态最大熵 ln(6)≈1.79，超过此值表示高度不确定)"
+    )
+    CLIMAX_SQUAT_VOL_MULTIPLIER: float = Field(2.0, description="蹲坐柱量能倍数")
+    CLIMAX_SQUAT_SPREAD_RATIO: float = Field(0.8, description="蹲坐柱价差比例上限")
+    CLIMAX_SQUAT_CONFIDENCE_BONUS: float = Field(1.15, description="蹲坐柱联动置信度加成")
+    EVR_BREAKDOWN_CLV_THRESHOLD: float = Field(-0.6, description="溃败CLV阈值")
+    EVR_BREAKDOWN_EFF_THRESHOLD: float = Field(0.5, description="溃败效率阈值")
+    
     def get_volatility_threshold(self, threshold_type: str, volatility_class: str) -> float:
         """获取波动率阈值"""
         thresholds = self.VOLATILITY_THRESHOLDS.get(threshold_type, {})
@@ -243,6 +254,17 @@ class WyckoffConfig(BaseModel):
     
     # ── 阈值与成本配置 ──────────────────────────────────────
     thresholds: WyckoffThresholds = Field(default_factory=WyckoffThresholds)
+
+    # ── 错误处理策略 (P0 重构) ─────────────────────────────
+    silent_fail: bool = Field(
+        default=False,
+        description="静默失败模式。True: 捕获异常并返回空结果 (适用于批量扫描); "
+                    "False: 向上抛出异常，确保错误不被掩盖 (适用于单股深度分析)"
+    )
+    max_retries: int = Field(
+        default=3,
+        description="数据获取失败时的最大重试次数"
+    )
 
     @field_validator('min_data_length')
     @classmethod

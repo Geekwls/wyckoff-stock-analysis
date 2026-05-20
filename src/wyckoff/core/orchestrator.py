@@ -6,7 +6,8 @@ from .pattern_detector import WyckoffPatternDetector
 from .recommendation_engine import RecommendationEngine
 from .report_generator import WyckoffReportGenerator
 from ..config.settings import WyckoffConfig
-from ..exceptions import WyckoffError
+from ..exceptions import WyckoffError, DataError, CalculationError
+from .enums import MarketEnvironment
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +49,14 @@ class WyckoffOrchestrator:
                 quality, trading_plan, risk_advice
             )
 
+        except (DataError, CalculationError):
+            # 数据/计算错误直接向上传播，由调用方根据 silent_fail 决定处理方式
+            raise
         except WyckoffError:
             raise
         except Exception as e:
             logger.exception(f"分析执行异常: {symbol}")
-            raise
+            raise CalculationError("Orchestrator", str(e)) from e
 
     def _fetch_and_prepare_data(self, symbol: str, period: str) -> tuple:
         """
