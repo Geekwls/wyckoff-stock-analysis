@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
 from .detectors.trading_range_detector import TradingRangeDetector
 from .detectors.classic_pattern_detector import ClassicPatternDetector

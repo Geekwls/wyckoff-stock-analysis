@@ -34,7 +34,7 @@ class MengVsaDetector(BaseDetector):
         t = self.thresholds
         
         # 🔧 优化：在循环外部一次性计算移动平均线，彻底解决每次循环内全量重算的严重性能漏洞
-        ma20 = df['MA20'] if 'MA20' in df.columns else df['Close'].rolling(20).mean()
+        ma5 = df['Close'].rolling(5).mean()
         ma50 = df['MA50'] if 'MA50' in df.columns else df['Close'].rolling(50).mean()
         
         for i in range(10, len(df)):
@@ -42,21 +42,52 @@ class MengVsaDetector(BaseDetector):
             if pr <= 0: continue
             body_pct, vol_r = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / pr, df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
             
-            #  修复#6a: No Supply 检测 - 量比<0.5，收盘位置>60%
-            if df['Close'].iloc[i] > ma20.iloc[i]:
+            # 计算 5 日均线价格重心波段方向 (Swing Direction)
+            swing_dir = 1 if (i > 0 and ma5.iloc[i] > ma5.iloc[i-1]) else -1
+            
+            # 计算 60 日交易区间内部相对位置 (TR Position)
+            tr_high = df['High'].iloc[max(0, i-59):i+1].max()
+            tr_low = df['Low'].iloc[max(0, i-59):i+1].min()
+            tr_diff = tr_high - tr_low
+            tr_pos = (df['Close'].iloc[i] - tr_low) / tr_diff if tr_diff > 0 else 0.5
+            
+            # 🔧 优化后的 No Supply 检测：量比<0.5，收盘位置>60%
+            # 背景要求：上涨波段中，或者在下跌波段且价格回调至区间下轨（tr_pos < 0.4）
+            is_no_supply_bg = (swing_dir == 1) or (swing_dir == -1 and tr_pos < 0.4)
+            if is_no_supply_bg:
                 if body_pct < t.MENG_VSA_BODY_RATIO:
                     cp = (df['Close'].iloc[i] - df['Low'].iloc[i]) / pr
                     # 孟洪涛要求：量比<50%，收盘在中高位（>60%）
                     if cp > 0.6 and vol_r < 0.5:
-                        ns.append({"date": df.index[i], "vol_ratio": round(vol_r, 2), "close_position": round(cp * 100, 1)})
+                        is_bottom_test = (swing_dir == -1 and tr_pos < 0.4)
+                        ns.append({
+                            "date": df.index[i], 
+                            "vol_ratio": round(vol_r, 2), 
+                            "close_position": round(cp * 100, 1),
+                            "tr_position": round(tr_pos * 100, 1),
+                            "swing_direction": "UP" if swing_dir == 1 else "DOWN",
+                            "is_bottom_test": is_bottom_test,
+                            "description": "底部无供应测试（主力吸筹后期）" if is_bottom_test else "上升趋势无供应（卖盘枯竭）"
+                        })
             
-            #  修复#6b: No Demand 检测 - 添加位置约束和趋势判断
-            if df['Close'].iloc[i] < ma20.iloc[i]:
+            # 🔧 优化后的 No Demand 检测：添加位置约束和趋势判断
+            # 背景要求：下跌波段中，或者在上涨波段且价格反弹至区间上轨（tr_pos > 0.6）
+            is_no_demand_bg = (swing_dir == -1) or (swing_dir == 1 and tr_pos > 0.6)
+            if is_no_demand_bg:
                 if body_pct < 0.3 and vol_r < 0.5:
                     cp = (df['Close'].iloc[i] - df['Low'].iloc[i]) / pr
                     # 孟洪涛要求：出现在下跌中，收盘在低位（<40%）
                     if cp < 0.4:
-                        nd.append({"date": df.index[i], "vol_ratio": round(vol_r, 2), "close_position": round(cp * 100, 1)})
+                        is_top_test = (swing_dir == 1 and tr_pos > 0.6)
+                        nd.append({
+                            "date": df.index[i], 
+                            "vol_ratio": round(vol_r, 2), 
+                            "close_position": round(cp * 100, 1),
+                            "tr_position": round(tr_pos * 100, 1),
+                            "swing_direction": "UP" if swing_dir == 1 else "DOWN",
+                            "is_top_test": is_top_test,
+                            "description": "顶部无需求测试（上涨受阻）" if is_top_test else "下跌趋势无需求（买盘枯竭）"
+                        })
             
             #  修复#6c: Stopping Volume 检测 - 量比>2.0
             if df['Close'].iloc[i] < ma50.iloc[i]:

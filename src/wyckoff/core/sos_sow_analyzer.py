@@ -343,8 +343,9 @@ class SOSSOWAnalyzer:
             report += f"  {i}. {criteria}\n"
 
         if breakdown_level:
+            val = breakdown_level['value'] if isinstance(breakdown_level, dict) else breakdown_level
             source_str = f"（{conflict_analysis.get('breakdown_source', '')}）" if conflict_analysis.get('breakdown_source') else ""
-            report += f"\n**关键确认位：** {breakdown_level:.2f}元 {source_str}\n"
+            report += f"\n**关键确认位：** {val:.2f}元 {source_str}\n"
             report += f"  - 跌破且3天不收复 → 确认诱多陷阱\n"
             report += f"  - 快速收复并创新高 → 确认震仓洗盘\n"
 

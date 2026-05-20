@@ -32,6 +32,16 @@ class PointAndFigureCalculator:
         self.box_size_pct = box_size_pct / 100.0
         self.reversal_boxes = reversal_boxes
 
+    def _round_by_step(self, value: float, step: float) -> float:
+        """根据格宽自适应选择保留小数位数，防止精度丢失和舍入为0"""
+        if step < 0.01:
+            rounded = round(value, 5)
+            return rounded if rounded != 0 else value
+        elif step < 0.1:
+            return round(value, 4)
+        else:
+            return round(value, 2)
+
     def get_dynamic_pnf_threshold(self, data: pd.DataFrame) -> int:
         """
         孟洪涛原则：根据市场波动率动态调整PNF水平计数阈值
@@ -173,16 +183,20 @@ class PointAndFigureCalculator:
         """在 X 列中追加从 from_box 到 to_box 的中间箱体"""
         step = self._get_box_size(from_box)
         cur = from_box + step
-        while cur <= to_box - 0.001:
-            col['boxes'].append(round(cur, 2))
+        # 🔧 v1.3升级：使用格宽百分比自适应容差，替代硬编码的0.001以兼容高价股和极低价股
+        tolerance = step * 0.01
+        while cur <= to_box - tolerance:
+            col['boxes'].append(self._round_by_step(cur, step))
             cur += step
 
     def _add_boxes_down(self, col: Dict, from_box: float, to_box: float) -> None:
         """在 O 列中追加从 from_box 到 to_box 的中间箱体"""
         step = self._get_box_size(from_box)
         cur = from_box - step
-        while cur >= to_box + 0.001:
-            col['boxes'].append(round(cur, 2))
+        # 🔧 v1.3升级：使用格宽百分比自适应容差
+        tolerance = step * 0.01
+        while cur >= to_box + tolerance:
+            col['boxes'].append(self._round_by_step(cur, step))
             cur -= step
     
     def calculate_horizontal_count(self, pnf_data: Dict, 
@@ -277,10 +291,10 @@ class PointAndFigureCalculator:
             # 派发期：目标从已知TR下沿或积累区下沿开始投射
             dist_base = known_tr_low if known_tr_low is not None else accumulation_low
             targets = {
-                'target_1': round(dist_base - base_effect * 1.0, 2),
-                'target_2': round(dist_base - base_effect * 1.618, 2),
-                'target_3': round(dist_base - base_effect * 2.618, 2),
-                'full_target': round(dist_base - base_effect * 3.0, 2)
+                'target_1': self._round_by_step(dist_base - base_effect * 1.0, box_size),
+                'target_2': self._round_by_step(dist_base - base_effect * 1.618, box_size),
+                'target_3': self._round_by_step(dist_base - base_effect * 2.618, box_size),
+                'full_target': self._round_by_step(dist_base - base_effect * 3.0, box_size)
             }
             base_price = dist_base
             breakout_direction = 'down'
@@ -290,20 +304,20 @@ class PointAndFigureCalculator:
             if breakout_direction == 'up':
                 acc_base = known_tr_high if known_tr_high is not None else accumulation_high
                 targets = {
-                    'target_1': round(acc_base + base_effect * 1.0, 2),
-                    'target_2': round(acc_base + base_effect * 1.618, 2),
-                    'target_3': round(acc_base + base_effect * 2.618, 2),
-                    'full_target': round(acc_base + base_effect * 3.0, 2)
+                    'target_1': self._round_by_step(acc_base + base_effect * 1.0, box_size),
+                    'target_2': self._round_by_step(acc_base + base_effect * 1.618, box_size),
+                    'target_3': self._round_by_step(acc_base + base_effect * 2.618, box_size),
+                    'full_target': self._round_by_step(acc_base + base_effect * 3.0, box_size)
                 }
                 base_price = acc_base
                 direction_note = '吸筹期因果法则：水平准备触发上涨目标'
             else:
                 dist_base = known_tr_low if known_tr_low is not None else accumulation_low
                 targets = {
-                    'target_1': round(dist_base - base_effect * 1.0, 2),
-                    'target_2': round(dist_base - base_effect * 1.618, 2),
-                    'target_3': round(dist_base - base_effect * 2.618, 2),
-                    'full_target': round(dist_base - base_effect * 3.0, 2)
+                    'target_1': self._round_by_step(dist_base - base_effect * 1.0, box_size),
+                    'target_2': self._round_by_step(dist_base - base_effect * 1.618, box_size),
+                    'target_3': self._round_by_step(dist_base - base_effect * 2.618, box_size),
+                    'full_target': self._round_by_step(dist_base - base_effect * 3.0, box_size)
                 }
                 base_price = dist_base
                 direction_note = '吸筹期因果法则：水平准备触发下跌目标'
@@ -316,7 +330,7 @@ class PointAndFigureCalculator:
                 'low': accumulation_low,
                 'columns': horizontal_count
             },
-            'base_effect': round(base_effect, 2),
+            'base_effect': self._round_by_step(base_effect, box_size),
             'breakout_direction': breakout_direction,
             'base_price': base_price,
             'targets': targets,
@@ -329,12 +343,22 @@ class PointAndFigureCalculator:
     def _get_box_level(self, price: float) -> float:
         """获取价格所在的箱体水平"""
         box_size = self._get_box_size(price)
-        return round(int(price / box_size) * box_size, 2)
+        if box_size <= 0:
+            box_size = 0.01
+        
+        level = int(price / box_size) * box_size
+        # 🔧 v1.3升级：根据箱体格宽自适应四舍五入保留位数，防止低价仙股被强制截断导致除零/精度丢失
+        return self._round_by_step(level, box_size)
     
     def _get_box_size(self, price: float) -> float:
         """获取箱体大小（可根据价格区间调整）"""
         # 对于A股，使用固定百分比
-        return round(price * self.box_size_pct, 2)
+        size = price * self.box_size_pct
+        if size <= 0:
+            return 0.01
+            
+        # 🔧 v1.3升级：使用自适应保留位算法，完美保障超低价和超高价股的浮点精度一致性
+        return self._round_by_step(size, size)
     
     def _check_reversal_down(self, current_box: float, low: float) -> bool:
         """检查是否发生向下反转"""

@@ -207,7 +207,6 @@ def test_signal_conflict_detection():
     }
     
     report = generator.generate_report()
-    print(f"DEBUG REPORT:\n{report}")
     assert "信号冲突警示" in report
     assert "市场多空分歧剧烈" in report
 

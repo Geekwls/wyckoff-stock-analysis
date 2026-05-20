@@ -17,6 +17,67 @@ class MengTrendDetector(BaseDetector):
         self.config = config
         self.thresholds = thresholds
 
+    def _calculate_adaptive_creek(self, df: pd.DataFrame, window: int = 60) -> float:
+        """
+        自适应计算 Creek（小溪阻力线）- 孟洪涛原则升级版
+        
+        算法步骤：
+        1. 识别 window（默认60）内所有的 Swing High（局部高点）
+           局部高点定义：过去 5 天（包含前后 2 天）内的最高点
+        2. 如果 Swing High 数量不足 2，则回退到绝对最高价作为 Creek
+        3. 对识别到的所有 Swing High，按其对应的成交量 Volume 进行降序排列
+        4. 安全过滤（用户高价值建议）：
+           计算最近 14 天的 ATR（若异常则使用收盘价的 2% 代替）。
+           以成交量最大的那个高点价格作为核心基准价 base_price。
+           过滤前 3 个候选高点，剔除与 base_price 偏离超过 1.5 * ATR 的离散高点。
+        5. 对过滤后的剩余高点求均值，作为自适应 Creek 颈线。
+        """
+        if df is None or len(df) < 10:
+            return df['High'].max() if (df is not None and len(df) > 0) else 0.0
+            
+        recent_df = df.tail(window)
+        highs = recent_df['High'].values
+        volumes = recent_df['Volume'].values
+        
+        swing_highs = []
+        n = len(highs)
+        
+        # 寻找局部 Swing High (在过去 2 天和未来 2 天中是最高点)
+        for i in range(2, n - 2):
+            if (highs[i] >= highs[i-1] and highs[i] >= highs[i-2] and
+                highs[i] >= highs[i+1] and highs[i] >= highs[i+2]):
+                swing_highs.append((highs[i], volumes[i]))
+                
+        if len(swing_highs) < 2:
+            return float(recent_df['High'].max())
+            
+        # 按成交量降序排列
+        swing_highs.sort(key=lambda x: x[1], reverse=True)
+        
+        # 核心成交量最大的阻力位基准
+        base_price, base_vol = swing_highs[0]
+        
+        # 计算 ATR 波动率度量
+        atr_series = self._calculate_atr_series(df, 14)
+        current_atr = atr_series.iloc[-1] if len(atr_series) > 0 else np.nan
+        
+        # Fallback 容错
+        if pd.isna(current_atr) or current_atr <= 0:
+            current_atr = df['Close'].iloc[-1] * 0.02 if len(df) > 0 else 1.0
+            
+        # 1.5 * ATR 过滤阈值
+        atr_threshold = 1.5 * current_atr
+        
+        # 过滤前 3 个最强量能高点，防范 Upthrust 离散噪点
+        top_candidates = swing_highs[:min(3, len(swing_highs))]
+        filtered_highs = [base_price]
+        
+        for price, vol in top_candidates[1:]:
+            if abs(price - base_price) <= atr_threshold:
+                filtered_highs.append(price)
+                
+        return float(np.mean(filtered_highs))
+
     def detect_joc_enhanced(self) -> Dict:
         """孟洪涛增强版 JOC 检测"""
         if USE_VECTORIZED:
@@ -31,7 +92,8 @@ class MengTrendDetector(BaseDetector):
         df = self.data.copy()
         tr = self._detect_trading_range(df, window=60)
         if not tr.get("is_consolidation"): return {"detected": False, "reason": "not_in_consolidation"}
-        creek_level = tr["high"]
+        # 🔧 升级为最终自适应聚类 Creek 颈线
+        creek_level = self._calculate_adaptive_creek(df, window=60)
         vol_ma20_s = df['Volume_MA20'].values if 'Volume_MA20' in df.columns else df['Volume'].rolling(20, min_periods=1).mean().values
         vol_ma20 = vol_ma20_s[-1]
         closes, opens, highs, lows, volumes = df['Close'].values, df['Open'].values, df['High'].values, df['Low'].values, df['Volume'].values
@@ -97,10 +159,12 @@ class MengTrendDetector(BaseDetector):
         df = self.data.copy()
         tr = self._detect_trading_range(df, window=60)
         if not tr.get("is_consolidation"): return {"detected": False, "reason": "not_in_consolidation"}
-        creek_level, vol_ma20 = tr["high"], df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
+        vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
         signals = []
         for i in range(20, len(df)):
-            if df['Close'].iloc[i] > creek_level and df['Close'].iloc[i-1] <= creek_level:
+            # 🔧 自适应计算当前时刻 i 的 Creek 阻力位
+            current_creek = self._calculate_adaptive_creek(df.iloc[:i+1], window=60)
+            if df['Close'].iloc[i] > current_creek and df['Close'].iloc[i-1] <= current_creek:
                 price_change = (df['Close'].iloc[i] - df['Open'].iloc[i]) / df['Open'].iloc[i] * 100
                 if price_change < self.thresholds.JOC_MIN_BREAKOUT_PCT: continue
                 vol_ratio = df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
@@ -111,13 +175,13 @@ class MengTrendDetector(BaseDetector):
                 td, tdt, tvr = False, None, None
                 for j in range(i+1, min(i+10, len(df))):
                     #  修复#5: 回测检测逻辑优化 - 允许短暂跌破后收回
-                    if df['Low'].iloc[j] < creek_level * 1.02:
+                    if df['Low'].iloc[j] < current_creek * 1.02:
                         tvr_curr = df['Volume'].iloc[j] / vol_ma20 if vol_ma20 > 0 else 1
                         if tvr_curr < 1.0:
                             td, tdt, tvr = True, df.index[j], tvr_curr
                             break
                 signals.append({
-                    "date": df.index[i], "creek_level": creek_level, "close_price": df['Close'].iloc[i], "breakout_pct": round(price_change, 2),
+                    "date": df.index[i], "creek_level": float(current_creek), "close_price": float(df['Close'].iloc[i]), "breakout_pct": round(price_change, 2),
                     "volume_ratio": round(vol_ratio, 2), "close_position": round(close_pos * 100, 1), "test_detected": td, "test_date": tdt,
                     "test_vol_ratio": round(tvr, 2) if tvr else None, "confidence": self._calculate_joc_confidence(price_change, vol_ratio, close_pos, td)
                 })
