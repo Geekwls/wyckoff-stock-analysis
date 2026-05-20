@@ -118,7 +118,13 @@ class WyckoffReportGenerator:
 
         # 信号质量
         patterns = self.pattern_detector._collect_all_events()
-        patterns.update({'phase': phase_result.get('phase'), 'boring_zone': boring_res, 'dead_corner_breakout': dead_corner})
+        if hasattr(patterns, 'update'):
+            patterns.update({'phase': phase_result.get('phase'), 'boring_zone': boring_res, 'dead_corner_breakout': dead_corner})
+        else:
+            # patterns 是 EventsModel 实例，使用 object.__setattr__ 动态注入属性以保持向后兼容
+            object.__setattr__(patterns, 'phase', phase_result.get('phase'))
+            object.__setattr__(patterns, 'boring_zone', boring_res)
+            object.__setattr__(patterns, 'dead_corner_breakout', dead_corner)
         quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
 
         # 跨周期分析
@@ -221,7 +227,13 @@ class WyckoffReportGenerator:
 
         # 信号质量
         patterns = self.pattern_detector._collect_all_events()
-        patterns.update({'phase': phase_result.get('phase'), 'boring_zone': boring_res, 'dead_corner_breakout': dead_corner})
+        if hasattr(patterns, 'update'):
+            patterns.update({'phase': phase_result.get('phase'), 'boring_zone': boring_res, 'dead_corner_breakout': dead_corner})
+        else:
+            # patterns 是 EventsModel 实例，使用 object.__setattr__ 动态注入属性以保持向后兼容
+            object.__setattr__(patterns, 'phase', phase_result.get('phase'))
+            object.__setattr__(patterns, 'boring_zone', boring_res)
+            object.__setattr__(patterns, 'dead_corner_breakout', dead_corner)
         quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
 
         # 跨周期分析

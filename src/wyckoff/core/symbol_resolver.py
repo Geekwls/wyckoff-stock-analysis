@@ -74,7 +74,7 @@ class SymbolResolver:
                         original=original,
                         normalized=original,
                         market=MarketType.A_SHARE,
-                        source='baostock',
+                        source='akshare',
                         is_st=True
                     )
         
@@ -91,7 +91,7 @@ class SymbolResolver:
                 original=original,
                 normalized=normalized,
                 market=MarketType.A_SHARE,
-                source='baostock',
+                source='akshare',
                 is_st=is_st
             )
         

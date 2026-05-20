@@ -701,6 +701,27 @@ class ConclusionSection(BaseSectionBuilder):
         """
         if not cause_effect or 'targets' not in cause_effect: return ''
 
+        if cause_effect.get('method') == 'invalidated_tr':
+            tr_low = cause_effect.get('tr_low', trading_range.get('low', 0.0))
+            tr_high = cause_effect.get('tr_high', trading_range.get('high', 0.0))
+            current_price = cause_effect.get('current_price', self.data['Close'].iloc[-1])
+            return f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【🎯 点数图 (P&F) 因果测算目标推演 - 暂停测算】
+
+🚨 **原交易区间参考性已下降（已失效）**
+
+当前盘面特征：支撑位 {tr_low:.2f} 元曾被跌破，但当前价格已强劲收回至 {current_price:.2f} 元（大幅站回区间下沿上方）。
+这表明市场在原交易区间下方找到了新的强力需求，主力资金正在试图重建结构（可能正在形成新的 TR）。
+
+根据威科夫原则，原交易区间 ({tr_low:.2f} - {tr_high:.2f}元) 边界参考点的有效性已经大幅下降。在没有新的有效交易区间（TR）以及完整的积累/派发结构重新形成前，基于旧失效区间进行任何点数图目标测算均是不科学的，因此**系统已自适应暂停目标测算，等待新的有效 TR 形成**。
+
+✅ **后续观察指南**：
+1. 密切观察近期收盘价是否在新的波动范围内收敛，确认新 TR 的上限与下限边界。
+2. 严密追踪主力资金的建筹五要件（SC+AR+ST+Spring+SOS）在新结构中的表现，等待新的确认信号。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
         tr_high, tr_low = trading_range.get('high', 0), trading_range.get('low', 0)
         current_price = self.data['Close'].iloc[-1]
         cause_bars = cause_effect.get('cause_bars', 0)

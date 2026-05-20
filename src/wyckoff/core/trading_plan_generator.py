@@ -111,6 +111,48 @@ class TradingPlanGenerator:
                 current_price, high, low, atr, is_bullish
             )
 
+        # 派发初期（Phase A/B）强制绝对观望拦截
+        is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
+        is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
+                         any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
+        is_dist_early = is_dist and is_early_phase
+
+        if is_dist_early:
+            direction = "观望"
+            entry_zone = "绝对观望"
+            pos_sizing = {"conservative": "0%", "moderate": "0%", "aggressive": "0%", "status": "绝对观望"}
+            scale_in_triggers = {"observation": {"condition": "等待进入 Phase C/D 确认信号", "price": 0.0}}
+            dynamic_warning = "当前处于派发初期（Phase A），主力在测试需求，供应尚未完全主控。虽然有弱势信号迹象，但下方仍有需求抵抗，此时做空极易被轧空。根据威科夫原则，应保持空仓观望，等待 Phase C 的 UTAD 确认或 Phase D 的 SOW 破位。"
+            stop_loss = {
+                "conservative": {
+                    "value": 0.0,
+                    "derivation": "无",
+                    "note": "派发初期（Phase A/B）不提供做空建议，以防被轧空"
+                },
+                "aggressive": {
+                    "value": 0.0,
+                    "derivation": "无",
+                    "note": "派发初期（Phase A/B）不提供做空建议，以防被轧空"
+                },
+                "atr_dynamic_stop": {
+                    "value": 0.0,
+                    "derivation": "无",
+                    "note": "派发初期（Phase A/B）不提供做空建议，以防被轧空"
+                }
+            }
+            targets = {
+                "target_1": {
+                    "value": 0.0,
+                    "derivation": "无",
+                    "note": "派发初期（Phase A/B）不提供做空目标"
+                },
+                "target_2": {
+                    "value": 0.0,
+                    "derivation": "无",
+                    "note": "派发初期（Phase A/B）不提供做空目标"
+                }
+            }
+
         # 退出规则
         exit_rules = self._calculate_exit_rules(atr)
 

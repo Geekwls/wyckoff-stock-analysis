@@ -451,6 +451,43 @@ class WyckoffAnalyzer:
                 current_price, atr, tr_high, tr_low, is_bullish
             )
 
+            # 派发初期（Phase A/B）强制拦截过滤
+            is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
+            is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
+                             any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
+            is_dist_early = is_dist and is_early_phase
+
+            if is_dist_early:
+                stop_loss = {
+                    "conservative": {
+                        "value": 0.0,
+                        "derivation": "无",
+                        "note": "派发初期（Phase A/B）不提供做空建议，以防被轧空"
+                    },
+                    "aggressive": {
+                        "value": 0.0,
+                        "derivation": "无",
+                        "note": "派发初期（Phase A/B）不提供做空建议，以防被轧空"
+                    },
+                    "atr_dynamic_stop": {
+                        "value": 0.0,
+                        "derivation": "无",
+                        "note": "派发初期（Phase A/B）不提供做空建议，以防被轧空"
+                    }
+                }
+                targets = {
+                    "target_1": {
+                        "value": 0.0,
+                        "derivation": "无",
+                        "note": "派发初期（Phase A/B）不提供做空目标"
+                    },
+                    "target_2": {
+                        "value": 0.0,
+                        "derivation": "无",
+                        "note": "派发初期（Phase A/B）不提供做空目标"
+                    }
+                }
+
             # 3. SOS-SOW 关键确认位
             key_level = None
             try:
@@ -751,6 +788,27 @@ class WyckoffAnalyzer:
         tr = self.pattern_detector.detect_trading_range()
         if not tr:
             return {}
+
+        # 区间边界失效校验：若 tr_low > 0 且最近 60 个交易日内最低价跌破过 tr_low，但当前收盘价已重新站回 tr_low * 1.03 以上
+        tr_low = tr.get('low', 0.0)
+        tr_high = tr.get('high', 0.0)
+        recent_data = self.data.tail(60) if self.data is not None else pd.DataFrame()
+        recent_low = recent_data['Low'].min() if not recent_data.empty else 0.0
+        current_price = self.data['Close'].iloc[-1] if self.data is not None and not self.data.empty else 0.0
+
+        if tr_low > 0 and recent_low < tr_low and current_price >= tr_low * 1.03:
+            return {
+                'method': 'invalidated_tr',
+                'cause_bars': 0,
+                'volatility_contraction': 0.0,
+                'contraction_factor': 0.0,
+                'description': "🚨 原交易区间参考性已下降：价格曾跌破原支撑位且已大幅收回，表明市场已找到新的需求抵抗，当前正在重建结构。根据威科夫原则，原区间已失效，必须暂停目标测算，等待新的有效 TR 形成。",
+                'targets': {'target_1': 0.0, 'target_2': 0.0, 'target_3': 0.0},
+                'theory': "威科夫区间失效原则",
+                'tr_low': tr_low,
+                'tr_high': tr_high,
+                'current_price': current_price
+            }
 
         try:
             phase_result = self.identify_phase()
