@@ -570,7 +570,10 @@ class RecommendationEngine:
         direction = "观望"
         zone = "等待形态确认"
         stop = StopLossModel(conservative=0.0, aggressive=0.0)
-        phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
+        if isinstance(pattern_results, dict):
+            phase_str = pattern_results.get('phase') or 'Unknown'
+        else:
+            phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
 
         def _get_lps_low(window: int = 15) -> float:
             return float(data['Low'].tail(window).min())
@@ -674,6 +677,17 @@ class RecommendationEngine:
             conservative=cons, moderate=mod, aggressive=aggr
         )
 
+        # ── 派发初期/中期做空逻辑拦截覆盖 (威科夫诊断与处方强制一致性) ──
+        is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
+        is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
+                         any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
+        is_dist_early = is_dist and is_early_phase
+        if is_dist_early:
+            direction = "观望"
+            zone = "空仓观望，等待派发结构进一步明朗"
+            stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
+            pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
+
         is_phase_ab = 'Phase A' in phase_str or 'Phase B' in phase_str
         is_phase_e = 'Phase E' in phase_str
         is_markup_markdown = 'Markup' in phase_str or 'Markdown' in phase_str
@@ -697,7 +711,8 @@ class RecommendationEngine:
 
     def generate_risk_advice(self, quality: SignalQualityModel, plan: TradingPlanModel,
                              has_conflict: bool = False, conflict_details: str = "",
-                             market_env: MarketEnvironment = None, data: Any = None) -> RiskAdviceModel:
+                             market_env: MarketEnvironment = None, data: Any = None,
+                             phase_str: str = "") -> RiskAdviceModel:
         """
         生成分层风险建议 (Enhanced with volatility check and conflict detection)
 
@@ -711,6 +726,19 @@ class RecommendationEngine:
         """
         score = getattr(quality, 'score', None) or (quality.get('score') if isinstance(quality, dict) else 0)
         direction = getattr(plan, 'direction', None) or (plan.get('direction') if isinstance(plan, dict) else "观望")
+
+        # ── 派发初期/中期做空逻辑拦截判定 (威科夫诊断与处方强制一致性) ──
+        is_dist_early = False
+        if phase_str:
+            is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
+            is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
+                             any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
+            is_dist_early = is_dist and is_early_phase
+        else:
+            # 鲁棒的 Fallback：从 trading_plan (plan) 的 entry_zone 识别
+            entry_zone = getattr(plan, 'entry_zone', '') or (plan.get('entry_zone') if isinstance(plan, dict) else '')
+            if entry_zone == "空仓观望，等待派发结构进一步明朗":
+                is_dist_early = True
 
         #  新增：检查方向与环境的冲突
         direction_env_conflict = False
@@ -752,6 +780,24 @@ class RecommendationEngine:
             stop_desc = f"严格设于结构阻力/Upthrust极值点上方 {cons_stop_val:.2f} (结构失效位)"
 
         def get_item(mode: str) -> RiskAdviceItem:
+            # 优先处理派发初中期绝对观望拦截
+            if is_dist_early:
+                if mode in ["conservative", "moderate"]:
+                    return RiskAdviceItem(
+                        action="绝对观望",
+                        reason="当前处于派发初期/中期（Phase A/B），主力在测试需求，价格仍会有反复冲高（UT）。虽然有弱势信号迹象，但供应尚未完全主控，下方仍有需求抵抗，此时做空极易被轧空。根据威科夫原则，当前任何做空建议皆无效，应保持空仓观望。",
+                        position="0%",
+                        stop_loss=stop_desc,
+                        entry_condition="耐心空仓，等待进入 Phase C（出现决定性的 UTAD）或 Phase D（出现有效 SOW 破位及缩量回踩确认）"
+                    )
+                else:  # aggressive
+                    return RiskAdviceItem(
+                        action="绝对观望",
+                        reason="即使在激进视角下，在派发 Phase A/B 结构未明朗前强行参与做空也是高危行为，下方存在 Spring 抵抗及结构重建。",
+                        position="0%",
+                        stop_loss=stop_desc,
+                        entry_condition="耐心空仓，等待进入 Phase C（出现决定性的 UTAD）或 Phase D（出现有效 SOW 破位及缩量回踩确认）"
+                    )
             # 获取或动态计算对应的仓位
             has_explicit_pos = False
             if plan and isinstance(plan, dict) and 'position_sizing' in plan:

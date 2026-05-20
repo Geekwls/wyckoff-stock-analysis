@@ -365,9 +365,38 @@ class PhaseCoordinator:
                     return 'Accumulation Phase B'
             return 'Accumulation Phase C'
 
-        # Upthrust 也跳转到 Phase C，但置信度略低于 Spring
+        # Upthrust 阶段升级校验：严格区分 Phase B 普通阻力测试与 Phase C 决断性 UTAD/诱多
         if upthrust_res.get('detected'):
-            return 'Distribution Phase C'
+            latest_ut = upthrust_res.get('latest_upthrust')
+            is_utad = False
+            try:
+                utad_check = self.detector.detect_utad()
+                is_utad = utad_check.get('detected', False)
+            except Exception:
+                pass
+            
+            is_valid_ut = False
+            if latest_ut:
+                # 检查最新 upthrust 信号的有效性、回落效率与跟随性
+                is_valid = latest_ut.get('is_valid', True)
+                rejection_days = latest_ut.get('rejection_days', 99)
+                ft_quality = latest_ut.get('follow_through_quality', 0.0)
+                
+                # 快速跌回且具有向下跟随性，或已被直接识别为 UTAD
+                is_strong_rejection = rejection_days <= 3 and ft_quality >= 33.0
+                if is_valid and (is_strong_rejection or is_utad):
+                    is_valid_ut = True
+            
+            # 联合证据：伴随向下特征变异（CHoCH down）
+            has_weakness_confirm = False
+            if choch_res and choch_res.get('detected') and choch_res.get('direction') == 'down':
+                has_weakness_confirm = True
+            
+            if is_valid_ut or has_weakness_confirm:
+                return 'Distribution Phase C'
+            else:
+                # 不满足强证据链的普通上冲，仅归为 Phase B 普通阻力测试，防范交易指令逻辑越位
+                return 'Distribution Phase B (Upthrust阻力测试)'
 
         # 孟洪涛：CHoCH 是阶段转换的终极确认 (P0)
         if choch_res and choch_res.get('detected'):
@@ -814,14 +843,44 @@ class PhaseCoordinator:
                     f"发生在 SC→AR→ST 积累之后，而非 Phase A 初期）"
                 )
                 return new_phase, revision_logs
-            # 派发阶段同理：Phase A 不应出现 Upthrust（Upthrust 属于 Phase C）
+            # 派发阶段同理：Phase A 不应出现 Upthrust。根据威科夫强证据链，若是决断性的 UTAD 则应升级为 Phase C，若仅是普通上冲测试则修正为 Phase B。
             if 'Phase A' in preliminary_phase and 'Distribution' in preliminary_phase and event_type == 'upthrust':
-                new_phase = 'Distribution Phase C'
-                revision_logs.append(
-                    f"[时序修正] Upthrust 只属于 Phase C。当前阶段 '{preliminary_phase}' 与 Upthrust 信号矛盾，"
-                    f"强制升级为 '{new_phase}'。"
-                )
-                return new_phase, revision_logs
+                is_valid_c = False
+                try:
+                    ut_res = self.detector.detect_utad()
+                    if ut_res.get('detected'):
+                        is_valid_c = True
+                except Exception:
+                    pass
+                
+                # 检查最新 upthrust 的质量特征
+                up_obj = getattr(events, 'upthrust', None)
+                if up_obj and not is_valid_c:
+                    latest_ut = getattr(up_obj, 'latest_upthrust', None)
+                    if not latest_ut:
+                        signals = getattr(up_obj, 'upthrusts', [])
+                        latest_ut = signals[-1] if signals else None
+                    if latest_ut:
+                        is_valid = getattr(latest_ut, 'is_valid', True) or latest_ut.get('is_valid', True)
+                        rejection_days = getattr(latest_ut, 'rejection_days', 99) or latest_ut.get('rejection_days', 99)
+                        ft_quality = getattr(latest_ut, 'follow_through_quality', 0.0) or latest_ut.get('follow_through_quality', 0.0)
+                        
+                        if is_valid and rejection_days <= 3 and ft_quality >= 33.0:
+                            is_valid_c = True
+                
+                if is_valid_c:
+                    new_phase = 'Distribution Phase C'
+                    revision_logs.append(
+                        f"[时序修正] 检测到符合 Phase C 强证据链的决断性 Upthrust (UTAD)。当前阶段 '{preliminary_phase}' 与其冲突，"
+                        f"强制升级为 '{new_phase}'。"
+                    )
+                    return new_phase, revision_logs
+                else:
+                    new_phase = 'Distribution Phase B'
+                    revision_logs.append(
+                        f"[时序修正] 检测到普通 Upthrust 阻力测试信号。当前阶段 '{preliminary_phase}' 转为修正为 '{new_phase}'（属于 Phase B 区间测试）。"
+                    )
+                    return new_phase, revision_logs
             # 如果初步判断是派发，但检测到 Spring
             if 'Distribution' in preliminary_phase and event_type == 'spring':
                 revision_logs.append(f"检测到 Spring，从 {preliminary_phase} 修正为 Accumulation")

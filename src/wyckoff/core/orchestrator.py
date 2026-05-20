@@ -111,7 +111,9 @@ class WyckoffOrchestrator:
 
         # 生成交易计划和风险建议
         trading_plan = self.rec_engine.generate_trading_plan(data, patterns, targets)
-        risk_advice = self.rec_engine.generate_risk_advice(quality, trading_plan)
+        risk_advice = self.rec_engine.generate_risk_advice(
+            quality, trading_plan, phase_str=patterns.get('phase', '')
+        )
 
         return quality, trading_plan, risk_advice
 

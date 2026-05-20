@@ -383,4 +383,10 @@ class WyckoffReportGenerator:
     def generate_risk_advice(self, signal_quality, trading_plan):
         # 兼容旧测试，代理调用 rec_engine 的同名方法
         data = self.data if self.data is not None else (self.analyzer.data if hasattr(self.analyzer, 'data') else None)
-        return self.rec_engine.generate_risk_advice(signal_quality, trading_plan, data=data)
+        phase_str = ""
+        if self.pattern_detector:
+            try:
+                phase_str = self.pattern_detector.identify_phase().get('phase', '')
+            except Exception:
+                pass
+        return self.rec_engine.generate_risk_advice(signal_quality, trading_plan, data=data, phase_str=phase_str)

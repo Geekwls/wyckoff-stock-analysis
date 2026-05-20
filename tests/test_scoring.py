@@ -244,3 +244,61 @@ def test_market_aware_direction_a_stock():
     plan = generator.generate(phase_str="Distribution Phase E", is_a_stock=False)
     assert plan['direction'] == "做空"
     assert plan.get('market_constraint') is None
+
+def test_early_distribution_intercept():
+    from src.wyckoff.core.recommendation_engine import RecommendationEngine
+    from src.wyckoff.schemas import SignalQualityModel, TradingPlanModel
+    import pandas as pd
+
+    engine = RecommendationEngine()
+    
+    # 构造模拟数据（需要收盘价和 volume 等）
+    data = pd.DataFrame({
+        'Open': [100.0, 100.0],
+        'High': [100.0, 100.0],
+        'Low': [100.0, 100.0],
+        'Close': [100.0, 108.41],
+        'Volume': [1000, 1000]
+    })
+    
+    # 模拟处于派发初期 Phase A，且有 SOW 跌破或 Upthrust 等做空信号
+    patterns = {
+        'phase': 'Distribution Phase A (买入高潮停止)',
+        'phase_enum': 'PHASE_A',
+        'upthrust': {'detected': True, 'upthrusts': [{'breakout_price': 105.0, 'price': 105.0}]},
+        'sow': {'detected': True, 'price': 108.41}
+    }
+    
+    targets = {'target_1': 95.0, 'target_2': 90.0}
+    
+    # 验证交易计划被覆写为观望
+    plan = engine.generate_trading_plan(data, patterns, targets)
+    assert plan.direction == "观望"
+    assert plan.entry_zone == "空仓观望，等待派发结构进一步明朗"
+    assert plan.stop_loss.conservative == 0.0
+    assert plan.stop_loss.aggressive == 0.0
+    assert plan.position_sizing.conservative == "0%"
+    assert plan.position_sizing.moderate == "0%"
+    assert plan.position_sizing.aggressive == "0%"
+    
+    # 验证风险建议被全部覆写为绝对观望且仓位为0%
+    quality = SignalQualityModel(score=8, max_score=10, confidence="High", reasons=["SOW detected"])
+    advice = engine.generate_risk_advice(quality, plan, phase_str=patterns['phase'])
+    
+    assert advice.conservative.action == "绝对观望"
+    assert advice.conservative.position == "0%"
+    assert "当前处于派发初期/中期（Phase A/B）" in advice.conservative.reason
+    assert "极易被轧空" in advice.conservative.reason
+    assert "等待进入 Phase C" in advice.conservative.entry_condition
+    
+    assert advice.moderate.action == "绝对观望"
+    assert advice.moderate.position == "0%"
+    
+    assert advice.aggressive.action == "绝对观望"
+    assert advice.aggressive.position == "0%"
+    assert "即使在激进视角下" in advice.aggressive.reason
+
+    # 验证 fallback（不传递 phase_str，从 trading_plan 的 entry_zone 自动反向解析）
+    advice_fallback = engine.generate_risk_advice(quality, plan)
+    assert advice_fallback.conservative.action == "绝对观望"
+    assert advice_fallback.conservative.position == "0%"
