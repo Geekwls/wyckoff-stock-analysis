@@ -74,7 +74,7 @@ class SymbolResolver:
                         original=original,
                         normalized=original,
                         market=MarketType.A_SHARE,
-                        source='baostock',
+                        source='akshare',
                         is_st=True
                     )
         
@@ -82,16 +82,21 @@ class SymbolResolver:
         
         # 2. 识别市场与归一化
         # A股逻辑
-        if symbol_upper.startswith(('SH.', 'SZ.')) or (symbol.isdigit() and len(symbol) == 6):
+        if symbol_upper.startswith(('SH.', 'SZ.', 'BJ.')) or (symbol.isdigit() and len(symbol) == 6):
             normalized = symbol_upper
             if symbol.isdigit():
-                prefix = 'SH' if symbol.startswith('6') else 'SZ'
+                if symbol.startswith(('60', '68')):
+                    prefix = 'SH'
+                elif symbol.startswith(('43', '83', '87', '88')):
+                    prefix = 'BJ'
+                else:
+                    prefix = 'SZ'
                 normalized = f"{prefix}.{symbol}"
             return SymbolInfo(
                 original=original,
                 normalized=normalized,
                 market=MarketType.A_SHARE,
-                source='baostock',
+                source='akshare',
                 is_st=is_st
             )
         

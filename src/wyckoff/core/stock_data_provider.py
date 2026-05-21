@@ -20,7 +20,8 @@ class StockDataProvider:
         """
         获取全 A 股基础信息（市值、行业、成交额等）
         
-        优先使用 BaoStock（更稳定），失败时回退到 AkShare
+        优先使用 AkShare（提供实时完整的市值和成交额数据，更利于筛选），
+        失败时回退到 BaoStock。
         
         Returns:
             DataFrame with columns:
@@ -38,19 +39,9 @@ class StockDataProvider:
         
         logger.info("正在获取全 A 股数据...")
         
-        # 优先使用 BaoStock（更稳定）
+        # 优先使用 AkShare（数据维度完整，包含实时市值、成交额、换手率）
         try:
-            df_spot = cls._fetch_from_baostock()
-            if df_spot is not None and not df_spot.empty:
-                cls._cache = df_spot
-                logger.info(f"获取完成（BaoStock），共 {len(df_spot)} 只股票")
-                return df_spot
-        except Exception as e:
-            logger.warning(f"BaoStock 获取全 A 股数据失败: {e}")
-        
-        # 回退到 AkShare
-        try:
-            logger.info("回退到 AkShare 获取全 A 股数据...")
+            logger.info("优先使用 AkShare 获取全 A 股实时行情数据...")
             df_spot = cls._fetch_from_akshare()
             if df_spot is not None and not df_spot.empty:
                 cls._cache = df_spot
@@ -58,6 +49,17 @@ class StockDataProvider:
                 return df_spot
         except Exception as e:
             logger.warning(f"AkShare 获取全 A 股数据失败: {e}")
+        
+        # 回退到 BaoStock
+        try:
+            logger.info("回退到 BaoStock 获取全 A 股数据...")
+            df_spot = cls._fetch_from_baostock()
+            if df_spot is not None and not df_spot.empty:
+                cls._cache = df_spot
+                logger.info(f"获取完成（BaoStock），共 {len(df_spot)} 只股票")
+                return df_spot
+        except Exception as e:
+            logger.warning(f"BaoStock 获取全 A 股数据失败: {e}")
         
         # 两个数据源都失败，返回空 DataFrame
         logger.error("所有数据源获取全 A 股数据均失败")
@@ -147,16 +149,24 @@ class StockDataProvider:
             
             df_spot = df_spot.rename(columns=column_mapping)
             
-            # 过滤：仅保留主板/创业板/科创板
-            df_spot = df_spot[df_spot['code'].str.match(r'^(60|68|00|30)\d{4}$')]
+            # 过滤：仅保留主板/创业板/科创板/北交所
+            df_spot = df_spot[df_spot['code'].str.match(r'^(60|68|00|30|43|83|87)\d{4}$')]
+            
+            # 显式转换为数值类型，防止过滤时抛出类型异常
+            numeric_cols = ['market_cap', 'circulating_market_cap', 'amount', 'turnover_rate', 'pe_ratio', 'latest_price', 'pct_change']
+            for col in numeric_cols:
+                if col in df_spot.columns:
+                    df_spot[col] = pd.to_numeric(df_spot[col], errors='coerce')
             
             # 获取行业分类
             industry_map = cls._get_industry_map()
             df_spot['industry'] = df_spot['code'].map(industry_map).fillna('未知')
             
-            # 转换为 baostock 格式（sh.600519）
+            # 转换为 A 股统一格式（sh.600519, bj.836149）
             df_spot['code_bs'] = df_spot['code'].apply(
-                lambda x: f"sh.{x}" if x.startswith(('60', '68')) else f"sz.{x}"
+                lambda x: f"sh.{x}" if x.startswith(('60', '68')) else (
+                    f"bj.{x}" if x.startswith(('43', '83', '87')) else f"sz.{x}"
+                )
             )
             
             return df_spot

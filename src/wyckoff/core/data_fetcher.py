@@ -110,7 +110,20 @@ class WyckoffDataFetcher:
 
             # 3. 获取对应策略并抓取
             strategy = DataSourceFactory.create(info.source, self.config)
-            data = strategy.fetch(info.normalized, period, frequency=frequency)
+            try:
+                data = strategy.fetch(info.normalized, period, frequency=frequency)
+            except Exception as e:
+                # 增加对 A 股从 akshare 回退到 baostock 的鲁棒容错
+                if info.market == MarketType.A_SHARE and info.source == 'akshare':
+                    logger.warning(f"AkShare 获取 A 股 {info.normalized} 失败: {e}，尝试回退到 BaoStock...")
+                    try:
+                        fallback_strategy = DataSourceFactory.create('baostock', self.config)
+                        data = fallback_strategy.fetch(info.normalized, period, frequency=frequency)
+                    except Exception as fallback_err:
+                        logger.error(f"BaoStock 回退获取 {info.normalized} 也失败: {fallback_err}")
+                        raise e
+                else:
+                    raise
 
             # 4. 数据质量验证
             if data is not None and len(data) > 0:

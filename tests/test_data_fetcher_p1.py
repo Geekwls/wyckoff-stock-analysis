@@ -11,7 +11,13 @@ class TestDataFetcherRefactoring(unittest.TestCase):
         info = self.fetcher.resolver.resolve("600519")
         self.assertEqual(info.market, MarketType.A_SHARE)
         self.assertEqual(info.normalized, "SH.600519")
-        self.assertEqual(info.source, "baostock")
+        self.assertEqual(info.source, "akshare")
+
+    def test_symbol_resolver_beijing_exchange(self):
+        info = self.fetcher.resolver.resolve("836149")
+        self.assertEqual(info.market, MarketType.A_SHARE)
+        self.assertEqual(info.normalized, "BJ.836149")
+        self.assertEqual(info.source, "akshare")
 
     def test_symbol_resolver_us_stock(self):
         info = self.fetcher.resolver.resolve("AAPL")
