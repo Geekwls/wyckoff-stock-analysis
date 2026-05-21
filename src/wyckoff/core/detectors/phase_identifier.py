@@ -315,15 +315,84 @@ class PhaseIdentifier(BaseDetector):
 
     def _detect_phase_b_active(self, events: Dict) -> Optional[Tuple[str, WyckoffPhase, float]]:
         """
-        Phase B 主动检测逻辑
+        Phase B 主动检测逻辑 — 量化吸收校验重构版 (Wave 3)
 
-        威科夫理论 Phase B 特征：
-        - 震荡测试区间（Trading Range 形成）
-        - 多次 LPS（Last Point Support）/ UT（Upthrust）交替
-        - 量能规律性缩放
-        - 价格在 TR 中部震荡
-        - VSA 枯竭信号（no_supply/no_demand）
+        1. 数据切片与首尾剔除：提取 TR 持续天数 L（默认 60）对应的最近 L 根 K 线，截取中间 90% 数据中间集，防范 SC/Spring 等极端噪点污染波段统计。
+        2. 波幅收敛校验 (Volatility Contraction)：前半段与后半段 Spread 均值之比，阈值 < 0.85。
+        3. 量能非对称校验 (Volume Asymmetry)：通过 Weis Wave 生成器统计上涨与下跌波段总成交量之比，吸筹阈值 > 1.2，派发阈值 < 0.8。
+        4. 综合吸收得分 (Accumulation Score / Distribution Score) 对置信度进行额外奖励或惩罚调降。
         """
+        # 1. 提取 TR 切片数据并计算吸收得分
+        tr_info = getattr(events, 'trading_range', None)
+        L = 60
+        if tr_info is not None:
+            if hasattr(tr_info, 'duration_days'):
+                L = getattr(tr_info, 'duration_days', 60)
+            elif isinstance(tr_info, dict):
+                L = tr_info.get('duration_days', tr_info.get('consolidation_duration_days', 60))
+        if not L or pd.isna(L) or L <= 0:
+            L = 60
+        
+        L = min(L, len(self.data))
+        
+        spread_ratio = 1.0
+        v_up, v_down = 0.0, 0.0
+        waves_generated = False
+        
+        if L >= 10:
+            tr_df = self.data.tail(L)
+            start_idx = int(0.05 * L)
+            end_idx = int(0.95 * L)
+            if end_idx - start_idx >= 4:
+                middle_df = tr_df.iloc[start_idx:end_idx]
+            else:
+                middle_df = tr_df
+            
+            mid_len = len(middle_df)
+            half = mid_len // 2
+            if half >= 2:
+                former_df = middle_df.iloc[:half]
+                latter_df = middle_df.iloc[half:]
+                
+                spread_former = ((former_df['High'] - former_df['Low']) / former_df['Close'] * 100).mean()
+                spread_latter = ((latter_df['High'] - latter_df['Low']) / latter_df['Close'] * 100).mean()
+                
+                if spread_former > 0 and not pd.isna(spread_former) and not pd.isna(spread_latter):
+                    spread_ratio = spread_latter / spread_former
+                    
+            try:
+                from ..weis_wave import WeisWaveGenerator
+                generator = WeisWaveGenerator(middle_df, atr_multiplier=2.0)
+                waves = generator.generate()
+                v_up = sum(w.volume for w in waves if w.direction == 'up')
+                v_down = sum(w.volume for w in waves if w.direction == 'down')
+                waves_generated = True
+            except Exception as e:
+                logger.warning(f"Failed to generate Weis Waves on middle_df: {e}")
+        
+        # 计算得分
+        acc_score = 0.0
+        dist_score = 0.0
+        
+        if spread_ratio < 0.85:
+            acc_score += 0.3
+            dist_score += 0.3
+            
+        if waves_generated:
+            if v_down > 0:
+                vol_ratio_val = v_up / v_down
+                if vol_ratio_val > 1.2:
+                    acc_score += 0.4
+            elif v_up > 0:
+                acc_score += 0.4
+                
+            if v_up > 0:
+                dist_vol_ratio_val = v_up / v_down if v_down > 0 else 999.0
+                if dist_vol_ratio_val < 0.8:
+                    dist_score += 0.4
+            elif v_down > 0:
+                dist_score += 0.4
+
         # 获取关键事件
         lps_events = getattr(events, 'lps_list', []) or []
         ut_events = getattr(events, 'ut_list', []) or []
@@ -346,24 +415,31 @@ class PhaseIdentifier(BaseDetector):
         total_tests = lps_count + ut_count
         has_st = self._safe_check_detected(st)
 
-        #  新增：检查 VSA 枯竭信号
+        # 新增：检查 VSA 枯竭信号
         vsa_signals = getattr(events, 'vsa_signals', None) or {}
         has_no_supply = (vsa_signals.get('is_no_supply', False) if isinstance(vsa_signals, dict)
                          else getattr(vsa_signals, 'is_no_supply', False))
         has_no_demand = (vsa_signals.get('is_no_demand', False) if isinstance(vsa_signals, dict)
                          else getattr(vsa_signals, 'is_no_demand', False))
 
+        ret_val = None
         # VSA 枯竭 + TR 中 = Phase B 强信号
         if (has_no_supply or has_no_demand) and total_tests >= 1:
             climax_type = getattr(climax, 'type', 'selling_climax') if has_climax else 'selling_climax'
             if climax_type == 'selling_climax':
-                return (
+                ret_val = (
                     'Accumulation Phase B (VSA供应枯竭测试)',
                     WyckoffPhase.PHASE_B,
                     0.70
                 )
+            else:
+                ret_val = (
+                    'Distribution Phase B (VSA无需求测试)',
+                    WyckoffPhase.PHASE_B,
+                    0.70
+                )
 
-        if total_tests >= 2 or has_st:
+        elif total_tests >= 2 or has_st:
             # 检查是否在 TR 中震荡
             tr_info = getattr(events, 'trading_range', None)
             in_tr = (tr_info.is_consolidation if hasattr(tr_info, 'is_consolidation')
@@ -373,19 +449,55 @@ class PhaseIdentifier(BaseDetector):
                 climax_type = getattr(climax, 'type', 'selling_climax') if has_climax else 'selling_climax'
 
                 if climax_type == 'selling_climax':
-                    return (
+                    ret_val = (
                         'Accumulation Phase B (积累区震荡测试)',
                         WyckoffPhase.PHASE_B,
                         0.65 + min(total_tests * 0.05, 0.15)  # 测试次数越多置信度越高
                     )
                 else:
-                    return (
+                    ret_val = (
                         'Distribution Phase B (派发区震荡测试)',
                         WyckoffPhase.PHASE_B,
                         0.65 + min(total_tests * 0.05, 0.15)
                     )
 
-        return None
+        if ret_val is None:
+            return None
+
+        desc, phase_enum, conf = ret_val
+        climax_type = getattr(climax, 'type', 'selling_climax') if has_climax else 'selling_climax'
+
+        # 应用量化吸收得分的置信度奖励与惩罚调降
+        if climax_type == 'selling_climax':
+            score = acc_score
+            if score >= 0.6:
+                conf = min(0.90, conf + 0.15)
+                desc = f"[经典威科夫吸筹特征确认] 筹码吸收极度强劲：波幅在整理期间显著收敛了 {max(0, int((1 - spread_ratio) * 100))}%"
+                if waves_generated:
+                    if v_down > 0:
+                        desc += f"，且上涨波段的累积努力压倒下跌波段达 {max(0, int((v_up / v_down - 1) * 100))}%"
+                    else:
+                        desc += "，且上涨波段的累积努力完全压倒下跌波段"
+                desc += "。"
+            elif score < 0.3:
+                conf = 0.50
+                desc = f"[警告] 非吸收性无方向宽幅震荡整理 (波幅收敛比: {spread_ratio:.2f})，置信度降至 0.50。"
+        else:  # buying_climax
+            score = dist_score
+            if score >= 0.6:
+                conf = min(0.90, conf + 0.15)
+                desc = f"[经典威科夫派发特征确认] 筹码派发特征明显：波幅在整理期间显著收敛了 {max(0, int((1 - spread_ratio) * 100))}%"
+                if waves_generated:
+                    if v_up > 0:
+                        desc += f"，且下跌波段的累积派发努力压倒上涨波段达 {max(0, int((v_down / v_up - 1) * 100))}%"
+                    else:
+                        desc += "，且下跌波段的累积派发努力完全压倒上涨波段"
+                desc += "。"
+            elif score < 0.3:
+                conf = 0.50
+                desc = f"[警告] 非筹码派发性宽幅震荡整理 (波幅收敛比: {spread_ratio:.2f})，置信度降至 0.50。"
+
+        return (desc, phase_enum, conf)
 
     def _check_ambiguous_phase_structure(self, events: Dict) -> Optional[Tuple[str, WyckoffPhase, float]]:
         """

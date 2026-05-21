@@ -300,7 +300,7 @@ class BreakoutAnalysisModel(BaseModel):
     volume_analysis: Optional[Dict[str, Any]] = Field(default=None)
     pullback_analysis: Optional[Dict[str, Any]] = Field(default=None)
     post_breakout_analysis: Optional[Dict[str, Any]] = Field(default=None)
-    joc_test_status: Optional[str] = Field(default=None)
+    joc_test_status: Optional[Any] = Field(default=None)
     conclusion: Optional[str] = Field(default=None)
     reason: Optional[str] = Field(default=None)
 

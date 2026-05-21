@@ -309,7 +309,7 @@ class WyckoffReportGenerator:
         }
 
     def calculate_signal_quality(self, market_phase):
-        from wyckoff.schemas import SignalQualityModel
+        from src.wyckoff.schemas import SignalQualityModel
         # 兼容旧测试，代理调用 rec_engine 的同名方法
         data = self.data if self.data is not None else (self.analyzer.data if hasattr(self.analyzer, 'data') else None)
         

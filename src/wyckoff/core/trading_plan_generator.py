@@ -215,6 +215,12 @@ class TradingPlanGenerator:
                           high: float, low: float, is_bullish: bool) -> tuple:
         """
         计算入场、止损、目标价位
+
+        Wave 4 偏差二修正：引入 PnF 因果目标作为优先来源。
+        在 PnF 水平计数 >= 3 列且投影目标有效时，使用：
+        - target_1: PnF 1.0x 基准垂直投影（因果目标初始兑现位）
+        - target_2: PnF 1.618x 斐波那契扩展（强趋势空间推演）
+        仅在 PnF 无法计算或失效时，退回 ATR 兜底。
         
         Args:
             current_price: 当前价格
@@ -227,7 +233,56 @@ class TradingPlanGenerator:
             (入场区间, 止损, 目标)
         """
         entry_zone = f"{round(current_price * 0.99, 2)} - {round(current_price * 1.01, 2)}"
-        
+
+        # ─────────────────────────────────────────────────────────────────
+        # Wave 4 偏差二修正：PnF 因果目标优先策略
+        # 利用点数图水平计数计算因（筹码积累宽度）对应的果（价格目标）
+        # ─────────────────────────────────────────────────────────────────
+        pnf_target_1 = None
+        pnf_target_2 = None
+        pnf_derivation = None
+        pnf_horizontal_count = 0
+
+        try:
+            from .point_and_figure import calculate_cause_effect_from_pnf
+            pnf_phase = "Accumulation" if is_bullish else "Distribution"
+            pnf_res = calculate_cause_effect_from_pnf(
+                self.data,
+                box_size_pct=1.0,
+                reversal_boxes=3,
+                phase=pnf_phase,
+                known_tr_high=high,
+                known_tr_low=low
+            )
+            if pnf_res:
+                h_count = pnf_res.get('horizontal_count', 0)
+                pnf_targets = pnf_res.get('targets', {})
+                # 动态阈值：count >= 3 且目标字典非空时认为 PnF 因果目标有效
+                if h_count >= 3 and pnf_targets:
+                    raw_t1 = pnf_targets.get('target_1', 0)
+                    raw_t2 = pnf_targets.get('target_2', 0)
+                    # 合理性校验：做多目标必须大于当前价，做空目标必须小于当前价
+                    if is_bullish and raw_t1 > current_price and raw_t2 > current_price:
+                        pnf_target_1 = round(raw_t1, 2)
+                        pnf_target_2 = round(raw_t2, 2)
+                        pnf_horizontal_count = h_count
+                        pnf_derivation = (
+                            f"点数图因果律: 水平计数{h_count}列 x 箱体{pnf_res.get('box_size_pct', 1.0):.0f}% = "
+                            f"因果目标幅{pnf_res.get('base_effect', 0):.2f} | "
+                            f"1.0x基准目标={pnf_target_1}, 1.618x扩展目标={pnf_target_2}"
+                        )
+                    elif not is_bullish and raw_t1 < current_price and raw_t2 < current_price:
+                        pnf_target_1 = round(raw_t1, 2)
+                        pnf_target_2 = round(raw_t2, 2)
+                        pnf_horizontal_count = h_count
+                        pnf_derivation = (
+                            f"点数图因果律(向下): 水平计数{h_count}列 x 箱体{pnf_res.get('box_size_pct', 1.0):.0f}% = "
+                            f"因果目标幅{pnf_res.get('base_effect', 0):.2f} | "
+                            f"1.0x基准={pnf_target_1}, 1.618x扩展={pnf_target_2}"
+                        )
+        except Exception as _pnf_err:
+            logger.debug(f"[Wave4] PnF 因果目标计算失败，退回 ATR 兜底: {_pnf_err}")
+
         if is_bullish:
             # 止损修复：使用 ATR 倍数 + TR 下沿兜底
             conservative_val = round(max(current_price - 2.5 * atr, low), 2)
@@ -250,20 +305,31 @@ class TradingPlanGenerator:
                     "note": "ATR动态追踪止损"
                 }
             }
-            
-            target_1_val = round(high, 2) if current_price < high else round(current_price + atr * 2, 2)
-            target_2_val = round(high + atr * 3, 2)
-            
+
+            # ────── Wave 4: PnF 因果目标优先，ATR 兜底 ──────
+            if pnf_target_1 is not None:
+                target_1_val = pnf_target_1
+                target_2_val = pnf_target_2
+                t1_derivation = pnf_derivation
+                t1_note = f"第一目标位（PnF 因果律 1.0x基准投影，{pnf_horizontal_count}列计数）"
+                t2_note = f"第二目标位（PnF 因果律 1.618x斐波那契扩展）"
+            else:
+                target_1_val = round(high, 2) if current_price < high else round(current_price + atr * 2, 2)
+                target_2_val = round(high + atr * 3, 2)
+                t1_derivation = "TR_high if current_price < high else current_price + 2*ATR"
+                t1_note = "第一目标位，测试区间高点或平推2倍ATR"
+                t2_note = "第二目标位，预期趋势加速"
+
             targets = {
                 "target_1": {
                     "value": target_1_val,
-                    "derivation": "TR_high if current_price < high else current_price + 2*ATR",
-                    "note": "第一目标位，测试区间高点或平推2倍ATR"
+                    "derivation": t1_derivation,
+                    "note": t1_note
                 },
                 "target_2": {
                     "value": target_2_val,
-                    "derivation": "TR_high + 3*ATR",
-                    "note": "第二目标位，预期趋势加速"
+                    "derivation": pnf_derivation or "TR_high + 3*ATR",
+                    "note": t2_note
                 }
             }
         else:
@@ -287,24 +353,36 @@ class TradingPlanGenerator:
                     "note": "ATR动态追踪止损"
                 }
             }
-            
-            target_1_val = round(low, 2) if current_price > low else round(current_price - atr * 2, 2)
-            target_2_val = round(low - atr * 3, 2)
-            
+
+            # ────── Wave 4: PnF 因果目标优先（做空方向）──────
+            if pnf_target_1 is not None:
+                target_1_val = pnf_target_1
+                target_2_val = pnf_target_2
+                t1_derivation = pnf_derivation
+                t1_note = f"第一目标位（PnF 因果律 1.0x基准向下投影，{pnf_horizontal_count}列计数）"
+                t2_note = f"第二目标位（PnF 因果律 1.618x斐波那契向下扩展）"
+            else:
+                target_1_val = round(low, 2) if current_price > low else round(current_price - atr * 2, 2)
+                target_2_val = round(low - atr * 3, 2)
+                t1_derivation = "TR_low if current_price > low else current_price - 2*ATR"
+                t1_note = "第一目标位，测试区间底点或平推2倍ATR"
+                t2_note = "第二目标位，看空趋势确立"
+
             targets = {
                 "target_1": {
                     "value": target_1_val,
-                    "derivation": "TR_low if current_price > low else current_price - 2*ATR",
-                    "note": "第一目标位，测试区间底点或平推2倍ATR"
+                    "derivation": t1_derivation,
+                    "note": t1_note
                 },
                 "target_2": {
                     "value": target_2_val,
-                    "derivation": "TR_low - 3*ATR",
-                    "note": "第二目标位，看空趋势确立"
+                    "derivation": pnf_derivation or "TR_low - 3*ATR",
+                    "note": t2_note
                 }
             }
         
         return entry_zone, stop_loss, targets
+
     
     def _adjust_position_with_sentiment(self, sentiment_data: Optional[Dict[str, Any]], 
                                          phase_str: str, is_bullish: bool) -> tuple:

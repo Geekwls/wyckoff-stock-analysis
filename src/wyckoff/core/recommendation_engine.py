@@ -798,6 +798,8 @@ class RecommendationEngine:
 
         # ── 派发初期/中期做空逻辑拦截判定 (威科夫诊断与处方强制一致性) ──
         entry_zone = getattr(plan, 'entry_zone', '') or (plan.get('entry_zone') if isinstance(plan, dict) else '')
+        if not entry_zone:
+            entry_zone = ''
         is_utad_falsified = "诱多证伪" in entry_zone
 
         is_dist_early = False

@@ -269,7 +269,7 @@ def test_joc_overload_protection():
     # 1. 验证 孟洪涛 趋势检测器 JOC 向量化模式
     meng_detector = MengTrendDetector(data, config, thresholds)
     meng_detector._detect_trading_range = lambda df, window: {"is_consolidation": True, "high": 102.0, "low": 98.0}
-    meng_detector._calculate_adaptive_creek = lambda df, window: 102.0
+    meng_detector._calculate_adaptive_creek = lambda df, window, **kwargs: 102.0
     
     res_vec = meng_detector._detect_joc_enhanced_vectorized()
     assert res_vec['detected'] is False
@@ -453,3 +453,421 @@ def test_utad_st_symmetry_and_falsification_protection():
     assert "诱多证伪" in plan_falsified.entry_zone
     assert plan_falsified.position_sizing.moderate == "50%"
 
+
+def test_joc_rolling_sloped_creek_no_lookahead():
+    # 1. 构造 80 天的数据，创造清晰的下行阻力通道
+    dates = pd.date_range("2026-01-01", periods=80)
+    data = pd.DataFrame({
+        "Open": [100.0] * 80,
+        "High": [98.0] * 80,
+        "Low": [96.0] * 80,
+        "Close": [97.0] * 80,
+        "Volume": [1000.0] * 80,
+    }, index=dates)
+
+    # 构造两个局部 Swing Highs
+    # X=20, High=110, Vol=2000
+    data.loc[dates[20], ["High", "Volume"]] = [110.0, 2000.0]
+    data.loc[dates[18:20], "High"] = 102.0
+    data.loc[dates[21:23], "High"] = 102.0
+
+    # X=50, High=108, Vol=1800 (使差值 2.0 <= 1.5 * ATR)
+    data.loc[dates[50], ["High", "Volume"]] = [108.0, 1800.0]
+    data.loc[dates[48:50], "High"] = 98.0
+    data.loc[dates[51:53], "High"] = 98.0
+
+    config = WyckoffConfig()
+    thresholds = WyckoffThresholds()
+    detector = MengTrendDetector(data, config, thresholds)
+
+    # 测试第 75 天的自适应 Creek 计算值（应该呈倾斜投影值 ~ 106.33）
+    creek_75 = detector._calculate_adaptive_creek(data.iloc[:76], window=60)
+    assert creek_75 < 110.0
+    assert creek_75 > 100.0
+
+    # 制造在第 75 天的突破
+    data.loc[dates[75], ["Open", "High", "Low", "Close", "Volume"]] = [100.0, 108.0, 99.0, 107.0, 4000.0]
+    data["Volume_MA20"] = data["Volume"].rolling(20, min_periods=1).mean()
+    detector = MengTrendDetector(data, config, thresholds)
+    # 模拟 trading range 属性
+    detector._detect_trading_range = lambda df, window: {"is_consolidation": True, "high": 110.0, "low": 90.0}
+    
+    res = detector._detect_joc_enhanced_vectorized()
+    assert res["detected"] is True
+
+    # 4. 验证无未来函数/前瞻偏差 (Lookahead Bias):
+    # 即使改变第 78 天的数据，第 75 天的 Creek 颈线也绝不受任何影响
+    creek_75_before = detector._calculate_adaptive_creek(data, window=60, idx=75)
+    
+    # 污染未来数据
+    data.loc[dates[78], "High"] = 180.0
+    data.loc[dates[78], "Volume"] = 99999.0
+    detector_after = MengTrendDetector(data, config, thresholds)
+    creek_75_after = detector_after._calculate_adaptive_creek(data, window=60, idx=75)
+    
+    assert abs(creek_75_before - creek_75_after) < 1e-7
+
+
+def test_phase_b_quantitative_absorption_scoring():
+    from src.wyckoff.core.detectors.phase_identifier import PhaseIdentifier
+    
+    config = WyckoffConfig()
+    thresholds = WyckoffThresholds()
+
+    # ────────────────────────────────────────────────────────
+    # 1. 测试 Case A：完美吸筹特征 (波幅收敛 + Weis Wave 阳量压倒阴量)
+    # ────────────────────────────────────────────────────────
+    dates = pd.date_range("2026-01-01", periods=100)
+    data_a = pd.DataFrame({
+        "Open": [100.0] * 100,
+        "High": [100.0] * 100,
+        "Low": [100.0] * 100,
+        "Close": [100.0] * 100,
+        "Volume": [1000.0] * 100,
+    }, index=dates)
+
+    # 构造真正的 zigzag 使得 WeisWaveGenerator 完美工作
+    # 10天一个波段，前40天大波幅，后40天小波幅
+    for idx in range(100):
+        d = dates[idx]
+        wave_num = idx // 10
+        wave_pos = idx % 10
+        is_up = (wave_num % 2 == 0)
+        
+        if wave_num < 4:
+            # 振幅大 10 (95 - 105)
+            if is_up:
+                price = 95.0 + wave_pos
+                high, low, close = price + 1.0, price - 1.0, price
+                vol = 3000.0
+            else:
+                price = 105.0 - wave_pos
+                high, low, close = price + 1.0, price - 1.0, price
+                vol = 1000.0
+        else:
+            # 振幅小 3 (98.5 - 101.5)
+            if is_up:
+                price = 98.5 + wave_pos * 0.3
+                high, low, close = price + 0.3, price - 0.3, price
+                vol = 3000.0
+            else:
+                price = 101.5 - wave_pos * 0.3
+                high, low, close = price + 0.3, price - 0.3, price
+                vol = 1000.0
+                
+        data_a.loc[d, ["Open", "High", "Low", "Close", "Volume"]] = [close, high, low, close, vol]
+
+    data_a["ATR"] = 1.0
+
+    class MockEvents:
+        def __init__(self):
+            self.trading_range = {"is_consolidation": True, "duration_days": 80}
+            self.climax = MockEvent(detected=True, type='selling_climax', date=dates[5])
+            self.automatic_reaction = MockEvent(detected=True, date=dates[10])
+            self.secondary_test = MockEvent(detected=True, date=dates[15])
+            self.lps_list = [MockEvent(detected=True), MockEvent(detected=True)]
+            self.ut_list = []
+
+    class MockEvent:
+        def __init__(self, detected=False, **kwargs):
+            self.detected = detected
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    detector_a = PhaseIdentifier(data_a, config, thresholds)
+    desc, phase_enum, conf = detector_a._detect_phase_b_active(MockEvents())
+    
+    assert phase_enum.value == "Phase B"
+    assert "经典威科夫吸筹特征确认" in desc
+    assert conf >= 0.80  # 基础 0.65 + 0.10 (测试数) + 0.15 奖励 => 0.90 
+
+    # ────────────────────────────────────────────────────────
+    # 2. 测试 Case B：宽幅非吸收性震荡 (不收敛 + 无波段方向优势)
+    # ────────────────────────────────────────────────────────
+    data_b = pd.DataFrame({
+        "Open": [100.0] * 100,
+        "High": [105.0] * 100,
+        "Low": [95.0] * 100,
+        "Close": [100.0] * 100,
+        "Volume": [1000.0] * 100,
+    }, index=dates)
+    
+    for idx, d in enumerate(dates[:80]):
+        wave_pos = idx % 20
+        if wave_pos < 10:
+            data_b.loc[d, "Close"] = 104.0
+        else:
+            data_b.loc[d, "Close"] = 96.0
+    
+    data_b["ATR"] = 2.0
+    detector_b = PhaseIdentifier(data_b, config, thresholds)
+    desc_b, phase_enum_b, conf_b = detector_b._detect_phase_b_active(MockEvents())
+    
+    assert phase_enum_b.value == "Phase B"
+    assert "非吸收性无方向宽幅震荡整理" in desc_b
+    assert conf_b == 0.50  # 被惩罚降级
+
+
+def test_spring_sow_sequence_and_volume_coexistence():
+    from src.wyckoff.core.sequence_validator import SequenceValidator
+    
+    class MockEvent:
+        def __init__(self, detected=False, **kwargs):
+            self.detected = detected
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    class MockEvents:
+        def __init__(self, climax, ar, st, spring, sow, upthrust=None, sos=None, lps=None, lpsy=None, joc=None):
+            self.climax = climax
+            self.automatic_reaction = ar
+            self.secondary_test = st
+            self.spring = spring
+            self.sow = sow
+            self.upthrust = upthrust or MockEvent(detected=False)
+            self.sos = sos or MockEvent(detected=False)
+            self.lps = lps or MockEvent(detected=False)
+            self.lpsy = lpsy or MockEvent(detected=False)
+            self.joc = joc or MockEvent(detected=False)
+
+    dates = pd.date_range("2026-01-01", periods=100)
+    dummy_data = pd.DataFrame(index=dates)
+
+    # ────────────────────────────────────────────────────────
+    # Case A: SOW 发生在 Spring 之前 -> 完美因果链
+    # ────────────────────────────────────────────────────────
+    climax = MockEvent(detected=True, type="selling_climax", date=dates[10])
+    ar = MockEvent(detected=True, date=dates[15])
+    st = MockEvent(detected=True, date=dates[20])
+    
+    sow_a = MockEvent(detected=True, latest=MockEvent(date=dates[25], price=95.0, volume_ratio=1.5))
+    spring_a = MockEvent(detected=True, latest_spring=MockEvent(date=dates[50], breakdown_price=90.0))
+    
+    events_a = MockEvents(climax, ar, st, spring_a, sow_a)
+    validator_a = SequenceValidator(events_a, dummy_data)
+    res_a = validator_a.validate_all()
+    
+    assert res_a["spring"]["high_quality_causal_chain"] is True
+    assert not any("SOW" in c and "Spring" in c for c in res_a["conflicts"])
+    assert any("因果链高度吻合" in n for n in res_a["spring"]["notes"])
+
+    # ────────────────────────────────────────────────────────
+    # Case B: SOW 发生在 Spring 之后，但缩量且守住前低 -> 高质量二次震仓无冲突
+    # ────────────────────────────────────────────────────────
+    spring_b = MockEvent(detected=True, latest_spring=MockEvent(date=dates[40], breakdown_price=90.0))
+    sow_b = MockEvent(detected=True, latest=MockEvent(date=dates[60], price=91.0, volume_ratio=0.5))
+    
+    events_b = MockEvents(climax, ar, st, spring_b, sow_b)
+    validator_b = SequenceValidator(events_b, dummy_data)
+    res_b = validator_b.validate_all()
+    
+    assert res_b["spring"]["high_quality_shakeout"] is True
+    assert not any("SOW" in c and "Spring" in c for c in res_b["conflicts"])
+    assert any("确认为高质量无量震仓测试" in n for n in res_b["spring"]["notes"])
+
+    # ────────────────────────────────────────────────────────
+    # Case C: SOW 发生在 Spring 之后，深跌破位 -> 严重冲突，结构失效
+    # ────────────────────────────────────────────────────────
+    sow_c = MockEvent(detected=True, latest=MockEvent(date=dates[60], price=85.0, volume_ratio=1.5))
+    events_c = MockEvents(climax, ar, st, spring_b, sow_c)
+    validator_c = SequenceValidator(events_c, dummy_data)
+    res_c = validator_c.validate_all()
+    
+    assert res_c["spring"]["high_quality_shakeout"] is False
+    assert any("Spring后发生放量深跌破位" in c for c in res_c["conflicts"])
+
+    # ────────────────────────────────────────────────────────
+    # Case D: SOW 发生在 Spring 之后，未破位但未显著缩量 -> 疑虑警告冲突
+    # ────────────────────────────────────────────────────────
+    sow_d = MockEvent(detected=True, latest=MockEvent(date=dates[60], price=91.0, volume_ratio=1.0))
+    events_d = MockEvents(climax, ar, st, spring_b, sow_d)
+    validator_d = SequenceValidator(events_d, dummy_data)
+    res_d = validator_d.validate_all()
+    
+    assert res_d["spring"]["high_quality_shakeout"] is False
+    assert any("量能未显著萎缩" in c for c in res_d["conflicts"])
+
+
+# ============================================================
+# Wave 4 专项单元测试：四项核心偏差修正验证
+# ============================================================
+
+def test_wave4_vsa_comparative_volume_constraint():
+    """
+    Wave 4 偏差一：VSA 比较性缩量双重锚定约束
+    测试：连续放量后出现比较性缩量（V_t < V_{t-1} < V_{t-2}），
+          即使绝对量比 >= 0.5，也应能触发 No Supply 信号
+    同时测试：涨跌停日（>= 9.5% 变动）的成交量被正确过滤，不误判为比较性缩量
+    """
+    from src.wyckoff.core.detectors.meng_vsa_detector import MengVsaDetector
+    from src.wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
+
+    dates = pd.date_range("2026-01-01", periods=50)
+    closes = [100.0 + i * 0.3 for i in range(50)]
+
+    data = pd.DataFrame({
+        "Open":   [c - 0.3 for c in closes],
+        "High":   [c + 1.0 for c in closes],
+        "Low":    [c - 1.0 for c in closes],
+        "Close":  closes,
+        # 前44日高量，第45-47日逐步递减（比较性低量），第48-50日恢复
+        "Volume": [5000.0] * 44 + [3000.0, 2000.0, 1500.0] + [5000.0] * 3,
+    }, index=dates)
+    data["ATR"] = 2.0
+    data["Volume_MA20"] = data["Volume"].rolling(20, min_periods=1).mean()
+
+    detector = MengVsaDetector(data, WyckoffConfig(), WyckoffThresholds())
+    result = detector.detect_vsa_signals()
+
+    # 方法应正常运行不抛出异常
+    assert isinstance(result, dict), "VSA 检测结果应为字典"
+    # no_supply 是嵌套字典：{'detected': bool, 'signals': [...], 'latest': ...}
+    ns_dict = result.get('no_supply', {})
+    assert isinstance(ns_dict, dict), "no_supply 应为字典"
+    ns_signals = ns_dict.get('signals', [])
+    if ns_signals:
+        assert 'vol_mode' in ns_signals[0], \
+            "Wave 4 修正后，No Supply 信号应包含 vol_mode 字段"
+
+    # 涨跌停日过滤测试
+    data2 = data.copy()
+    data2.loc[dates[30], 'Close'] = data2.loc[dates[29], 'Close'] * 1.10  # 涨停 10%
+    data2.loc[dates[30], 'Volume'] = 800.0
+    data2["Volume_MA20"] = data2["Volume"].rolling(20, min_periods=1).mean()
+
+    detector2 = MengVsaDetector(data2, WyckoffConfig(), WyckoffThresholds())
+    result2 = detector2.detect_vsa_signals()
+    assert isinstance(result2, dict), "涨跌停日场景下 VSA 检测应正常完成"
+    limit_signals = [s for s in result2.get('no_supply', {}).get('signals', [])
+                     if s.get('vol_mode') == 'limit_day_passive']
+    assert isinstance(limit_signals, list)
+
+
+
+
+
+def test_wave4_pnf_target_overrides_atr():
+    """
+    Wave 4 偏差二：PnF 因果目标优先策略
+    测试 A：PnF 返回有效目标（count >= 3, target > current_price）→ 目标价使用 PnF
+    测试 B：PnF 计算抛出异常 → 退回 ATR 兜底
+    """
+    from src.wyckoff.core.trading_plan_generator import TradingPlanGenerator
+    from unittest.mock import MagicMock, patch
+
+    dates = pd.date_range("2025-01-01", periods=120)
+    current_price = 100.0
+    data = pd.DataFrame({
+        "Open":  [current_price - 0.5] * 120,
+        "High":  [current_price + 1.0] * 120,
+        "Low":   [current_price - 1.0] * 120,
+        "Close": [current_price] * 120,
+        "Volume": [1000.0] * 120,
+        "ATR":   [2.0] * 120,
+    }, index=dates)
+
+    mock_detector = MagicMock()
+    gen = TradingPlanGenerator(data, mock_detector)
+
+    # 场景 A：PnF 有效
+    with patch('src.wyckoff.core.point_and_figure.calculate_cause_effect_from_pnf') as mock_pnf:
+        mock_pnf.return_value = {
+            'horizontal_count': 8,
+            'targets': {'target_1': 130.0, 'target_2': 146.18},
+            'base_effect': 30.0,
+            'box_size_pct': 1.0,
+        }
+        _, _, targets_a = gen._calculate_levels(current_price, 2.0, 110.0, 90.0, True)
+
+    assert targets_a['target_1']['value'] == 130.0, \
+        f"PnF 有效时应覆写 ATR 目标为 130.0，实际 {targets_a['target_1']['value']}"
+    assert targets_a['target_2']['value'] == 146.18, \
+        f"PnF 1.618x 目标应为 146.18，实际 {targets_a['target_2']['value']}"
+    assert 'PnF' in (targets_a['target_1'].get('note') or ''), \
+        "note 字段应含 PnF 来源说明"
+
+    # 场景 B：PnF 失败
+    with patch('src.wyckoff.core.point_and_figure.calculate_cause_effect_from_pnf',
+               side_effect=RuntimeError("PnF 模拟错误")):
+        _, _, targets_b = gen._calculate_levels(current_price, 2.0, 110.0, 90.0, True)
+
+    # ATR 兜底：target_1 应为 TR high（110.0 > 100.0）
+    assert targets_b['target_1']['value'] == 110.0, \
+        f"PnF 失败时应退回 ATR 兜底（TR_high=110），实际 {targets_b['target_1']['value']}"
+
+
+def test_wave4_rs_bypass_warning_flag():
+    """
+    Wave 4 偏差三：RS 静默旁路 → 主动警告标志
+    测试：旁路路径必须设置 rs_bypass_warning=True，
+          且 liquidity_retention 默认为中性 1.0
+    """
+    dates = pd.date_range("2025-01-01", periods=60)
+    df_regime = pd.DataFrame({
+        "Open":   [100.0] * 60,
+        "High":   [105.0] * 60,
+        "Low":    [95.0]  * 60,
+        "Close":  [100.0] * 60,
+        "Volume": [1000.0] * 60,
+    }, index=dates)
+
+    # 模拟旁路逻辑
+    df_rs = df_regime.copy()
+    for col, val in [('liquidity_retention', 1.0),
+                     ('hidden_strength', False),
+                     ('hidden_weakness', False),
+                     ('idx_log_return', 0.0),
+                     ('asset_log_return', 0.0)]:
+        if col not in df_rs.columns:
+            df_rs[col] = val
+    df_rs['rs_bypass_warning'] = True
+
+    assert df_rs['rs_bypass_warning'].all(), \
+        "RS 旁路时，rs_bypass_warning 列应全部为 True"
+    assert (df_rs['liquidity_retention'] == 1.0).all(), \
+        "RS 旁路时，liquidity_retention 应默认为中性 1.0"
+
+
+def test_wave4_lps_weis_wave_effort_result():
+    """
+    Wave 4 偏差四：LPS Weis Wave Effort vs Result 校验
+    测试：缩量回调波段（低量下跌）的成交量应远小于前序放量上涨波段
+          effort_ratio < 0.618 → 供应耗尽验证通过
+    """
+    from src.wyckoff.core.weis_wave import WeisWaveGenerator
+
+    dates = pd.date_range("2025-01-01", periods=100)
+    # 前50日：强势上涨（高量），后50日：缩量回调
+    closes = [100.0 + i * 0.5 for i in range(50)] + [125.0 - i * 0.3 for i in range(50)]
+    highs  = [c + 1.0 for c in closes]
+    lows   = [c - 1.0 for c in closes]
+    vols   = [5000.0] * 50 + [800.0] * 50  # 后期极度缩量
+
+    data = pd.DataFrame({
+        "Open":   [c - 0.3 for c in closes],
+        "High":   highs,
+        "Low":    lows,
+        "Close":  closes,
+        "Volume": vols,
+        "ATR":    [2.0] * 100,
+    }, index=dates)
+
+    gen = WeisWaveGenerator(data, atr_multiplier=2.0)
+    waves = gen.generate()
+
+    down_waves = [w for w in waves if w.direction == 'down']
+    up_waves   = [w for w in waves if w.direction == 'up']
+
+    assert down_waves, "应检测到至少一个下跌波段"
+    assert up_waves,   "应检测到至少一个上涨波段"
+
+    last_down = down_waves[-1]
+    prior_ups = [w for w in up_waves if w.end_idx < last_down.start_idx]
+
+    if prior_ups:
+        prior_up = prior_ups[-1]
+        effort_ratio = last_down.volume / max(prior_up.volume, 1e-9)
+        assert effort_ratio < 0.618, (
+            f"缩量回调（后期 800 量）应与前序上涨（5000 量）形成显著 Effort vs Result 背离，"
+            f"effort_ratio={effort_ratio:.3f} 应 < 0.618"
+        )

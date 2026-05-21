@@ -94,6 +94,48 @@ class SequenceValidator:
         else:
             notes.append("缺少 SC/AR/ST 吸筹前置结构 ❌")
 
+        high_quality_causal_chain = False
+        high_quality_shakeout = False
+
+        # --- Wave 3: SOW & Spring时序解耦与量能深度验证 ---
+        sow = self.e.sow
+        if getattr(sow, 'detected', False):
+            sow_date = self._get_date(getattr(sow, 'latest', None), "date")
+            if sow_date is None:
+                sow_signals = getattr(sow, 'signals', [])
+                sow_date = self._get_date(sow_signals[-1], "date") if sow_signals else None
+            
+            sow_ts = self._to_ts(sow_date)
+            if sow_ts and spring_ts:
+                if sow_ts < spring_ts:
+                    high_quality_causal_chain = True
+                    notes.append("[经典吸筹模型确认] 检测到 Phase B 弱势出现后接 Phase C 终极震仓，因果链高度吻合，吸筹置信度极高！")
+                else:
+                    # SOW 发生在 Spring 之后，进行无量测试与位置破位校验
+                    sow_low = getattr(sow.latest, 'price', 0) if sow.latest else 0
+                    if not sow_low and hasattr(sow, 'signals') and sow.signals:
+                        sow_low = getattr(sow.signals[-1], 'price', 0)
+                    
+                    sl = getattr(spring, 'latest_spring', None)
+                    if sl is None and hasattr(spring, 'signals') and spring.signals:
+                        sl = spring.signals[-1]
+                    spring_low = getattr(sl, 'breakdown_price', 0) if sl else 0
+                    
+                    # 缩量校验
+                    sow_vol_ratio = getattr(sow.latest, 'volume_ratio', 1.0) if sow.latest else 1.0
+                    if not sow_vol_ratio and hasattr(sow, 'signals') and sow.signals:
+                        sow_vol_ratio = getattr(sow.signals[-1], 'volume_ratio', 1.0)
+                        
+                    if spring_low > 0 and sow_low > 0:
+                        if sow_low >= spring_low * 0.98:
+                            if sow_vol_ratio < 0.8:
+                                high_quality_shakeout = True
+                                notes.append("Spring 后的 SOW 回调呈显著缩量且守稳前低，确认为高质量无量震仓测试。")
+                            else:
+                                notes.append("Spring 后的 SOW 回调未破位但未显著缩量。")
+                        else:
+                            notes.append("Spring 后的 SOW 放量深跌破位，吸筹结构失效。")
+
         if pc >= 3 and order_ok:
             q = "high"
         elif pc >= 2:
@@ -109,6 +151,8 @@ class SequenceValidator:
             "precursor_count": pc,
             "sequence_ordered": order_ok,
             "notes": notes,
+            "high_quality_causal_chain": high_quality_causal_chain,
+            "high_quality_shakeout": high_quality_shakeout,
         }
 
     # ── Upthrust context (distribution mirror of Spring) ───
@@ -347,7 +391,53 @@ class SequenceValidator:
         lpsy = self.e.lpsy
 
         if getattr(spring, 'detected', False) and getattr(sow, 'detected', False):
-            conflicts.append("Spring(做多信号)与SOW(做空信号)同时存在")
+            spring_date = self._get_date(getattr(spring, 'latest_spring', None), "date", "breakdown_date")
+            if spring_date is None:
+                signals = getattr(spring, 'signals', [])
+                spring_date = self._get_date(signals[-1], "date") if signals else None
+            spring_ts = self._to_ts(spring_date)
+
+            sow_date = self._get_date(getattr(sow, 'latest', None), "date")
+            if sow_date is None:
+                sow_signals = getattr(sow, 'signals', [])
+                sow_date = self._get_date(sow_signals[-1], "date") if sow_signals else None
+            sow_ts = self._to_ts(sow_date)
+
+            if spring_ts and sow_ts:
+                if sow_ts < spring_ts:
+                    # SOW in Phase B, Spring in Phase C - Perfect Accumulation Causal Chain
+                    pass
+                else:
+                    # SOW after Spring - Check breakdown and volume
+                    sow_low = getattr(sow.latest, 'price', 0) if sow.latest else 0
+                    if not sow_low and hasattr(sow, 'signals') and sow.signals:
+                        sow_low = getattr(sow.signals[-1], 'price', 0)
+                    
+                    sl = getattr(spring, 'latest_spring', None)
+                    if sl is None and hasattr(spring, 'signals') and spring.signals:
+                        sl = spring.signals[-1]
+                    spring_low = getattr(sl, 'breakdown_price', 0) if sl else 0
+
+                    sow_vol_ratio = getattr(sow.latest, 'volume_ratio', 1.0) if sow.latest else 1.0
+                    if not sow_vol_ratio and hasattr(sow, 'signals') and sow.signals:
+                        sow_vol_ratio = getattr(sow.signals[-1], 'volume_ratio', 1.0)
+
+                    if spring_low > 0 and sow_low > 0:
+                        if sow_low < spring_low * 0.98:
+                            # SOW effectively broke the Spring low - Fail!
+                            conflicts.append("Spring后发生放量深跌破位(SOW)，突破支撑失败，吸筹结构已失效")
+                        else:
+                            # sow_low >= spring_low * 0.98
+                            if sow_vol_ratio >= 0.8:
+                                # Not shrunken enough, soft warning
+                                conflicts.append("Spring后发生SOW回调，但量能未显著萎缩，结构存在疑虑")
+                            else:
+                                # High-quality shakeout confirmation - No conflict!
+                                pass
+                    else:
+                        conflicts.append("Spring(做多信号)与SOW(做空信号)同时存在且无足够价格数据对比")
+            else:
+                conflicts.append("Spring(做多信号)与SOW(做空信号)同时存在且日期不可比")
 
         if getattr(upthrust, 'detected', False) and getattr(sos, 'detected', False):
             conflicts.append("Upthrust(做空信号)与SOS(做多信号)同时存在")

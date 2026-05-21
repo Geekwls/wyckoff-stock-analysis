@@ -50,43 +50,95 @@ class MengVsaDetector(BaseDetector):
             tr_low = df['Low'].iloc[max(0, i-59):i+1].min()
             tr_diff = tr_high - tr_low
             tr_pos = (df['Close'].iloc[i] - tr_low) / tr_diff if tr_diff > 0 else 0.5
+
+            # ─────────────────────────────────────────────────────────────────
+            # Wave 4 偏差一修正：Tom Williams VSA 比较性缩量双重锚定约束
+            # 理论依据：No Supply / No Demand 是比较性信号，当前缩量必须相对于
+            # 前序放量才有意义。仅凭绝对均线阈值，会在整体低量环境下漏报高质量
+            # 回踩，也会在量能反弹时产生误报。
+            # ─────────────────────────────────────────────────────────────────
+
+            # 涨跌停识别：A 股涨跌停时成交量被动萎缩，不具备比较意义
+            # 以前收盘价为基准，当日涨跌幅超过 9.5% 判定为触板（含 ST 股 5% 板）
+            prev_close = df['Close'].iloc[i-1] if i > 0 else df['Close'].iloc[i]
+            daily_chg_pct = abs(df['Close'].iloc[i] - prev_close) / max(prev_close, 1e-9)
+            is_limit_day = daily_chg_pct >= 0.095  # 涨停/跌停日
+
+            # 次日也需要排除（涨跌停次日流动性仍异常）
+            is_post_limit_day = False
+            if i >= 1:
+                prev_prev_close = df['Close'].iloc[i-2] if i >= 2 else df['Close'].iloc[i-1]
+                prev_chg_pct = abs(df['Close'].iloc[i-1] - prev_prev_close) / max(prev_prev_close, 1e-9)
+                is_post_limit_day = prev_chg_pct >= 0.095
+
+            # 比较性低量：V_t < V_{t-1} AND V_t < V_{t-2}
+            vol_t = df['Volume'].iloc[i]
+            vol_t1 = df['Volume'].iloc[i-1] if i >= 1 else vol_t + 1
+            vol_t2 = df['Volume'].iloc[i-2] if i >= 2 else vol_t + 1
+            is_comparative_low = (vol_t < vol_t1) and (vol_t < vol_t2)
+
+            # 综合低量判断：绝对标准 OR（动态标准 + 比较性约束）
+            # 涨跌停日及次日跳过比较性约束（避免被动缩量误判）
+            if is_limit_day or is_post_limit_day:
+                is_vsa_low_vol = vol_r < 0.5  # 仅用绝对标准兜底
+            else:
+                is_vsa_low_vol = (vol_r < 0.5) or (vol_r < 1.0 and is_comparative_low)
             
-            # 🔧 优化后的 No Supply 检测：量比<0.5，收盘位置>60%
+            # 记录低量类型，用于 description 说明
+            vol_mode = "limit_day_passive" if (is_limit_day or is_post_limit_day) else (
+                "comparative" if (vol_r >= 0.5 and is_comparative_low) else "absolute"
+            )
+
+            # 🔧 优化后的 No Supply 检测
             # 背景要求：上涨波段中，或者在下跌波段且价格回调至区间下轨（tr_pos < 0.4）
             is_no_supply_bg = (swing_dir == 1) or (swing_dir == -1 and tr_pos < 0.4)
             if is_no_supply_bg:
                 if body_pct < t.MENG_VSA_BODY_RATIO:
                     cp = (df['Close'].iloc[i] - df['Low'].iloc[i]) / pr
-                    # 孟洪涛要求：量比<50%，收盘在中高位（>60%）
-                    if cp > 0.6 and vol_r < 0.5:
+                    # 孟洪涛要求：低量，收盘在中高位（>60%）
+                    if cp > 0.6 and is_vsa_low_vol:
                         is_bottom_test = (swing_dir == -1 and tr_pos < 0.4)
+                        desc_vol = {
+                            "absolute": "上升趋势无供应（卖盘枯竭）" if not is_bottom_test else "底部无供应测试（主力吸筹后期）",
+                            "comparative": "[VSA比较性缩量] 量能低于前序两日，卖盘相对萎缩" + ("，底部测试" if is_bottom_test else ""),
+                            "limit_day_passive": "涨跌停后被动缩量，量能可信度低，需结合前后量能判断"
+                        }.get(vol_mode, "无供给信号")
                         ns.append({
                             "date": df.index[i], 
-                            "vol_ratio": round(vol_r, 2), 
+                            "vol_ratio": round(vol_r, 2),
+                            "vol_mode": vol_mode,
+                            "is_comparative_low": is_comparative_low,
                             "close_position": round(cp * 100, 1),
                             "tr_position": round(tr_pos * 100, 1),
                             "swing_direction": "UP" if swing_dir == 1 else "DOWN",
                             "is_bottom_test": is_bottom_test,
-                            "description": "底部无供应测试（主力吸筹后期）" if is_bottom_test else "上升趋势无供应（卖盘枯竭）"
+                            "description": desc_vol
                         })
             
             # 🔧 优化后的 No Demand 检测：添加位置约束和趋势判断
             # 背景要求：下跌波段中，或者在上涨波段且价格反弹至区间上轨（tr_pos > 0.6）
             is_no_demand_bg = (swing_dir == -1) or (swing_dir == 1 and tr_pos > 0.6)
             if is_no_demand_bg:
-                if body_pct < 0.3 and vol_r < 0.5:
+                if body_pct < 0.3 and is_vsa_low_vol:
                     cp = (df['Close'].iloc[i] - df['Low'].iloc[i]) / pr
                     # 孟洪涛要求：出现在下跌中，收盘在低位（<40%）
                     if cp < 0.4:
                         is_top_test = (swing_dir == 1 and tr_pos > 0.6)
+                        desc_nd = {
+                            "absolute": "顶部无需求测试（上涨受阻）" if is_top_test else "下跌趋势无需求（买盘枯竭）",
+                            "comparative": "[VSA比较性缩量] 量能低于前序两日，" + ("顶部需求萎缩" if is_top_test else "下行买盘枯竭"),
+                            "limit_day_passive": "涨跌停后被动缩量，量能可信度低，需结合前后量能判断"
+                        }.get(vol_mode, "无需求信号")
                         nd.append({
                             "date": df.index[i], 
-                            "vol_ratio": round(vol_r, 2), 
+                            "vol_ratio": round(vol_r, 2),
+                            "vol_mode": vol_mode,
+                            "is_comparative_low": is_comparative_low,
                             "close_position": round(cp * 100, 1),
                             "tr_position": round(tr_pos * 100, 1),
                             "swing_direction": "UP" if swing_dir == 1 else "DOWN",
                             "is_top_test": is_top_test,
-                            "description": "顶部无需求测试（上涨受阻）" if is_top_test else "下跌趋势无需求（买盘枯竭）"
+                            "description": desc_nd
                         })
             
             #  修复#6c: Stopping Volume 检测 - 量比>2.0

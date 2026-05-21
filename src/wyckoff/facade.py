@@ -215,17 +215,53 @@ class WyckoffAnalyzer:
                 df_rs = self.wie3_rs_engine.analyze(df_regime, index_df)
                 logger.debug("[WIE 3.0 MVP] 相对强度分析完成")
             else:
-                df_rs = df_regime.copy()  # 修复 SettingWithCopyWarning 隐患
-                # 添加默认的相对强度字段
-                if 'liquidity_retention' not in df_rs.columns:
-                    df_rs['liquidity_retention'] = 1.0
-                if 'hidden_strength' not in df_rs.columns:
-                    df_rs['hidden_strength'] = False
-                if 'hidden_weakness' not in df_rs.columns:
-                    df_rs['hidden_weakness'] = False
-                # 添加默认字段以供 extract_summary 使用
-                df_rs['idx_log_return'] = 0.0
-                df_rs['asset_log_return'] = 0.0
+                # ─────────────────────────────────────────────────────────────
+                # Wave 4 偏差三修正：RS 静默旁路 → 主动警告 + 后台自适应拉取
+                # 原来：无大盘数据时静默将 RS 置为 1.0，等于"雷达关闭但显示无敌机"
+                # 修正：先尝试自适应拉取对应市场的默认指数，再明确警告用户
+                # ─────────────────────────────────────────────────────────────
+                logger.warning(
+                    "[WIE 3.0 MVP] [Wave4-偏差三] 大盘基准数据缺失！"
+                    "RS 引擎正在尝试后台自适应拉取对应市场默认指数..."
+                )
+                # 尝试通过 _get_cached_index_analyzer 自适应拉取
+                auto_index_df = None
+                try:
+                    auto_idx = self._get_cached_index_analyzer()
+                    if auto_idx is not None and hasattr(auto_idx, 'data') and auto_idx.data is not None:
+                        auto_index_df = auto_idx.data
+                        logger.info(
+                            f"[WIE 3.0 MVP] [Wave4] RS 引擎：已自适应拉取大盘数据，"
+                            f"行数={len(auto_index_df)}，RS 分析正常激活。"
+                        )
+                except Exception as _auto_e:
+                    logger.warning(f"[WIE 3.0 MVP] [Wave4] RS 自适应拉取失败: {_auto_e}")
+
+                if auto_index_df is not None and not auto_index_df.empty:
+                    df_rs = self.wie3_rs_engine.analyze(df_regime, auto_index_df)
+                    df_rs['rs_bypass_warning'] = False
+                    logger.debug("[WIE 3.0 MVP] RS 分析（自适应大盘数据）完成")
+                else:
+                    # 自适应拉取仍然失败，进入旁路并设置显式警告标志
+                    logger.warning(
+                        "[WIE 3.0 MVP] [Wave4-偏差三] RS 引擎：大盘数据自适应拉取失败！"
+                        "相对强度分析已强制旁路，liquidity_retention 将置为中性 1.0。"
+                        "请检查网络连接或手动传入 index_df。"
+                    )
+                    df_rs = df_regime.copy()  # 修复 SettingWithCopyWarning 隐患
+                    # 添加默认的相对强度字段（中性兜底）
+                    if 'liquidity_retention' not in df_rs.columns:
+                        df_rs['liquidity_retention'] = 1.0
+                    if 'hidden_strength' not in df_rs.columns:
+                        df_rs['hidden_strength'] = False
+                    if 'hidden_weakness' not in df_rs.columns:
+                        df_rs['hidden_weakness'] = False
+                    # 添加默认字段以供 extract_summary 使用
+                    df_rs['idx_log_return'] = 0.0
+                    df_rs['asset_log_return'] = 0.0
+                    # 设置旁路警告标志，供 report_generator 渲染 [!WARNING]
+                    df_rs['rs_bypass_warning'] = True
+
 
             # 6. 状态机推演 (P1.2: 向量化批量更新)
             # 必须重置状态机，确保每次 analyze 都是从先验开始，而不是从上次的脏状态开始

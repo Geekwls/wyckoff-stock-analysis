@@ -739,6 +739,50 @@ class StrengthWeaknessDetector(BaseDetector):
                 lps_signals.append(signal)
 
         if lps_signals:
+            # ─────────────────────────────────────────────────────────────────
+            # Wave 4 偏差四修正：Weis Wave 相对成交量 Effort vs Result 校验
+            # 理论依据：LPS 是缩量回调，回调波多量能必须小于其前序上涨波
+            # 若 LPS 回调波成交量 >= 前序上涨波，证明供应仍活跃，信号降级为 MEDIUM
+            # ─────────────────────────────────────────────────────────────────
+            try:
+                from ..weis_wave import WeisWaveGenerator
+                ww_gen = WeisWaveGenerator(df, atr_multiplier=1.5)
+                waves = ww_gen.generate()
+                if waves and len(waves) >= 2:
+                    down_waves = [w for w in waves if w.direction == 'down']
+                    up_waves = [w for w in waves if w.direction == 'up']
+                    if down_waves and up_waves:
+                        last_down = down_waves[-1]
+                        up_waves_before = [w for w in up_waves if w.end_idx < last_down.start_idx]
+                        if up_waves_before:
+                            prior_up = up_waves_before[-1]
+                            effort_ratio = last_down.volume / max(prior_up.volume, 1e-9)
+                            for sig in lps_signals:
+                                sig['weis_wave'] = {
+                                    'pullback_vol': round(last_down.volume, 0),
+                                    'prior_up_vol': round(prior_up.volume, 0),
+                                    'effort_ratio': round(effort_ratio, 3),
+                                    'low_effort': effort_ratio < 0.618,
+                                }
+                                if effort_ratio >= 1.0 and sig.get('confidence_score') == 'HIGH':
+                                    sig['confidence_score'] = 'MEDIUM'
+                                    sig['note'] = sig.get('note', '') + (
+                                        f' | [Weis Wave] 回调量({last_down.volume:.0f}) >= '
+                                        f'上涨量({prior_up.volume:.0f})，'
+                                        f'供应活跃，信号降级 ⚠️'
+                                    )
+                                elif effort_ratio < 0.618:
+                                    sig['note'] = sig.get('note', '') + (
+                                        f' | [Weis Wave] 回调量={effort_ratio:.2f}x上涨量，'
+                                        f'缩量回调供应耗尽 ✔️'
+                                    )
+                                else:
+                                    sig['note'] = sig.get('note', '') + (
+                                        f' | [Weis Wave] 回调量/上涨量={effort_ratio:.2f}x'
+                                    )
+            except Exception as _ww_err:
+                logger.debug(f"[Wave4] Weis Wave LPS 校验失败 (non-critical): {_ww_err}")
+
             return {
                 'detected': True,
                 'signals': lps_signals,
@@ -756,6 +800,7 @@ class StrengthWeaknessDetector(BaseDetector):
                 'phase_a_validation': phase_a_validation if is_accumulation else None
             }
         return {'detected': False}
+
 
     def detect_lpsy(self, window: int = 30, trading_range: Dict = None) -> Dict:
         """
