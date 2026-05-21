@@ -252,17 +252,29 @@ class EffortResultMixin:
         except Exception as e:
             logger.warning(f"WeisWave analysis failed: {e}. Falling back to legacy mode.")
 
-        # Legacy Mode (降级方案): 不再硬编码 6天，而是改为动态窗口
+        # Legacy Mode (降级方案): 动态自适应波动窗口替代固定窗口
         recent = df.tail(40)
-        # 根据 ATR 或简单的高低点寻找一个稍微动态的窗口长度
-        # 为了稳定，取近期的波动周期，这里取 8 天作为默认降级窗口
-        w_len = 8
+        try:
+            if 'ATR' in df.columns:
+                atr_val = df['ATR'].iloc[-1]
+            else:
+                high, low, close_prev = df['High'], df['Low'], df['Close'].shift(1)
+                tr = pd.concat([high - low, (high - close_prev).abs(), (low - close_prev).abs()], axis=1).max(axis=1)
+                atr_val = tr.rolling(window=14, min_periods=1).mean().iloc[-1]
+            
+            close_val = df['Close'].iloc[-1]
+            atr_pct = (atr_val / max(close_val, 1e-9)) * 100.0
+        except Exception:
+            atr_pct = 2.0  # 中性默认值
+            
+        w_len = int(round(12 - (atr_pct - 1.0) * 7.0 / 3.0))
+        w_len = max(5, min(12, w_len))
+
         if len(recent) >= w_len * 2:
             wave1 = recent.iloc[-w_len*2:-w_len]
             wave2 = recent.iloc[-w_len:]
             wave1_push = max(wave1['High'].max() - wave1['Low'].min(), 1e-9)
             wave2_push = max(wave2['High'].max() - wave2['Low'].min(), 1e-9)
-            # Legacy 模式下原来用的是 mean()，现在改为真实波段累加的 sum()，以向 Weis Wave 靠拢
             wave1_vol = wave1['Volume'].sum()
             wave2_vol = wave2['Volume'].sum()
             sot = wave2_vol > wave1_vol * 1.1 and wave2_push < wave1_push * 0.8
@@ -273,7 +285,7 @@ class EffortResultMixin:
                 "wave2_push": round(wave2_push, 2),
                 "wave1_vol": round(wave1_vol, 2),
                 "wave2_vol": round(wave2_vol, 2),
-                "method": "legacy_fixed_window"
+                "method": "legacy_adaptive_window"
             }
             
         return {"status": "insufficient_swings"}

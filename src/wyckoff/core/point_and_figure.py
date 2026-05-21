@@ -205,6 +205,7 @@ class PointAndFigureCalculator:
                                    phase: str = '',
                                    known_tr_high: float = None,
                                    known_tr_low: float = None,
+                                   data: pd.DataFrame = None,
                                    **kwargs) -> Dict:
         """
         计算水平计数（威科夫因果法则的核心）
@@ -220,6 +221,7 @@ class PointAndFigureCalculator:
             phase: 当前阶段（用于确定目标方向）
             known_tr_high: 已知交易区间上沿（如BC高点），优先使用
             known_tr_low: 已知交易区间下沿（如AR低点），优先使用
+            data: 原始 OHLCV DataFrame
             
         Returns:
             水平计数结果和目标价
@@ -229,26 +231,68 @@ class PointAndFigureCalculator:
             return {'count': 0, 'targets': {}}
         
         if known_tr_high is not None and known_tr_low is not None:
-            accumulation_columns = [
-                col for col in columns
+            accumulation_columns_with_idx = [
+                (col, i) for i, col in enumerate(columns)
                 if col['low'] <= known_tr_high and col['high'] >= known_tr_low
             ]
-            if not accumulation_columns:
-                accumulation_columns = columns[-20:]
+            if not accumulation_columns_with_idx:
+                accumulation_columns_with_idx = [(col, i) for i, col in enumerate(columns[-20:])]
             method = "known_tr"
         elif accumulation_start is None or accumulation_end is None:
             accumulation_start, accumulation_end = self._find_accumulation_range(columns)
             if accumulation_start >= accumulation_end:
                 return {'count': 0, 'targets': {}}
-            accumulation_columns = columns[accumulation_start:accumulation_end + 1]
+            accumulation_columns_with_idx = [(columns[i], i) for i in range(accumulation_start, accumulation_end + 1)]
             method = "auto_detect"
         else:
             if accumulation_start >= accumulation_end:
                 return {'count': 0, 'targets': {}}
-            accumulation_columns = columns[accumulation_start:accumulation_end + 1]
+            accumulation_columns_with_idx = [(columns[i], i) for i in range(accumulation_start, accumulation_end + 1)]
             method = "explicit_index"
         
-        horizontal_count = len(accumulation_columns)
+        # ── PnF 最大密集线 (Count Line) 筹码重心计数 ──
+        price_volume = {}
+        for col, i in accumulation_columns_with_idx:
+            # 1. 确定该列对应的原始 K 线成交量
+            if data is not None and not data.empty:
+                start_idx = col['start_idx']
+                end_idx = columns[i + 1]['start_idx'] if i + 1 < len(columns) else len(data)
+                col_vol = float(data.iloc[start_idx:end_idx]['Volume'].sum())
+            else:
+                col_vol = 1.0
+
+            # 2. 确定该列包含的所有格子
+            step = self._get_box_size(col['low'])
+            boxes = []
+            cur = col['low']
+            while cur <= col['high'] + step * 0.01:
+                boxes.append(self._round_by_step(cur, step))
+                cur += step
+
+            # 3. 将成交量平均分给所有格子
+            if boxes:
+                box_vol = col_vol / len(boxes)
+                for b in boxes:
+                    price_volume[b] = price_volume.get(b, 0.0) + box_vol
+
+        # 4. 找到加权得分最高的价格水平线 (Count Line)
+        if price_volume:
+            best_price = max(price_volume, key=price_volume.get)
+        else:
+            all_highs = [col['high'] for col, _ in accumulation_columns_with_idx]
+            all_lows = [col['low'] for col, _ in accumulation_columns_with_idx]
+            best_price = (max(all_highs) + min(all_lows)) / 2.0 if all_highs else 0.0
+
+        # 5. 过滤出与最大密集线重叠的列
+        dense_columns = []
+        for col, _ in accumulation_columns_with_idx:
+            step = self._get_box_size(col['low'])
+            if col['low'] - step * 0.01 <= best_price <= col['high'] + step * 0.01:
+                dense_columns.append(col)
+
+        # 6. 水平计数为与最大密集线重叠的真实列数
+        horizontal_count = len(dense_columns)
+        accumulation_columns = [col for col, _ in accumulation_columns_with_idx]
 
         # 孟洪涛原则：使用动态阈值（需要传入 data 参数）
         # 这里使用默认阈值3，调用方可以通过 kwargs 传入 dynamic_threshold
@@ -450,6 +494,7 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
     result = calculator.calculate_horizontal_count(
         pnf_data, phase=phase,
         known_tr_high=known_tr_high, known_tr_low=known_tr_low,
+        data=data,  # 传入原始 DataFrame
         dynamic_threshold=dynamic_threshold  # 传入动态阈值
     )
     

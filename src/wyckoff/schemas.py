@@ -106,8 +106,10 @@ class SpringSignalModel(BaseModel):
     shadow_ratio: Optional[float] = Field(default=None, description="下影线与实体比例")
     total_score: Optional[float] = Field(default=None, description="综合评分(0-100)")
     strength: Optional[str] = Field(default=None, description="信号强度: strong/normal/weak")
-    spring_type: Optional[int] = Field(default=None, description="Spring类型(1/2/3)")
+    spring_type: Optional[Any] = Field(default=None, description="Spring类型")
     lifecycle_status: str = Field(default="active", description="生命周期状态: active/confirmed/failed")
+    st_confirmed: Optional[bool] = Field(default=None, description="二次测试是否确认")
+    breakdown_volume: Optional[float] = Field(default=None, description="突破日成交量")
 
 
 class SpringModel(BaseModel):

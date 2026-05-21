@@ -688,6 +688,54 @@ class RecommendationEngine:
             stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
             pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
 
+        # ── Spring 二次测试校验拦截 (未确认时强制做多拦截改签观望) ──
+        def _get_latest_spring_detail(sp_obj):
+            if not sp_obj: return None
+            latest = RecommendationEngine._get_attr(sp_obj, 'latest_spring')
+            if not latest:
+                signals = RecommendationEngine._get_attr(sp_obj, 'signals', [])
+                latest = signals[-1] if signals else None
+            if not latest:
+                if RecommendationEngine._get_attr(sp_obj, 'spring_type'):
+                    return sp_obj
+                return None
+            return latest
+
+        sp_detail = _get_latest_spring_detail(spring)
+        st_unconfirmed_spring = False
+        if sp_detail:
+            needs_st = RecommendationEngine._get_attr(sp_detail, 'needs_secondary_test', False)
+            st_confirmed = RecommendationEngine._get_attr(sp_detail, 'st_confirmed', False)
+            if needs_st and not st_confirmed:
+                st_unconfirmed_spring = True
+
+        if direction == "做多" and st_unconfirmed_spring:
+            direction = "观望"
+            zone = "等待低点高于 Spring 且缩量的二次测试确认"
+            stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
+            pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
+
+        # ── 再派发 (Re-distribution) 熊市中继强力拦截做多 ──
+        is_redist = 'Re-distribution' in phase_str or '再派发' in phase_str
+        if is_redist:
+            direction = "观望"
+            zone = "等待再派发区间破位或反弹至上沿阻力"
+            stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
+            pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
+
+        # ── JOC 天量突破拦截过载 (Buying Climax) ──
+        joc_warning = False
+        if isinstance(joc, dict):
+            joc_warning = joc.get('joc_overload_warning', False)
+        else:
+            joc_warning = getattr(joc, 'joc_overload_warning', False)
+
+        if joc_warning:
+            direction = "观望"
+            zone = "天量突破且收线不佳，警惕买入高潮 (Buying Climax)，建议观望"
+            stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
+            pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
+
         is_phase_ab = 'Phase A' in phase_str or 'Phase B' in phase_str
         is_phase_e = 'Phase E' in phase_str
         is_markup_markdown = 'Markup' in phase_str or 'Markdown' in phase_str

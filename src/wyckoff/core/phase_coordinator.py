@@ -890,6 +890,31 @@ class PhaseCoordinator:
                 revision_logs.append(f"检测到 Upthrust，从 {preliminary_phase} 修正为 Distribution")
                 return self._replace_phase_type(preliminary_phase, 'Distribution'), revision_logs
 
+        # === 优先级3: 前序趋势否决权（熊市中继/再派发定性） ===
+        if 'Accumulation' in preliminary_phase:
+            prior_trend = self._detect_prior_trend()
+            if prior_trend == 'markdown':
+                has_confirmed_spring = False
+                if events.spring and events.spring.detected:
+                    signals = getattr(events.spring, 'signals', []) or []
+                    for sig in signals:
+                        if getattr(sig, 'st_confirmed', False):
+                            has_confirmed_spring = True
+                            break
+                
+                has_choch_up = False
+                choch_dict = self.detector.detect_choch()
+                if choch_dict.get('detected') and choch_dict.get('direction') == 'bullish':
+                    has_choch_up = True
+                
+                if not has_confirmed_spring and not has_choch_up:
+                    new_phase = self._replace_phase_type(preliminary_phase, 'Distribution (Re-distribution)')
+                    revision_logs.append(
+                        f"[前序趋势否决] 当前前序趋势为 markdown（下跌趋势），且缺乏已确认的 Spring 或 Choch Up 强确认，"
+                        f"强制将初步吸筹阶段定性为熊市中继派发 '{new_phase}'。"
+                    )
+                    preliminary_phase = new_phase
+
         if sos_sow:
             # Bug 1 修复：DualEventModel 使用 .type_ 属性
             event_type = sos_sow.type_

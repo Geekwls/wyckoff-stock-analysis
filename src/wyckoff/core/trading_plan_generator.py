@@ -153,6 +153,47 @@ class TradingPlanGenerator:
                 }
             }
 
+        # ── 再派发 (Re-distribution) 熊市中继强力拦截 ──
+        is_redist = 'Re-distribution' in phase_str or '再派发' in phase_str
+        if is_redist:
+            direction = "减仓/对冲" if self.is_a_stock else "做空"
+            entry_zone = f"阻力位: {round(high, 2)} 附近 (寻找做空反弹阻力点)"
+            pos_sizing = {"conservative": "0%", "moderate": "0%", "aggressive": "0%", "status": "空仓观望，建议寻找做空阻力点或对冲"}
+            scale_in_triggers = {
+                "short_entry": {"condition": "反弹至上沿无力", "price": round(high, 2)},
+                "breakdown": {"condition": "跌破区间下沿", "price": round(low, 2)}
+            }
+            dynamic_warning = "当前处于熊市中继的‘再派发’阶段。威科夫原则：严禁在此处做多，任何反弹都是寻找做空/对冲或减仓的机会。等待再次破位确认。"
+            stop_loss = {
+                "conservative": {
+                    "value": round(high * 1.01, 2),
+                    "derivation": "区间上沿上方 1%",
+                    "note": "站稳区间上沿则结构失效"
+                },
+                "aggressive": {
+                    "value": round(high * 1.005, 2),
+                    "derivation": "区间上沿上方 0.5%",
+                    "note": "站稳区间上沿则结构失效"
+                },
+                "atr_dynamic_stop": {
+                    "value": round(high + atr * 0.5, 2),
+                    "derivation": "区间上沿 + 0.5 * ATR",
+                    "note": "站稳区间上沿则结构失效"
+                }
+            }
+            targets = {
+                "target_1": {
+                    "value": round(low, 2),
+                    "derivation": "区间下沿",
+                    "note": "区间下沿支撑位"
+                },
+                "target_2": {
+                    "value": round(low - (high - low), 2),
+                    "derivation": "一倍箱体跨度下量",
+                    "note": "破位后的垂直量化目标"
+                }
+            }
+
         # 退出规则
         exit_rules = self._calculate_exit_rules(atr)
 

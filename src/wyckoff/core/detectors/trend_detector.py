@@ -58,6 +58,36 @@ class TrendDetector(BaseDetector):
             return {'detected': False, 'reason': 'no_joc_breakout_found'}
 
         joc_candidates = df[breakout_mask].sort_index(ascending=False)
+
+        # ── 天量突破 JOC 过载保护与买入高潮 ──
+        if not joc_candidates.empty:
+            latest_idx = joc_candidates.index[0]
+            latest_row = df.loc[latest_idx]
+            v_ma_val = vol_ma.loc[latest_idx]
+            v_ratio = float(latest_row['Volume'] / v_ma_val) if v_ma_val > 0 else 0.0
+            
+            hl_range = latest_row['High'] - latest_row['Low']
+            if hl_range > 0:
+                shadow_ratio = (latest_row['High'] - max(latest_row['Open'], latest_row['Close'])) / hl_range
+                close_pos = (latest_row['Close'] - latest_row['Low']) / hl_range
+            else:
+                shadow_ratio = 0.0
+                close_pos = 0.5
+                
+            if v_ratio >= 3.0 and (shadow_ratio >= 0.35 or close_pos < 0.60):
+                logger.warning(f"JOC Overload (Buying Climax) detected at {latest_idx}: volume ratio {v_ratio:.2f}")
+                return {
+                    'detected': False,
+                    'joc_overload_warning': True,
+                    'reason': 'joc_volume_overload_buying_climax',
+                    'evidence': {
+                        'date': str(latest_idx),
+                        'volume_ratio': round(v_ratio, 2),
+                        'upper_shadow_ratio': round(shadow_ratio, 3),
+                        'close_position': round(close_pos, 3)
+                    }
+                }
+
         fresh_joc_found = False
         current_price = self.data['Close'].iloc[-1]
         

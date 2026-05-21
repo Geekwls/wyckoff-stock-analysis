@@ -107,6 +107,33 @@ class MengTrendDetector(BaseDetector):
         daily_ranges = highs - lows
         close_positions = np.where(daily_ranges > 0, (closes - lows) / daily_ranges, 0.5)
 
+        # ── 天量突破 JOC 过载保护与买入高潮 ──
+        breakout_indices = np.where(is_breakout)[0]
+        if len(breakout_indices) > 0:
+            latest_breakout_idx = breakout_indices[-1]
+            v_ratio = volume_ratios[latest_breakout_idx]
+            hl_range = highs[latest_breakout_idx] - lows[latest_breakout_idx]
+            if hl_range > 0:
+                shadow_ratio = (highs[latest_breakout_idx] - max(opens[latest_breakout_idx], closes[latest_breakout_idx])) / hl_range
+                close_pos = (closes[latest_breakout_idx] - lows[latest_breakout_idx]) / hl_range
+            else:
+                shadow_ratio = 0.0
+                close_pos = 0.5
+                
+            if v_ratio >= 3.0 and (shadow_ratio >= 0.35 or close_pos < 0.60):
+                logger.warning(f"Meng JOC Vectorized Overload (Buying Climax) detected: volume ratio {v_ratio:.2f}")
+                return {
+                    'detected': False,
+                    'joc_overload_warning': True,
+                    'reason': 'joc_volume_overload_buying_climax',
+                    'evidence': {
+                        'date': str(df.index[latest_breakout_idx]),
+                        'volume_ratio': round(float(v_ratio), 2),
+                        'upper_shadow_ratio': round(float(shadow_ratio), 3),
+                        'close_position': round(float(close_pos), 3)
+                    }
+                }
+
         valid_joc = (
             is_breakout
             & (price_changes >= self.thresholds.JOC_MIN_BREAKOUT_PCT)
@@ -160,6 +187,35 @@ class MengTrendDetector(BaseDetector):
         tr = self._detect_trading_range(df, window=60)
         if not tr.get("is_consolidation"): return {"detected": False, "reason": "not_in_consolidation"}
         vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
+
+        # ── 天量突破 JOC 过载保护与买入高潮 ──
+        for i in range(len(df) - 1, 19, -1):
+            current_creek = self._calculate_adaptive_creek(df.iloc[:i+1], window=60)
+            if df['Close'].iloc[i] > current_creek and df['Close'].iloc[i-1] <= current_creek:
+                vol_ratio = df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1.0
+                hl_range = df['High'].iloc[i] - df['Low'].iloc[i]
+                if hl_range > 0:
+                    shadow_ratio = (df['High'].iloc[i] - max(df['Open'].iloc[i], df['Close'].iloc[i])) / hl_range
+                    close_pos = (df['Close'].iloc[i] - df['Low'].iloc[i]) / hl_range
+                else:
+                    shadow_ratio = 0.0
+                    close_pos = 0.5
+                    
+                if vol_ratio >= 3.0 and (shadow_ratio >= 0.35 or close_pos < 0.60):
+                    logger.warning(f"Meng JOC Iterative Overload (Buying Climax) detected: volume ratio {vol_ratio:.2f}")
+                    return {
+                        'detected': False,
+                        'joc_overload_warning': True,
+                        'reason': 'joc_volume_overload_buying_climax',
+                        'evidence': {
+                            'date': str(df.index[i]),
+                            'volume_ratio': round(float(vol_ratio), 2),
+                            'upper_shadow_ratio': round(float(shadow_ratio), 3),
+                            'close_position': round(float(close_pos), 3)
+                        }
+                    }
+                break
+
         signals = []
         for i in range(20, len(df)):
             # 🔧 自适应计算当前时刻 i 的 Creek 阻力位

@@ -376,17 +376,20 @@ class ReversalDetector(BaseDetector):
         if len(recent) < 4:
             return {'detected': False, 'reason': 'insufficient_search_data'}
 
+        original_index = df.tail(search_window).index
         springs = []
         if USE_VECTORIZED:
             try:
-                springs = self._detect_spring_vectorized(recent, support)
+                springs = self._detect_spring_vectorized(recent, support, original_index)
             except Exception as e:
                 logger.warning(f"Vectorized Spring detection failed: {e}. Falling back to iterative.")
-                springs = self._detect_spring_iterative(recent, support)
+                springs = self._detect_spring_iterative(recent, support, original_index)
         else:
-            springs = self._detect_spring_iterative(recent, support)
+            springs = self._detect_spring_iterative(recent, support, original_index)
 
         if springs:
+            for s in springs:
+                s['st_confirmed'] = self._verify_spring_st(s)
             fresh_springs = [s for s in springs if not self._is_signal_stale(s['date'], 'spring')]
             if fresh_springs:
                 return {
@@ -434,7 +437,7 @@ class ReversalDetector(BaseDetector):
                 return recovery_days
         return recovery_days
 
-    def _detect_spring_vectorized(self, recent: pd.DataFrame, support: float) -> List[Dict]:
+    def _detect_spring_vectorized(self, recent: pd.DataFrame, support: float, original_index: Optional[pd.Index] = None) -> List[Dict]:
         n = len(recent)
         lows, closes, highs, opens, volumes = recent['Low'].values, recent['Close'].values, recent['High'].values, recent['Open'].values, recent['Volume'].values
         breakdown_mask = lows[:-2] < support
@@ -481,7 +484,7 @@ class ReversalDetector(BaseDetector):
             
             if breakdown_vol_ratio > 1.5 and penetration_depth > 3.0:
                 spring_type = 'type_1_dangerous'      # 放量深跌，危险，不能买
-                is_valid = False
+                is_valid = True
                 needs_secondary_test = True
             elif breakdown_vol_ratio < 0.8 and penetration_depth < 1.5:
                 spring_type = 'type_3_safe'           # 缩量浅跌，安全，可立即买
@@ -492,9 +495,8 @@ class ReversalDetector(BaseDetector):
 
             if is_valid:
                 springs.append({
-                    #  缺陷4修复：向量化路径补全 date 字段，防止下游时序分析拿到 None
-                    'date': recent.index[nxt_idx],
-                    'breakdown_date': recent.index[cur_idx],
+                    'date': original_index[nxt_idx] if original_index is not None else recent.index[nxt_idx],
+                    'breakdown_date': original_index[cur_idx] if original_index is not None else recent.index[cur_idx],
                     'breakdown_price': {
                         "value": round(float(lows[cur_idx]), 2),
                         "derivation": "lowest_in_breakdown_bar",
@@ -510,6 +512,7 @@ class ReversalDetector(BaseDetector):
                     'follow_up_score': follow_score, 'total_score': min(total_score, 100),
                     'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
                     'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
+                    'breakdown_volume': float(volumes[cur_idx]),
                     'spring_type': spring_type,
                     'needs_secondary_test': needs_secondary_test,
                     'penetration_depth': round(float(penetration_depth), 2),
@@ -517,7 +520,7 @@ class ReversalDetector(BaseDetector):
                 })
         return springs
 
-    def _detect_spring_iterative(self, recent: pd.DataFrame, support: float) -> List[Dict]:
+    def _detect_spring_iterative(self, recent: pd.DataFrame, support: float, original_index: Optional[pd.Index] = None) -> List[Dict]:
         springs = []
         breakdown_mask = recent['Low'] < support
         candidate_indices = recent.index[breakdown_mask]
@@ -553,7 +556,7 @@ class ReversalDetector(BaseDetector):
             
             if breakdown_vol_ratio > 1.5 and penetration_depth > 3.0:
                 spring_type = 'type_1_dangerous'      # 放量深跌，危险，不能买
-                is_valid = False
+                is_valid = True
                 needs_secondary_test = True
             elif breakdown_vol_ratio < 0.8 and penetration_depth < 1.5:
                 spring_type = 'type_3_safe'           # 缩量浅跌，安全，可立即买
@@ -564,7 +567,8 @@ class ReversalDetector(BaseDetector):
 
             if is_valid:
                 springs.append({
-                    'date': nxt.name, 'breakdown_date': cur.name, 
+                    'date': original_index[nxt_idx] if original_index is not None else nxt.name,
+                    'breakdown_date': original_index[cur_idx] if original_index is not None else cur.name,
                     'breakdown_price': {
                         "value": round(float(cur['Low']), 2),
                         "derivation": "lowest_in_breakdown_bar",
@@ -580,12 +584,50 @@ class ReversalDetector(BaseDetector):
                     'close_position': round(nxt_close_pos * 100, 1), 'follow_up_score': follow_score,
                     'total_score': min(total_score, 100), 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
                     'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
+                    'breakdown_volume': float(cur['Volume']),
                     'spring_type': spring_type,
                     'needs_secondary_test': needs_secondary_test,
                     'penetration_depth': round(float(penetration_depth), 2),
                     'confidence': 0.8 if spring_type == 'type_3_safe' else 0.5
                 })
         return springs
+
+    def _verify_spring_st(self, spring_dict: Dict) -> bool:
+        """
+        校验 Spring 的二次测试 (ST)
+        """
+        if spring_dict.get('spring_type') == 'type_3_safe':
+            return True
+            
+        recovery_date = spring_dict['date']
+        spring_low = spring_dict['breakdown_price']['value']
+        breakdown_vol = spring_dict.get('breakdown_volume')
+        
+        if not breakdown_vol:
+            return False
+            
+        # 获取收回日后的最多 20 个交易日
+        try:
+            post_df = self.data[pd.to_datetime(self.data.index) > pd.to_datetime(recovery_date)].head(20)
+        except Exception:
+            post_df = self.data[self.data.index > recovery_date].head(20)
+            
+        if post_df.empty:
+            return False
+            
+        st_confirmed = False
+        for idx, row in post_df.iterrows():
+            # 若跌破 Spring 低点，则标记失败并终止
+            if row['Low'] <= spring_low:
+                return False
+            
+            # 校验测试日成交量是否显著萎缩 (st_vol < breakdown_vol * 0.7)
+            if row['Volume'] < breakdown_vol * 0.7:
+                current_min_low = post_df.loc[:idx, 'Low'].min()
+                if row['Low'] <= spring_low * 1.08 or row['Low'] == current_min_low:
+                    st_confirmed = True
+                    
+        return st_confirmed
 
     def detect_upthrust(self, lookback: int = None) -> Dict:
         lookback = lookback or self.config.spring_lookback
