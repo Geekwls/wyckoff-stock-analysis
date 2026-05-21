@@ -96,35 +96,13 @@ class MarketContextAnalyzer:
         return " | ".join(warnings) if warnings else None
 
     def _get_market_breadth(self) -> Dict:
-        """获取市场广度信息 (P1)"""
-        # 目前仅支持 A 股市场广度分析
-        is_a_share = self.symbol.startswith(('sh', 'sz', 'SH', 'SZ')) or self.symbol in ['000001', '399001']
+        """获取市场广度信息 (P1)
         
-        if not is_a_share:
-            return {"status": "SKIPPED", "reason": "仅支持 A 股全市场广度分析"}
-
-        try:
-            # 获取全市场实时 ADR 数据
-            breadth_data = MarketBreadthAnalyzer.get_current_breadth_sh_sz()
-            
-            # 计算指数涨跌幅 (近1日)
-            if len(self.data) >= 2:
-                index_change = (self.data['Close'].iloc[-1] / self.data['Close'].iloc[-2] - 1) * 100
-            else:
-                index_change = 0
-            
-            # 分析内部共振
-            resonance = MarketBreadthAnalyzer.analyze_market_internal_resonance(index_change, breadth_data)
-            
-            breadth_data.update({
-                "alignment": resonance.get('alignment'),
-                "warning": resonance.get('warning')
-            })
-            return breadth_data
-            
-        except Exception as e:
-            logger.debug(f"Market breadth analysis failed: {e}")
-            return {"status": "UNKNOWN", "reason": str(e)}
+        注意：单股分析时默认跳过，因为获取全 A 股数据耗时较长（60+秒）
+        仅在批量扫描或明确要求时启用
+        """
+        # 单股分析默认跳过市场广度
+        return {"status": "SKIPPED", "reason": "单股分析默认跳过（耗时较长）"}
 
     def _get_pf_targets(self) -> Dict:
         """计算大盘 P&F 目标 (P2)"""
