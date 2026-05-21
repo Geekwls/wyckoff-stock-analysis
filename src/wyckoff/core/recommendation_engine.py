@@ -535,6 +535,7 @@ class RecommendationEngine:
         joc = RecommendationEngine._get_attr(events, 'joc') or {}
         spring = RecommendationEngine._get_attr(events, 'spring') or {}
         upthrust = RecommendationEngine._get_attr(events, 'upthrust') or {}
+        utad = RecommendationEngine._get_attr(events, 'utad') or {}
         fti = RecommendationEngine._get_attr(events, 'fti') or {}
         sow = RecommendationEngine._get_attr(events, 'sow') or {}
         sos = RecommendationEngine._get_attr(events, 'sos') or {}
@@ -677,12 +678,32 @@ class RecommendationEngine:
             conservative=cons, moderate=mod, aggressive=aggr
         )
 
+        # UTAD ST 证伪/风控保护拦截
+        is_utad_falsified = False
+        if utad.get('detected') and not utad.get('st_confirmed', True):
+            is_utad_falsified = True
+            direction = "做多"
+            zone = "UTAD 二次测试放量或价格稳健未跌回，诱多证伪，实为强势筹码突破，建议顺势做多。"
+            utad_high = utad.get('breakout_price', current_price)
+            res_level = utad.get('resistance_level', current_price * 0.95)
+            cons_stop = min(res_level, current_price * 0.92)
+            stop = StopLossModel(
+                conservative=round(cons_stop, 2),
+                aggressive=round(utad_high * 0.95, 2),
+                atr_dynamic_stop=round(current_price - atr_val * 2.0, 2),
+            )
+            pos_sizing = PositionSizingModel(
+                conservative="30%",
+                moderate="50%",
+                aggressive="75%"
+            )
+
         # ── 派发初期/中期做空逻辑拦截覆盖 (威科夫诊断与处方强制一致性) ──
         is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
         is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
                          any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
         is_dist_early = is_dist and is_early_phase
-        if is_dist_early:
+        if is_dist_early and not is_utad_falsified:
             direction = "观望"
             zone = "空仓观望，等待派发结构进一步明朗"
             stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
@@ -709,7 +730,7 @@ class RecommendationEngine:
             if needs_st and not st_confirmed:
                 st_unconfirmed_spring = True
 
-        if direction == "做多" and st_unconfirmed_spring:
+        if direction == "做多" and st_unconfirmed_spring and not is_utad_falsified:
             direction = "观望"
             zone = "等待低点高于 Spring 且缩量的二次测试确认"
             stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
@@ -717,7 +738,7 @@ class RecommendationEngine:
 
         # ── 再派发 (Re-distribution) 熊市中继强力拦截做多 ──
         is_redist = 'Re-distribution' in phase_str or '再派发' in phase_str
-        if is_redist:
+        if is_redist and not is_utad_falsified:
             direction = "观望"
             zone = "等待再派发区间破位或反弹至上沿阻力"
             stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
@@ -730,7 +751,7 @@ class RecommendationEngine:
         else:
             joc_warning = getattr(joc, 'joc_overload_warning', False)
 
-        if joc_warning:
+        if joc_warning and not is_utad_falsified:
             direction = "观望"
             zone = "天量突破且收线不佳，警惕买入高潮 (Buying Climax)，建议观望"
             stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
@@ -776,22 +797,27 @@ class RecommendationEngine:
         direction = getattr(plan, 'direction', None) or (plan.get('direction') if isinstance(plan, dict) else "观望")
 
         # ── 派发初期/中期做空逻辑拦截判定 (威科夫诊断与处方强制一致性) ──
+        entry_zone = getattr(plan, 'entry_zone', '') or (plan.get('entry_zone') if isinstance(plan, dict) else '')
+        is_utad_falsified = "诱多证伪" in entry_zone
+
         is_dist_early = False
-        if phase_str:
+        if phase_str and not is_utad_falsified:
             is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
             is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
                              any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
             is_dist_early = is_dist and is_early_phase
-        else:
+        elif not is_utad_falsified:
             # 鲁棒的 Fallback：从 trading_plan (plan) 的 entry_zone 识别
-            entry_zone = getattr(plan, 'entry_zone', '') or (plan.get('entry_zone') if isinstance(plan, dict) else '')
             if entry_zone == "空仓观望，等待派发结构进一步明朗":
                 is_dist_early = True
 
         #  新增：检查方向与环境的冲突
         direction_env_conflict = False
         direction_env_match = False
-        if market_env:
+        if is_utad_falsified:
+            direction_env_conflict = False
+            direction_env_match = True
+        elif market_env:
             is_market_bullish = market_env in [MarketEnvironment.STRONG_BULL, MarketEnvironment.BULL]
             is_market_bearish = market_env in [MarketEnvironment.STRONG_BEAR, MarketEnvironment.BEAR]
 

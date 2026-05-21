@@ -129,17 +129,22 @@ class ReversalDetector(BaseDetector):
         high_60 = self.data['High'].rolling(60).max().reindex(df.index)
         low_60 = self.data['Low'].rolling(60).min().reindex(df.index)
         
+        total_range = (df['High'] - df['Low']).replace(0, 1e-9)
+        close_pct = (df['Close'] - df['Low']) / total_range
+
         # 抛售高潮 (Selling Climax): 必须发生在下跌趋势背景下 (相对于60日高点跌幅 > 8%)
+        sc_bar_mask = (df['Close'] < df['Open']) | ((df['Close'] >= df['Open']) & (close_pct >= 0.40))
         sc_mask = (
-            (df['Close'] < df['Open']) & 
+            sc_bar_mask & 
             (df['Volume'] > vol_ma.reindex(df.index) * self.thresholds.VOLUME_CONFIRMATION['strong']) & 
             (df['Low'] == low_min.reindex(df.index)) &
             (df['Low'] < high_60 * 0.92)  # 趋势过滤
         )
         
         # 买入高潮 (Buying Climax): 必须发生上涨趋势背景下 (相对于60日低点涨幅 > 15%)
+        bc_bar_mask = (df['Close'] > df['Open']) | ((df['Close'] <= df['Open']) & (close_pct <= 0.60))
         bc_mask = (
-            (df['Close'] > df['Open']) & 
+            bc_bar_mask & 
             (df['Volume'] > vol_ma.reindex(df.index) * self.thresholds.VOLUME_CONFIRMATION['strong']) & 
             (df['High'] == high_max.reindex(df.index)) &
             (df['High'] > low_60 * 1.15)  # 趋势过滤
@@ -218,7 +223,7 @@ class ReversalDetector(BaseDetector):
             return {'detected': False}
 
         climax_date = climax_res['date']
-        df_after = self.data[self.data.index > climax_date].head(3)
+        df_after = self.data[self.data.index > climax_date].head(15)
         if len(df_after) == 0:
             return {'detected': False}
 
@@ -235,16 +240,44 @@ class ReversalDetector(BaseDetector):
             sc_benchmark = climax_res['price']
 
         if climax_res['type'] == 'selling_climax':
-            ar_price = df_after['High'].max()
-            ar_date = df_after['High'].idxmax()
+            # 寻找首个摆动高点 (Swing High)
+            ar_price = None
+            ar_date = None
+            for i in range(2, len(df_after) - 2):
+                h = df_after['High'].iloc[i]
+                if (h >= df_after['High'].iloc[i-1] and h >= df_after['High'].iloc[i-2] and
+                    h >= df_after['High'].iloc[i+1] and h >= df_after['High'].iloc[i+2]):
+                    ar_price = float(h)
+                    ar_date = df_after.index[i]
+                    break
+            
+            # 兜底逻辑：取最大值
+            if ar_price is None:
+                ar_price = float(df_after['High'].max())
+                ar_date = df_after['High'].idxmax()
+
             rebound_pct = (ar_price - sc_benchmark) / sc_benchmark if sc_benchmark > 0 else 0
             return {
                 'detected': True, 'type': 'automatic_rally', 'date': ar_date, 'price': ar_price,
                 'rebound_pct': round(rebound_pct, 4), 'sc_benchmark': round(sc_benchmark, 2)
             }
         else:
-            ar_price = df_after['Low'].min()
-            ar_date = df_after['Low'].idxmin()
+            # 寻找首个摆动低点 (Swing Low)
+            ar_price = None
+            ar_date = None
+            for i in range(2, len(df_after) - 2):
+                l = df_after['Low'].iloc[i]
+                if (l <= df_after['Low'].iloc[i-1] and l <= df_after['Low'].iloc[i-2] and
+                    l <= df_after['Low'].iloc[i+1] and l <= df_after['Low'].iloc[i+2]):
+                    ar_price = float(l)
+                    ar_date = df_after.index[i]
+                    break
+
+            # 兜底逻辑：取最小值
+            if ar_price is None:
+                ar_price = float(df_after['Low'].min())
+                ar_date = df_after['Low'].idxmin()
+
             decline_pct = (ar_price - sc_benchmark) / sc_benchmark if sc_benchmark > 0 else 0
             bc_high = climax_res.get('price', 0)
             nominal_decline = (ar_price - bc_high) / bc_high if bc_high > 0 else 0
@@ -817,12 +850,13 @@ class ReversalDetector(BaseDetector):
         else:
             utad_type = 'double_top'
 
-        return {
+        utad_res = {
             'detected': True,
             'utad_type': utad_type,
             'date': after_breakout.index[min(confirmation_days, len(after_breakout) - 1)],
             'breakout_date': recent_high_idx,
             'breakout_price': float(breakout_row['High']),
+            'breakout_volume': float(breakout_row['Volume']),
             'resistance_level': float(resistance_level),
             'volume_ratio': round(float(breakout_vol_ratio), 2),
             'upper_shadow_ratio': round(float(upper_shadow_ratio), 2),
@@ -830,13 +864,79 @@ class ReversalDetector(BaseDetector):
             'confirmation_days': confirmation_days,
             'distribution_detected': distribution_detected,
             'confidence': round(confidence, 2),
-            'description': (
-                f"UTAD（派发后的上冲回落）：价格突破派发区间上沿{resistance_level:.2f}元后，"
-                f"在{confirmation_days}天内回落至区间内。量比{breakout_vol_ratio:.1f}倍，"
-                f"上影线占比{upper_shadow_ratio:.0%}。"
-                f"{'有前置派发结构 ✓' if distribution_detected else '无前置派发结构 ⚠️'}"
-            )
         }
+
+        # 校验 UTAD ST 二次测试并存入 st_confirmed
+        st_confirmed = self._verify_utad_st(utad_res)
+        utad_res['st_confirmed'] = st_confirmed
+
+        utad_res['description'] = (
+            f"UTAD（派发后的上冲回落）：价格突破派发区间上沿{resistance_level:.2f}元后，"
+            f"在{confirmation_days}天内回落至区间内。量比{breakout_vol_ratio:.1f}倍，"
+            f"上影线占比{upper_shadow_ratio:.0%}。"
+            f"{'有前置派发结构 ✓' if distribution_detected else '无前置派发结构 ⚠️'}。"
+            f"{'二次测试缩量确认成功 ✓' if st_confirmed else '二次测试放量或价格未跌回证伪 ⚠️'}"
+        )
+
+        return utad_res
+
+    def _verify_utad_st(self, utad_dict: Dict) -> bool:
+        """
+        校验 UTAD 的二次测试 (ST)
+        """
+        utad_date = utad_dict['date']
+        utad_high = utad_dict['breakout_price']
+        breakout_vol = utad_dict.get('breakout_volume', 0)
+        
+        # 获取 BC climax 体积
+        bc_volume = 0
+        try:
+            climax_res = self.detect_climax()
+            if climax_res.get('detected') and climax_res.get('type') == 'buying_climax':
+                bc_volume = climax_res.get('volume', 0)
+        except Exception:
+            pass
+
+        # 1. 从 UTAD 返回交易区间（TR）后的下一个交易日开始，扫描随后的 10 个交易日
+        try:
+            post_df = self.data[pd.to_datetime(self.data.index) > pd.to_datetime(utad_date)].head(10)
+        except Exception:
+            post_df = self.data[self.data.index > utad_date].head(10)
+
+        if post_df.empty:
+            return False
+
+        # 若 UTAD 价格在 10 个交易日内始终高高挂起未能跌回 TR 下方（Close 始终处于 UTAD 高点的 95% 以上），同样判定为失败（st_confirmed = False）。
+        if (post_df['Close'] >= utad_high * 0.95).all():
+            return False
+
+        # 2. 校验测试日高点和成交量
+        # "若 10 天内反抽高点突破了 UTAD 高点，或在 10 天内反抽成交量比值（st_vol / breakout_volume >= 0.7 或相对于 BC climax 体积比值 >= 0.5），则判定 ST 确认失败（st_confirmed = False）"
+        # Otherwise, st_confirmed = True.
+        st_confirmed = True
+        for idx, row in post_df.iterrows():
+            if row['High'] > utad_high:
+                st_confirmed = False
+                break
+            
+            # 反抽成交量比值判定
+            try:
+                prev_idx = self.data.index.get_loc(idx) - 1
+                prev_close = self.data['Close'].iloc[prev_idx] if prev_idx >= 0 else row['Open']
+            except Exception:
+                prev_close = row['Open']
+            
+            is_rally = (row['Close'] >= row['Open']) or (row['Close'] >= prev_close) or (row['High'] >= utad_high * 0.9)
+            if is_rally:
+                st_vol = row['Volume']
+                vol_ratio_breakout = st_vol / breakout_vol if breakout_vol > 0 else 0
+                vol_ratio_bc = st_vol / bc_volume if bc_volume > 0 else 0
+                if vol_ratio_breakout >= 0.7 or (bc_volume > 0 and vol_ratio_bc >= 0.5):
+                    st_confirmed = False
+                    break
+                    
+        return st_confirmed
+
     def detect_stopping_volume(self) -> Dict:
         """
         检测停止成交量 (Stopping Volume)

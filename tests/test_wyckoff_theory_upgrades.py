@@ -303,3 +303,153 @@ def test_joc_overload_protection():
     assert plan.direction == "观望"
     assert "警惕买入高潮" in plan.entry_zone
     assert plan.position_sizing.conservative == "0%"
+
+
+class MockCache:
+    def get_or_compute(self, key, func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+
+def test_sc_bc_bar_color_and_close_position_relaxation():
+    config = WyckoffConfig()
+    thresholds = WyckoffThresholds()
+    cache = MockCache()
+    
+    dates = pd.date_range("2026-01-01", periods=80)
+    data = pd.DataFrame({
+        "Open": [100.0] * 80,
+        "High": [100.0] * 80,
+        "Low": [100.0] * 80,
+        "Close": [100.0] * 80,
+        "Volume": [1000.0] * 80,
+    }, index=dates)
+    
+    for i in range(60):
+        data.loc[dates[i], ["Open", "High", "Low", "Close"]] = 120.0
+        
+    sc_idx = 70
+    data.loc[dates[sc_idx], "Open"] = 100.0
+    data.loc[dates[sc_idx], "High"] = 102.0
+    data.loc[dates[sc_idx], "Low"] = 90.0
+    data.loc[dates[sc_idx], "Close"] = 101.0
+    data.loc[dates[sc_idx], "Volume"] = 5000.0
+    
+    for i in range(sc_idx + 1, sc_idx + 6):
+        data.loc[dates[i], "High"] = 105.0
+        
+    detector = ReversalDetector(data, config, thresholds, cache)
+    res = detector.detect_climax()
+    assert res['detected'] is True
+    assert res['type'] == 'selling_climax'
+    assert res['is_confirmed'] is True
+    
+    # Positive bar but close position < 40% (e.g. close is near low) -> Rejected
+    data.loc[dates[sc_idx], "Open"] = 91.0
+    data.loc[dates[sc_idx], "Close"] = 92.0
+    detector = ReversalDetector(data, config, thresholds, cache)
+    res = detector.detect_climax()
+    assert res.get('type') != 'selling_climax'
+
+
+def test_ar_lookback_swing_extreme_detection():
+    config = WyckoffConfig()
+    thresholds = WyckoffThresholds()
+    cache = MockCache()
+    
+    dates = pd.date_range("2026-01-01", periods=50)
+    data = pd.DataFrame({
+        "Open": [100.0] * 50,
+        "High": [100.0] * 50,
+        "Low": [100.0] * 50,
+        "Close": [100.0] * 50,
+        "Volume": [1000.0] * 50,
+    }, index=dates)
+    
+    detector = ReversalDetector(data, config, thresholds, cache)
+    climax_res = {
+        'detected': True,
+        'type': 'selling_climax',
+        'date': dates[10],
+        'price': 90.0,
+        'volume': 5000.0
+    }
+    
+    # Set high prices before dates[16] as strictly increasing
+    # and after dates[16] as strictly decreasing to avoid false flat swing highs
+    for idx, d in enumerate(dates[11:26]):
+        data.loc[d, "High"] = 90.0 + idx
+        
+    data.loc[dates[16], "High"] = 105.0
+    data.loc[dates[17], "High"] = 94.0
+    data.loc[dates[18], "High"] = 93.0
+    data.loc[dates[19], "High"] = 92.0
+    data.loc[dates[20], "High"] = 91.0
+    
+    detector.data = data
+    ar_res = detector.detect_automatic_reaction(climax_res)
+    
+    assert ar_res['detected'] is True
+    assert ar_res['price'] == 105.0
+    assert ar_res['date'] == dates[16]
+
+
+def test_utad_st_symmetry_and_falsification_protection():
+    config = WyckoffConfig()
+    thresholds = WyckoffThresholds()
+    cache = MockCache()
+    
+    dates = pd.date_range("2026-01-01", periods=100)
+    data = pd.DataFrame({
+        "Open": [100.0] * 100,
+        "High": [100.0] * 100,
+        "Low": [100.0] * 100,
+        "Close": [100.0] * 100,
+        "Volume": [1000.0] * 100,
+    }, index=dates)
+    
+    for i in range(60):
+        data.loc[dates[i], ["Open", "High", "Low", "Close"]] = 80.0
+        
+    data.loc[dates[70], "High"] = 100.0
+    data.loc[dates[70], "Volume"] = 5000.0
+    
+    utad_idx = 80
+    data.loc[dates[utad_idx], "High"] = 110.0
+    data.loc[dates[utad_idx], "Low"] = 100.0
+    data.loc[dates[utad_idx], "Open"] = 100.0
+    data.loc[dates[utad_idx], "Close"] = 101.0
+    data.loc[dates[utad_idx], "Volume"] = 6000.0
+    
+    data.loc[dates[utad_idx + 1], "Close"] = 97.0
+    data.loc[dates[utad_idx + 2], "Close"] = 97.0
+    
+    for i in range(utad_idx + 3, utad_idx + 13):
+        data.loc[dates[i], "High"] = 105.0
+        data.loc[dates[i], "Volume"] = 1000.0
+        data.loc[dates[i], "Open"] = 100.0
+        data.loc[dates[i], "Close"] = 101.0
+        
+    detector = ReversalDetector(data, config, thresholds, cache)
+    detector._current_phase = "Distribution Phase C"
+    utad_res = detector.detect_utad()
+    
+    assert utad_res['detected'] is True
+    assert utad_res['st_confirmed'] is True
+    
+    engine = RecommendationEngine()
+    plan = engine.generate_trading_plan(data, {'phase': 'Distribution Phase C', 'utad': utad_res}, {})
+    assert plan.direction != "做多"
+    
+    data.loc[dates[85], "Volume"] = 4500.0
+    detector = ReversalDetector(data, config, thresholds, cache)
+    detector._current_phase = "Distribution Phase C"
+    utad_res_fail = detector.detect_utad()
+    
+    assert utad_res_fail['detected'] is True
+    assert utad_res_fail['st_confirmed'] is False
+    
+    plan_falsified = engine.generate_trading_plan(data, {'phase': 'Distribution Phase C', 'utad': utad_res_fail}, {})
+    assert plan_falsified.direction == "做多"
+    assert "诱多证伪" in plan_falsified.entry_zone
+    assert plan_falsified.position_sizing.moderate == "50%"
+
