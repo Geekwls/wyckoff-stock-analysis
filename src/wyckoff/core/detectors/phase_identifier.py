@@ -1,6 +1,6 @@
 import pandas as pd
 import logging
-from typing import Dict, Optional, Tuple, List, Any, Union
+from typing import Dict, Optional, Tuple, List, Any, Union, cast
 from .base_detector import BaseDetector
 from ...config.settings import WyckoffConfig, WyckoffThresholds
 from ..enums import WyckoffPhase
@@ -571,7 +571,7 @@ class PhaseIdentifier(BaseDetector):
         if isinstance(date, pd.Timestamp):
             return date
         try:
-            return pd.Timestamp(date)
+            return cast(pd.Timestamp, pd.Timestamp(date))
         except Exception as e:
             logger.debug(f"Failed to normalize date {date}: {e}")
             return None

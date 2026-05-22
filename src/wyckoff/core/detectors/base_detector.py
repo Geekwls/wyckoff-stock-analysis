@@ -1,6 +1,5 @@
 from abc import ABC
-from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional, cast
 import pandas as pd
 import os
 
@@ -15,6 +14,7 @@ class BaseDetector(ABC):
     - 支持不同信号类型的自定义有效期
     """
     def __init__(self, indicator_cache=None):
+        self.data: Optional[pd.DataFrame] = None
         self._current_phase = ""
         #  P1-1修复：存储Phase A事件检测结果，供LPS等信号验证前置结构
         self._phase_a_events = {}
@@ -62,8 +62,8 @@ class BaseDetector(ABC):
             try:
                 ts = pd.Timestamp(self.data.index[-1])
                 if ts.tz is None:
-                    return ts.tz_localize('UTC')
-                return ts.tz_convert('UTC')
+                    return cast(pd.Timestamp, ts.tz_localize('UTC'))
+                return cast(pd.Timestamp, ts.tz_convert('UTC'))
             except Exception:
                 pass
         return pd.Timestamp.now(tz='UTC')
@@ -184,7 +184,7 @@ class BaseDetector(ABC):
         """计算ATR序列"""
         if self._indicator_cache:
             try:
-                return self._indicator_cache.get('ATR', period=period)
+                return cast(pd.Series, self._indicator_cache.get('ATR', period=period))
             except Exception:
                 pass
         high, low, close = df['High'], df['Low'], df['Close'].shift(1)

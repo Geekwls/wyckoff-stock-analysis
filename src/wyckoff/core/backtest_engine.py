@@ -3,7 +3,6 @@
 从report_generator.py中提取，负责信号历史表现回测
 """
 import pandas as pd
-import numpy as np
 from typing import Dict, List, Any, Optional
 import logging
 from ..config.settings import WyckoffThresholds
@@ -41,7 +40,7 @@ class BacktestEngine:
         "FTI (穿透冰层)": {"key": "fti", "is_bullish": False},
     }
 
-    def __init__(self, data: pd.DataFrame, thresholds: WyckoffThresholds = None,
+    def __init__(self, data: pd.DataFrame, thresholds: Optional[WyckoffThresholds] = None,
                  lookforward_days: int = 45, min_samples: int = 3):
         """
         初始化回测引擎
@@ -63,7 +62,7 @@ class BacktestEngine:
             for i, dt in enumerate(self.data.index)
         }
 
-    def calculate_signal_performance(self, events: Dict[str, Any], current_phase: str = None) -> Dict[str, Dict[str, Any]]:
+    def calculate_signal_performance(self, events: Dict[str, Any], current_phase: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
         """
         计算各信号的历史表现
 
@@ -122,7 +121,7 @@ class BacktestEngine:
 
         return results
 
-    def _backtest_signal(self, signals: List[Dict[str, Any]], is_bullish: bool) -> Dict[str, Any]:
+    def _backtest_signal(self, signals: List[Dict[str, Any]], is_bullish: bool) -> Optional[Dict[str, Any]]:
         """
         回测单个信号，加入成本与滑点建模
 
