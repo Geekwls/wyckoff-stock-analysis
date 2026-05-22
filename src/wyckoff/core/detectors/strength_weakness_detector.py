@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Dict,  List
 from .base_detector import BaseDetector, USE_VECTORIZED
 
 logger = logging.getLogger(__name__)
@@ -10,7 +10,7 @@ from ...config.settings import WyckoffConfig, WyckoffThresholds
 class StrengthWeaknessDetector(BaseDetector):
     """
     负责检测 SOS (Sign of Strength) 和 SOW (Sign of Weakness) 及其变体
-    
+
     重要理论约束：
     - SOS (强势信号) 只发生在吸筹阶段末期或上涨趋势中
     - 在派发阶段，向上突破应归类为 UT (Upthrust) 或 UTAD (派发后的上冲回落)
@@ -34,21 +34,21 @@ class StrengthWeaknessDetector(BaseDetector):
         }
         # 已检测到的高优先级信号（用于排他逻辑）
         self._detected_high_priority_signals = set()
-    
+
     def _ensure_columns(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
         """确保所需的指标列存在，缺失时从缓存获取或动态计算"""
         df = df.copy()
         for col in columns:
             if col in df.columns:
                 continue
-            
+
             if self._indicator_cache:
                 try:
                     df[col] = self._indicator_cache.get(col)
                     continue
                 except Exception:
                     pass
-            
+
             # 降级逻辑
             if col == 'Volume_MA20':
                 df[col] = df['Volume'].rolling(20, min_periods=1).mean()
@@ -57,7 +57,7 @@ class StrengthWeaknessDetector(BaseDetector):
             elif col == 'ATR':
                 atr_series = self._calculate_atr_series(self.data, period=14)
                 df[col] = atr_series.reindex(df.index)
-                
+
         return df
 
     def update_analysis_context(self, phase: str):
@@ -141,7 +141,7 @@ class StrengthWeaknessDetector(BaseDetector):
         if self._current_phase is None:
             return False
         return 'distribution' in self._current_phase.lower() or '派发' in self._current_phase
-    
+
     def _is_accumulation_phase(self) -> bool:
         """判断当前是否处于吸筹阶段"""
         if self._current_phase is None:
@@ -171,25 +171,25 @@ class StrengthWeaknessDetector(BaseDetector):
     def _detect_sos_vectorized(self, window: int = 40) -> Dict:
         if self._is_signal_blocked('sos'):
             return {'detected': False, 'reason': 'signal_blocked_by_phase', 'note': '当前阶段为派发期，向上突破应归类为UT/UTAD，SOS信号已被屏蔽'}
-        
+
         if self.data is None or len(self.data) < window:
             return {'detected': False}
-            
+
         if self._is_distribution_phase():
             return {'detected': False, 'reason': 'distribution_phase_no_sos'}
-            
+
         df = self.data.tail(window).copy()
-        
+
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
         price_change_threshold = self.thresholds.SOS_PRICE_CHANGE_DEFAULT
-        
+
         # 转换为 NumPy 数组
         closes = df['Close'].values
         opens = df['Open'].values
         highs = df['High'].values
         lows = df['Low'].values
         volumes = df['Volume'].values
-        
+
         # 获取 vol_ma
         if self._indicator_cache:
             vol_ma_series = self._indicator_cache.get('Volume_MA20')
@@ -204,12 +204,12 @@ class StrengthWeaknessDetector(BaseDetector):
         prev_closes[0] = closes[0]
         safe_prev_closes = np.where(np.abs(prev_closes) > 1e-9, prev_closes, 1.0)
         price_pct_change = (closes - prev_closes) / safe_prev_closes
-        
+
         # 安全计算 close_position
         denominators = highs - lows
         safe_denominators = np.where(denominators == 0, 1.0, denominators)
         close_position = (closes - lows) / safe_denominators
-        
+
         upper_shadow = highs - closes
         body = np.abs(closes - opens)
         upper_shadow_ratio = upper_shadow / (body + 0.001)
@@ -221,34 +221,34 @@ class StrengthWeaknessDetector(BaseDetector):
             (close_position >= 0.70) &
             (upper_shadow_ratio < 0.50)
         )
-        
+
         sos_indices = np.where(sos_mask)[0]
-        
+
         if len(sos_indices) > 0:
             idx_pos = sos_indices[-1]
             idx = df.index[idx_pos]
-            
+
             # 区分突破性质
             if idx_pos >= 20:
                 pre_sos_high = np.max(highs[idx_pos-20:idx_pos])
             else:
                 pre_sos_high = np.max(highs[:idx_pos+1])
-                
+
             tr_data = self.data.tail(60)
             tr_high = tr_data['High'].max()
             sos_close = closes[idx_pos]
-            
+
             if sos_close >= tr_high * 0.98:
                 breakout_type = 'breakout_sos'
             elif sos_close >= pre_sos_high * 0.98:
                 breakout_type = 'range_high_sos'
             else:
                 breakout_type = 'within_range_sos'
-            
+
             #  P1-2 增强：结合阶段细化分类
             is_phase_b = self._current_phase and 'Phase B' in self._current_phase
             is_phase_d = self._current_phase and 'Phase D' in self._current_phase
-            
+
             if breakout_type == 'breakout_sos':
                 if is_phase_d:
                     signal_rank = 'major_sos'
@@ -262,15 +262,15 @@ class StrengthWeaknessDetector(BaseDetector):
             else:
                 signal_rank = 'minor_sos'
                 interpretation = '【次要强势信号】区间内放量阳线，表明需求介入'
-                
+
             return {
-                'detected': True, 
-                'type': 'sos', 
+                'detected': True,
+                'type': 'sos',
                 'signal_rank': signal_rank,
-                'date': idx, 
-                'price': float(closes[idx_pos]), 
-                'volume_ratio': round(float(volumes[idx_pos] / vol_ma[idx_pos]) if vol_ma[idx_pos] > 0 else 1.0, 2), 
-                'price_change': round(float(price_pct_change[idx_pos]), 4), 
+                'date': idx,
+                'price': float(closes[idx_pos]),
+                'volume_ratio': round(float(volumes[idx_pos] / vol_ma[idx_pos]) if vol_ma[idx_pos] > 0 else 1.0, 2),
+                'price_change': round(float(price_pct_change[idx_pos]), 4),
                 'breakthrough_level': {
                     "value": round(float(tr_high), 3),
                     "derivation": f"max_high_in_60d_range",
@@ -296,20 +296,20 @@ class StrengthWeaknessDetector(BaseDetector):
 
         if self.data is None or len(self.data) < window:
             return {'detected': False}
-        
+
         # 关键约束：在派发阶段，直接返回未检测到SOS
         # 所有向上突破尝试一律归为 upthrust，由 detect_upthrust() 处理
         if self._is_distribution_phase():
             return {'detected': False, 'reason': 'distribution_phase_no_sos'}
-        
+
         df = self.data.tail(window).copy()
         vol_ma = df['Volume'].rolling(20).mean()
         price_pct_change = df['Close'].pct_change()
-        
+
         # 使用配置中的阈值
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
         price_change_threshold = self.thresholds.SOS_PRICE_CHANGE_DEFAULT
-        
+
         # 修复 #6: SOS 必须收盘在日内高位（无长上影线），防止 UT 误判为 SOS
         close_position = (df['Close'] - df['Low']) / (df['High'] - df['Low']).replace(0, float('nan'))
         upper_shadow = df['High'] - df['Close']
@@ -325,13 +325,13 @@ class StrengthWeaknessDetector(BaseDetector):
         )
         if sos_mask.any():
             idx = df[sos_mask].index[-1]
-            
+
             # 区分突破性质：SOS 是否突破了近期 TR 上沿
             pre_sos_high = df.loc[:idx]['High'].iloc[-20:].max() if len(df.loc[:idx]) >= 20 else df['High'].max()
             tr_data = self.data.tail(60)
             tr_high = tr_data['High'].max()
             sos_close = df.loc[idx, 'Close']
-            
+
             if sos_close >= tr_high * 0.98:
                 breakout_type = 'breakout_sos'
                 interpretation = '强势突破前期盘整区间阻力，JOC前兆信号'
@@ -341,14 +341,14 @@ class StrengthWeaknessDetector(BaseDetector):
             else:
                 breakout_type = 'within_range_sos'
                 interpretation = '区间内放量阳线，非突破性信号'
-            
+
             return {
-                'detected': True, 
-                'type': 'sos', 
-                'date': idx, 
-                'price': df.loc[idx, 'Close'], 
-                'volume_ratio': round(df.loc[idx, 'Volume']/vol_ma.loc[idx], 2), 
-                'price_change': round(price_pct_change.loc[idx], 4), 
+                'detected': True,
+                'type': 'sos',
+                'date': idx,
+                'price': df.loc[idx, 'Close'],
+                'volume_ratio': round(df.loc[idx, 'Volume']/vol_ma.loc[idx], 2),
+                'price_change': round(price_pct_change.loc[idx], 4),
                 'breakthrough_level': {
                     "value": round(tr_high, 3),
                     "derivation": "max_high_in_60d_range",
@@ -452,7 +452,7 @@ class StrengthWeaknessDetector(BaseDetector):
             #  P1-2 增强：结合阶段细化分类
             is_phase_b = self._current_phase and 'Phase B' in self._current_phase
             is_phase_d = self._current_phase and 'Phase D' in self._current_phase
-            
+
             if tr_low is not None:
                 if sow_low < tr_low:
                     # 跌破区间下沿 → 真正的SOW
@@ -697,7 +697,7 @@ class StrengthWeaknessDetector(BaseDetector):
                 bodies = (window_slice['Close'] - window_slice['Open']).abs().values
                 ranges = (window_slice['High'] - window_slice['Low']).values
                 price_ref = current['Close']
-                
+
                 # 容差检查：body[-1] < body[-2] < body[-3]
                 is_body_shrinking = True
                 for b_idx in range(len(bodies) - 1, 0, -1):
@@ -708,7 +708,7 @@ class StrengthWeaknessDetector(BaseDetector):
                     else:
                         if not (curr_b < prev_b):
                             is_body_shrinking = False; break
-                
+
                 is_tight = (bodies[-1] / max(ranges[-1], 1e-9)) < 0.3 # 实体占波幅比例小
                 vcp_detected = is_body_shrinking and is_tight
 
@@ -765,12 +765,12 @@ class StrengthWeaknessDetector(BaseDetector):
 
                 if spring_low is not None:
                     note += f' | LPS低点({current["Low"]:.2f}) > Spring低点({spring_low:.2f}) ✓'
-                
+
                 if vcp_detected:
                     note += ' | [VCP] 波动率极度收缩确认供应耗尽 ✓'
                 else:
                     note += ' | 仅缩量回踩，波动尚未完全收缩'
-                    
+
                 signal['note'] = note
 
                 lps_signals.append(signal)
@@ -842,41 +842,41 @@ class StrengthWeaknessDetector(BaseDetector):
     def detect_lpsy(self, window: int = 30, trading_range: Dict = None) -> Dict:
         """
         检测 LPSY (Last Point of Supply)
-        
+
         威科夫严格定义：价格跌破关键支撑后，出现的缩量无力反弹。
         若支撑未被跌破，信号归类为"weak_reaction"而非 LPSY。
-        
+
         Args:
             window: 检测窗口
             trading_range: 当前交易区间（需包含 'low' 支撑位）
         """
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
-            
+
         df = self._ensure_columns(self.data.tail(window), ['Volume_MA20', 'MA20'])
         df_wide = self._ensure_columns(self.data, ['Volume_MA20'])
         vol_ma = df_wide['Volume_MA20'].reindex(df.index)
-        
+
         # 获取 TR 支撑位（如 AR 低点）
         tr_support = None
         if trading_range and 'low' in trading_range:
             tr_support = trading_range['low']
-        
+
         # 检查支撑是否已被有效跌破（仅检查窗口近半段，避免引用BC前历史低点）
         support_broken = False
         if tr_support is not None:
             recent_half = df.tail(max(len(df) // 2, 5))
             support_broken = recent_half['Low'].min() < tr_support
-        
+
         signals = []
         weak_reactions = []
         for i in range(5, len(df)):
             current = df.iloc[i]
-            
+
             is_rebound = (current['High'] > df.iloc[i-5:i]['Low'].min()) and (current['Close'] < df['MA20'].iloc[i])
             low_volume = current['Volume'] < vol_ma.iloc[i] * self.thresholds.VOLUME_CONFIRMATION['weak']
             lower_high = current['High'] < df.iloc[i-20:i-5]['High'].max()
-            
+
             # 新增：LPSY 的 VCP 验证
             vcp_detected = False
             window_slice = df.iloc[max(0, i-2):i+1]
@@ -887,7 +887,7 @@ class StrengthWeaknessDetector(BaseDetector):
                 is_body_shrinking = True
                 for b_idx in range(len(bodies) - 1, 0, -1):
                     curr_b, prev_b = bodies[b_idx], bodies[b_idx-1]
-                    if prev_b < price_ref * 0.001: 
+                    if prev_b < price_ref * 0.001:
                         if not (curr_b < prev_b * 1.2):
                             is_body_shrinking = False; break
                     else:
@@ -913,7 +913,7 @@ class StrengthWeaknessDetector(BaseDetector):
                 else:
                     signal['signal_type'] = 'lpsy'
                     signals.append(signal)
-        
+
         result = {'detected': bool(signals or weak_reactions)}
         if signals:
             result['signals'] = signals
@@ -929,9 +929,9 @@ class StrengthWeaknessDetector(BaseDetector):
     def detect_choch(self) -> Dict:
         """
         特征变异 (Change of Character, CHoCH) 检测
-        
+
         理论依据：趋势中出现的第一个显著的反向波段，其强度远超前序波段，标志着供求秩序的改变。
-        
+
         Returns:
             {
                 'detected': bool,
@@ -943,25 +943,25 @@ class StrengthWeaknessDetector(BaseDetector):
         """
         from ..weis_wave import WeisWaveGenerator
         if self.data is None or len(self.data) < 40: return {'detected': False}
-        
+
         generator = WeisWaveGenerator(self.data)
         waves = generator.generate()
         if len(waves) < 4: return {'detected': False}
-        
+
         last_wave = waves[-1]
         # 找到前序同方向的波段进行对比
         prev_same_dir = [w for w in waves[:-1] if w.direction == last_wave.direction]
         if len(prev_same_dir) < 2: return {'detected': False}
-        
+
         avg_thrust = np.mean([w.thrust for w in prev_same_dir[-3:]])
         avg_vol = np.mean([w.volume for w in prev_same_dir[-3:]])
-        
+
         # CHoCH 判定标准：推力或成交量显著超过均值（1.5倍以上）
         thrust_ratio = last_wave.thrust / avg_thrust if avg_thrust > 0 else 1.0
         volume_ratio = last_wave.volume / avg_vol if avg_vol > 0 else 1.0
-        
+
         is_choch = (thrust_ratio > 1.8) or (volume_ratio > 2.0 and thrust_ratio > 1.2)
-        
+
         if is_choch:
             dir_str = "上涨" if last_wave.direction == 'up' else "下跌"
             return {
