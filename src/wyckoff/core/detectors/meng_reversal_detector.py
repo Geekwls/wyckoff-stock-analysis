@@ -74,6 +74,10 @@ class MengReversalDetector(BaseDetector):
                     bar_range = highs[j] - lows[j]
                     close_position = (closes[j] - lows[j]) / bar_range if bar_range > 0 else 0.5
                     
+                    # 孟洪涛5重过滤：收回价格必须收在日内K线的高位（默认前70%）
+                    if close_position < t.MENG_SPRING_RECOVERY_CLOSE_POS:
+                        continue
+                    
                     # 新增：收回速率量化 (Velocity of Recovery)
                     breakdown_velocity = support_level - breakdown_price
                     recovery_velocity = (closes[j] - breakdown_price) / recovery_days
@@ -120,6 +124,10 @@ class MengReversalDetector(BaseDetector):
                         # 计算收回日收盘在日内振幅中的位置 (0=最低, 1=最高)
                         bar_range = df['High'].iloc[j] - df['Low'].iloc[j]
                         close_position = (df['Close'].iloc[j] - df['Low'].iloc[j]) / bar_range if bar_range > 0 else 0.5
+                        
+                        # 孟洪涛5重过滤：收回价格必须收在日内K线的高位（默认前70%）
+                        if close_position < t.MENG_SPRING_RECOVERY_CLOSE_POS:
+                            continue
                         
                         # 收回速率量化
                         breakdown_velocity = support_level - breakdown_price

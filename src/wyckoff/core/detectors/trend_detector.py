@@ -176,6 +176,9 @@ class TrendDetector(BaseDetector):
                 'joc_failed': True,
                 'failure_reason': failure_reason,
                 'current_price': round(current_price, 3),
+                'test_detected': test_detected,
+                'test_quality': strength_info.get('test_quality'),
+                'test_score': strength_info.get('test_score', 0.0),
                 'implication': 'JOC_FAILED_POTENTIAL_PHASE_C_RETURN',
                 'description': f'JOC失败：价格回落至Creek({creek_level:.2f})以下，可能回到Phase C重新积累',
                 'confidence': round(min(confidence, 1.0), 2)
@@ -186,6 +189,8 @@ class TrendDetector(BaseDetector):
             'breakout_pct': round(breakout_pct * 100, 2), 'volume_ratio': round(volume_ratio, 2),
             'test_detected': test_detected, 'test_date': test_date, 'test_vol_ratio': test_vol_ratio,
             'test_depth_pct': round(test_depth_pct * 100, 2), 'test_count': test_count,
+            'test_quality': strength_info.get('test_quality'),
+            'test_score': strength_info.get('test_score', 0.0),
             'strength': strength_info['strength'], 'strength_description': strength_info['description'],
             'trading_implication': strength_info['trading_implication'],
             'joc_failed': False,
@@ -209,27 +214,48 @@ class TrendDetector(BaseDetector):
 
     def _classify_joc_strength(self, joc_signal: dict) -> dict:
         has_test, test_depth, test_count = joc_signal.get('test_detected', False), joc_signal.get('test_depth_pct', 0), joc_signal.get('test_count', 0)
-        #  缺隗7修复：Weis强调BUEC缩量回测才是高质量确认。无回测不代表“更强势”而是“尚未确认”
+        # P2 修复：整合 test_detected、test_depth_pct、test_count，增加 test_quality 和 test_score 评级计算
         if not has_test:
             return {
                 'strength': 'JOC_UNCONFIRMED',
                 'description': 'JOC突破但尚无BUEC缩量回测确认，可能是真突破也可能是Upthrust（假突破）',
                 'trading_implication': 'Weis建议等待BUEC缩量回测小溪后再入场，直接追高风险/收益比差',
-                'confidence_boost': 0.0  # 中性，不加也不减
+                'confidence_boost': 0.0,
+                'test_quality': None,
+                'test_score': 0.0
             }
         elif test_depth < 0.03 and test_count <= 2:
             return {
                 'strength': 'STRONG_JOC_CONFIRMED',
                 'description': f'优质JOC（浅回测{test_depth*100:.1f}%，{test_count}次BUEC缩量确认）',
                 'trading_implication': 'BUEC浅回测企稳，风险/收益比最佳，稳健做多为最佳入场时机',
-                'confidence_boost': 0.3
+                'confidence_boost': 0.3,
+                'test_quality': 'HIGH',
+                'test_score': 90.0
             }
         else:
+            if test_depth < 0.06:
+                test_quality = "MEDIUM"
+                test_score = 60.0
+                strength = 'WEAK_JOC'
+                description = f'中等JOC（中等回测{test_depth*100:.1f}%，{test_count}次试探）'
+                trading_implication = '回踩深度尚可，可以轻仓试探，注意破位止损'
+                confidence_boost = 0.1
+            else:
+                test_quality = "LOW"
+                test_score = 40.0
+                strength = 'WEAK_JOC'
+                description = f'弱势JOC（深回测{test_depth*100:.1f}%，{test_count}次试探）'
+                trading_implication = '谨慎观望，等待明确方向'
+                confidence_boost = -0.1
+
             return {
-                'strength': 'WEAK_JOC',
-                'description': f'弱势JOC（深回测{test_depth*100:.1f}%，{test_count}次试探）',
-                'trading_implication': '谨慎观望，等待明确方向',
-                'confidence_boost': -0.1
+                'strength': strength,
+                'description': description,
+                'trading_implication': trading_implication,
+                'confidence_boost': confidence_boost,
+                'test_quality': test_quality,
+                'test_score': test_score
             }
 
     def detect_fti(self, lookback: int = 90) -> Dict:

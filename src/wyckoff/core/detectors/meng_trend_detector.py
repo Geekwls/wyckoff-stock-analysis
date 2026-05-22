@@ -228,12 +228,13 @@ class MengTrendDetector(BaseDetector):
         tr = self._detect_trading_range(df, window=60)
         if not tr.get("is_consolidation"): return {"detected": False, "reason": "not_in_consolidation"}
         vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
+        vol_ma20_s = df['Volume_MA20'].values if 'Volume_MA20' in df.columns else df['Volume'].rolling(20, min_periods=1).mean().values
 
         # ── 天量突破 JOC 过载保护与买入高潮 ──
         for i in range(len(df) - 1, 19, -1):
             current_creek = self._calculate_adaptive_creek(df.iloc[:i+1], window=60)
             if df['Close'].iloc[i] > current_creek and df['Close'].iloc[i-1] <= current_creek:
-                vol_ratio = df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1.0
+                vol_ratio = df['Volume'].iloc[i] / vol_ma20_s[i] if vol_ma20_s[i] > 0 else 1.0
                 hl_range = df['High'].iloc[i] - df['Low'].iloc[i]
                 if hl_range > 0:
                     shadow_ratio = (df['High'].iloc[i] - max(df['Open'].iloc[i], df['Close'].iloc[i])) / hl_range
@@ -264,23 +265,40 @@ class MengTrendDetector(BaseDetector):
             if df['Close'].iloc[i] > current_creek and df['Close'].iloc[i-1] <= current_creek:
                 price_change = (df['Close'].iloc[i] - df['Open'].iloc[i]) / df['Open'].iloc[i] * 100
                 if price_change < self.thresholds.JOC_MIN_BREAKOUT_PCT: continue
-                vol_ratio = df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
+                vol_ratio = df['Volume'].iloc[i] / vol_ma20_s[i] if vol_ma20_s[i] > 0 else 1.0
                 if vol_ratio < self.thresholds.JOC_VOLUME_RATIO: continue
                 daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
                 close_pos = (df['Close'].iloc[i] - df['Low'].iloc[i]) / daily_range if daily_range > 0 else 0.5
                 if close_pos < self.thresholds.JOC_CLOSE_POSITION: continue
+                
                 td, tdt, tvr = False, None, None
-                for j in range(i+1, min(i+10, len(df))):
+                test_score, test_quality = 0, None
+                for j in range(i+1, min(i+11, len(df))):
                     #  修复#5: 回测检测逻辑优化 - 允许短暂跌破后收回
                     if df['Low'].iloc[j] < current_creek * 1.02:
-                        tvr_curr = df['Volume'].iloc[j] / vol_ma20 if vol_ma20 > 0 else 1
+                        tvr_curr = df['Volume'].iloc[j] / vol_ma20_s[j] if vol_ma20_s[j] > 0 else 1.0
                         if tvr_curr < 1.0:
                             td, tdt, tvr = True, df.index[j], tvr_curr
+                            fh = j
+                            prev_close = df['Close'].iloc[fh-1] if fh > 0 else df['Close'].iloc[fh]
+                            prev_open = df['Open'].iloc[fh-1] if fh > 0 else df['Open'].iloc[fh]
+                            prev_body_pct = abs(prev_close - prev_open) / prev_close * 100 if prev_close > 0 else 0
+                            
+                            t_score, t_quality = self._calculate_joc_test_quality(
+                                df['Close'].iloc[fh], df['Open'].iloc[fh], df['High'].iloc[fh], df['Low'].iloc[fh], 
+                                df['Volume'].iloc[fh], vol_ma20_s[fh], current_creek, prev_body_pct
+                            )
+                            test_score = t_score
+                            test_quality = t_quality
                             break
+                            
                 signals.append({
                     "date": df.index[i], "creek_level": float(current_creek), "close_price": float(df['Close'].iloc[i]), "breakout_pct": round(price_change, 2),
                     "volume_ratio": round(vol_ratio, 2), "close_position": round(close_pos * 100, 1), "test_detected": td, "test_date": tdt,
-                    "test_vol_ratio": round(tvr, 2) if tvr else None, "confidence": self._calculate_joc_confidence(price_change, vol_ratio, close_pos, td)
+                    "test_vol_ratio": round(tvr, 2) if tvr else None, 
+                    "test_score": test_score if td else 0,
+                    "test_quality": test_quality if td else None,
+                    "confidence": self._calculate_joc_confidence(price_change, vol_ratio, close_pos, td, test_score if td else 0)
                 })
         if not signals: return {"detected": False, "reason": "no_valid_joc_found"}
         ls = signals[-1]

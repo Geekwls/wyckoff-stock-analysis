@@ -1,11 +1,15 @@
 import json
+from unittest.mock import patch
 from src.wyckoff.mcp_server import analyze_stock_wyckoff
 from src.wyckoff.exceptions import DataFetchError
 
 def test_error_compatibility():
     """验证错误响应的向后兼容性"""
     # 模拟一个会触发错误的调用 (非法代码)
-    result_json = analyze_stock_wyckoff("INVALID.SYMBOL")
+    with patch('src.wyckoff.mcp_server.WyckoffAnalyzer') as mock_analyzer:
+        mock_analyzer.side_effect = DataFetchError(symbol="INVALID.SYMBOL", reason="Mock fetch error")
+        result_json = analyze_stock_wyckoff("INVALID.SYMBOL")
+        
     result = json.loads(result_json)
     
     # 验证新字段

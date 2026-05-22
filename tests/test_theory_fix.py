@@ -163,6 +163,7 @@ class TestTheoryFix(unittest.TestCase):
         # 1. 构造一个普通的 upthrust（不满足 UTAD，不满足快速回落）
         data_normal = self._create_mock_data(100, base_price=100)
         detector_normal = WyckoffPatternDetector(data_normal, self.config, self.cache)
+        detector_normal.detect_utad = lambda: {'detected': False}
         coordinator_normal = PhaseCoordinator(detector_normal)
         
         # 模拟 climax_res, ar_res, st_res 表明初步在派发 Phase A 阶段

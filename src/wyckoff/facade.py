@@ -821,119 +821,37 @@ class WyckoffAnalyzer:
         if not self.pattern_detector:
             return {}
 
-        tr = self.pattern_detector.detect_trading_range()
-        if not tr:
+        if not self.law_analyzer and self.data is not None:
+            self.law_analyzer = WyckoffLawAnalyzer(self.data, self.config, self.pattern_detector)
+
+        if not self.law_analyzer:
             return {}
 
-        # 区间边界失效校验：若 tr_low > 0 且最近 60 个交易日内最低价跌破过 tr_low，但当前收盘价已重新站回 tr_low * 1.03 以上
-        tr_low = tr.get('low', 0.0)
-        tr_high = tr.get('high', 0.0)
-        recent_data = self.data.tail(60) if self.data is not None else pd.DataFrame()
-        recent_low = recent_data['Low'].min() if not recent_data.empty else 0.0
-        current_price = self.data['Close'].iloc[-1] if self.data is not None and not self.data.empty else 0.0
-
-        if tr_low > 0 and recent_low < tr_low and current_price >= tr_low * 1.03:
-            return {
-                'method': 'invalidated_tr',
-                'cause_bars': 0,
-                'volatility_contraction': 0.0,
-                'contraction_factor': 0.0,
-                'description': "🚨 原交易区间参考性已下降：价格曾跌破原支撑位且已大幅收回，表明市场已找到新的需求抵抗，当前正在重建结构。根据威科夫原则，原区间已失效，必须暂停目标测算，等待新的有效 TR 形成。",
-                'targets': {'target_1': 0.0, 'target_2': 0.0, 'target_3': 0.0},
-                'theory': "威科夫区间失效原则",
-                'tr_low': tr_low,
-                'tr_high': tr_high,
-                'current_price': current_price
-            }
-
         try:
-            phase_result = self.identify_phase()
-            current_phase = phase_result.get('phase', '')
-
-            pnf_result = calculate_cause_effect_from_pnf(
-                self.data, 
-                box_size_pct=1.0,
-                reversal_boxes=3,
-                phase=current_phase,
-                known_tr_high=tr.get('high'),
-                known_tr_low=tr.get('low'),
-            )
-
-            if pnf_result.get('horizontal_count', 0) >= 3:
-                return {
-                    'method': pnf_result.get('method', 'point_and_figure'),
-                    'cause_bars': pnf_result.get('horizontal_count', 0),
-                    'vertical_count': pnf_result.get('vertical_count', 0),
-                    'accumulation_range': pnf_result.get('accumulation_range', {}),
-                    'base_effect': pnf_result.get('base_effect', 0),
-                    'breakout_direction': pnf_result.get('breakout_direction', 'up'),
-                    'description': pnf_result.get('description', ''),
-                    'targets': pnf_result.get('targets', {}),
-                    'theory': '威科夫因果法则：水平计数决定垂直目标',
-                    '_pnf_method': pnf_result.get('_pnf_method', ''),
-                }
-
-            cause_bars = tr.get('consolidation_duration_days', 40)
-            recent_data = self.data.tail(cause_bars)
-            if len(recent_data) < 10:
+            res = self.law_analyzer.analyze_cause_effect_law_enhanced()
+            if not res:
                 return {}
 
-            atr_series = (recent_data['High'] - recent_data['Low']).rolling(window=5).mean()
-            atr_start = atr_series.iloc[0] if len(atr_series) > 0 else 0
-            atr_end = atr_series.iloc[-1] if len(atr_series) > 0 else 0
-            volatility_contraction = 1 - (atr_end / atr_start) if atr_start > 0 else 0
+            basic = res.get('basic_analysis', {}).copy()
+            enhanced = res.get('enhanced_analysis', {})
 
-            base_price = tr['high']
-            price_range = tr['high'] - tr['low']
+            # 对齐 cause_bars（因原本 facade.py 期望返回 cause_bars）
+            if 'consolidation_duration_days' in basic and 'cause_bars' not in basic:
+                basic['cause_bars'] = basic['consolidation_duration_days']
+            if 'horizontal_count' in basic and 'cause_bars' not in basic:
+                basic['cause_bars'] = basic['horizontal_count']
 
-            # 威科夫因果法则：水平积累宽度 → 垂直目标幅度
-            # 波动率收缩越大 → 积累越充分 → 突破后的爆发力越强
-            # 但当无收缩时，使用基础水平计数
-            if volatility_contraction > 0.1:
-                # 有显著波动率收缩：收缩越多，蓄力越强
-                contraction_factor = 1 + volatility_contraction * 1.5
-            else:
-                # 无显著收缩：使用标准水平计数法
-                contraction_factor = 1.0
+            # 把一些 facade.py 以前包含而 basic 里面可能叫法不一样的字段对齐
+            if isinstance(enhanced, dict):
+                # 扁平合入 enhanced 的关键字段，以完美向下兼容
+                for k, v in enhanced.items():
+                    if k not in basic:
+                        basic[k] = v
 
-            time_factor = cause_bars / 30
-            potential_move = price_range * contraction_factor * time_factor
-
-            return {
-                'method': 'volatility_contraction',
-                'cause_bars': cause_bars,
-                'volatility_contraction': round(volatility_contraction * 100, 1),
-                'contraction_factor': round(contraction_factor, 2),
-                'description': f"基于波动率收缩{volatility_contraction*100:.1f}%和{cause_bars}天积累，"
-                              f"预计突破幅度为{potential_move/base_price*100:.1f}%",
-                'targets': {
-                    'target_1': round(base_price + potential_move * 0.618, 2),
-                    'target_2': round(base_price + potential_move, 2),
-                    'target_3': round(base_price + potential_move * 1.618, 2),
-                },
-                'theory': '威科夫因果法则：水平积累宽度 × 波动率收缩 → 垂直目标'
-            }
-
-        except (DataError, CalculationError) as e:
-            logger.warning(f"点数图计算失败 (数据/计算错误): {e}")
-            if not self.config.silent_fail:
-                raise
-            cause_bars = tr.get('consolidation_duration_days', 40)
-            base_price = tr.get('high', 0)
-            price_range = tr.get('high', 0) - tr.get('low', 0)
-            potential_move = price_range * 1.0
-
-            return {
-                'method': 'fallback',
-                'cause_bars': cause_bars,
-                'description': f"备用估算：横盘{cause_bars}天，预计突破幅度为{potential_move/base_price*100:.1f}%",
-                'targets': {
-                    'target_1': round(base_price + potential_move * 0.618, 2),
-                    'target_2': round(base_price + potential_move, 2),
-                    'target_3': round(base_price + potential_move * 1.618, 2),
-                },
-                'theory': '备用估算方法'
-            }
+            return basic
+        except Exception as e:
+            logger.warning(f"calculate_cause_effect failed: {e}")
+            return {}
 
 
 def batch_scan(symbols: List[str], period: str = "1y",

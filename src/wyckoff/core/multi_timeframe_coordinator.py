@@ -55,7 +55,7 @@ class MultiTimeframeCoordinator:
         self.timeframes[timeframe] = data
         logger.info(f"多时间框架协调器: 已设置 {timeframe} 数据 ({len(data)} 条)")
 
-    def verify_signal_resonance(self, signal_type: str, direction: str) -> Dict:
+    def verify_signal_resonance(self, signal_type: str, direction: str, pattern_results: Optional[Dict] = None) -> Dict:
         """
         孟洪涛原则：验证信号在不同时间框架上的共振
 
@@ -67,6 +67,7 @@ class MultiTimeframeCoordinator:
         Args:
             signal_type: 信号类型 (spring, joc, sos, etc.)
             direction: 方向 ('long' or 'short')
+            pattern_results: 真实的日线威科夫信号包 (Optional)
 
         Returns:
             {
@@ -80,7 +81,7 @@ class MultiTimeframeCoordinator:
         """
         # 获取各时间框架的分析结果
         weekly_analysis = self._analyze_weekly_trend()
-        daily_analysis = self._analyze_daily_signal(signal_type, direction)
+        daily_analysis = self._analyze_daily_signal(signal_type, direction, pattern_results)
         hourly_analysis = self._analyze_hourly_entry(direction)
 
         # 验证共振
@@ -165,37 +166,102 @@ class MultiTimeframeCoordinator:
             'note': f'周线趋势: {trend}'
         }
 
-    def _analyze_daily_signal(self, signal_type: str, direction: str) -> Dict:
+    def _analyze_daily_signal(self, signal_type: str, direction: str, pattern_results: Optional[Dict] = None) -> Dict:
         """分析日线信号"""
-        if self.timeframes['daily'] is None or len(self.timeframes['daily']) < 40:
+        if pattern_results is None:
+            if self.timeframes['daily'] is None or len(self.timeframes['daily']) < 40:
+                return {
+                    'has_signal': False,
+                    'signal_quality': 'unknown',
+                    'note': '日线数据不足'
+                }
+
+            df = self.timeframes['daily'].tail(40).copy()
+
+            # 简单的趋势判断
+            ma20 = df['Close'].rolling(20).mean().iloc[-1]
+            current_price = df['Close'].iloc[-1]
+
+            if direction == 'long':
+                has_signal = current_price > ma20
+                signal_quality = 'strong' if current_price > ma20 * 1.02 else 'medium'
+            else:
+                has_signal = current_price < ma20
+                signal_quality = 'strong' if current_price < ma20 * 0.98 else 'medium'
+
             return {
-                'has_signal': False,
-                'signal_quality': 'unknown',
-                'note': '日线数据不足'
+                'has_signal': has_signal,
+                'signal_quality': signal_quality,
+                'signal_type': signal_type,
+                'current_price': round(current_price, 2),
+                'ma20': round(ma20, 2),
+                'note': f'日线信号: {signal_type} ({signal_quality})' if has_signal else '日线信号不明确'
             }
 
-        df = self.timeframes['daily'].tail(40).copy()
+        # 核心逻辑：从真实的 pattern_results 提取日线威科夫信号并验证
+        def _get_signal_status(pt_res, key):
+            if not pt_res: return False, None
+            events = pt_res.get('events_detected') if isinstance(pt_res, dict) else pt_res
+            val = pt_res.get(key) if isinstance(pt_res, dict) else getattr(pt_res, key, None)
+            if not val and events and isinstance(events, dict):
+                val = events.get(key)
+            elif not val and events:
+                val = getattr(events, key, None)
+            
+            detected = False
+            if isinstance(val, dict):
+                detected = val.get('detected', False)
+            elif val:
+                detected = getattr(val, 'detected', False)
+            return detected, val
 
-        # 这里应该调用实际的信号检测器
-        # 简化实现：检查是否有明确的趋势形态
-        ma20 = df['Close'].rolling(20).mean().iloc[-1]
-        current_price = df['Close'].iloc[-1]
+        has_signal, detail = _get_signal_status(pattern_results, signal_type)
+        
+        # 模糊同向匹配
+        if not has_signal:
+            if direction == 'long':
+                for k in ['joc', 'spring', 'sos', 'lps']:
+                    det, d_detail = _get_signal_status(pattern_results, k)
+                    if det:
+                        has_signal = True
+                        signal_type = k
+                        detail = d_detail
+                        break
+            else:
+                for k in ['fti', 'upthrust', 'sow', 'lpsy']:
+                    det, d_detail = _get_signal_status(pattern_results, k)
+                    if det:
+                        has_signal = True
+                        signal_type = k
+                        detail = d_detail
+                        break
 
-        # 简单的趋势判断
-        if direction == 'long':
-            has_signal = current_price > ma20
-            signal_quality = 'strong' if current_price > ma20 * 1.02 else 'medium'
-        else:
-            has_signal = current_price < ma20
-            signal_quality = 'strong' if current_price < ma20 * 0.98 else 'medium'
+        signal_quality = 'medium'
+        confidence = 50.0
+        if has_signal and detail:
+            if isinstance(detail, dict):
+                confidence = detail.get('confidence', 50.0)
+            else:
+                confidence = getattr(detail, 'confidence', 50.0)
+            
+            if confidence >= 80:
+                signal_quality = 'strong'
+            elif confidence >= 50:
+                signal_quality = 'medium'
+            else:
+                signal_quality = 'weak'
+
+        current_price = 0.0
+        if self.timeframes['daily'] is not None and len(self.timeframes['daily']) > 0:
+            current_price = self.timeframes['daily']['Close'].iloc[-1]
 
         return {
             'has_signal': has_signal,
             'signal_quality': signal_quality,
             'signal_type': signal_type,
             'current_price': round(current_price, 2),
-            'ma20': round(ma20, 2),
-            'note': f'日线信号: {signal_type} ({signal_quality})' if has_signal else '日线信号不明确'
+            'confidence': confidence,
+            'note': f'日线信号确认: {signal_type.upper()} ({signal_quality}, 置信度:{confidence}%)' if has_signal else '日线信号未确认'
         }
 
     def _analyze_hourly_entry(self, direction: str) -> Dict:

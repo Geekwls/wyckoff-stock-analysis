@@ -1103,7 +1103,7 @@ class PhaseTransitionCriteria:
     # 威科夫理论：B→C 的触发信号因方向而异
     # - 吸筹 B→C：Spring（震仓）或 SOS（强势突破） → Phase C/D
     # - 派发 B→C：Upthrust（诱多）或 SOW（弱势信号） → Phase C/D
-    B_TO_C_SIGNALS = ['spring', 'upthrust']
+    B_TO_C_SIGNALS = ['spring', 'upthrust', 'sos', 'sow']
 
     # Phase C → D 转换标准
     C_TO_D_SIGNALS = ['lps', 'lpsy', 'joc', 'fti']

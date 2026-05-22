@@ -307,7 +307,7 @@ class TestDetectVSASignals:
         df.loc[idx, "Open"]   = mid * 0.998
         df.loc[idx, "High"]   = mid * 1.003
         df.loc[idx, "Low"]    = mid * 0.995
-        df.loc[idx, "Close"]  = mid * 1.001   # 收阳但窄幅
+        df.loc[idx, "Close"]  = mid * 1.001
         df.loc[idx, "Volume"] = vol_ma * 0.55
         return df
 
@@ -320,8 +320,8 @@ class TestDetectVSASignals:
         df.loc[idx, "Open"]   = mid * 0.998
         df.loc[idx, "High"]   = mid * 1.005
         df.loc[idx, "Low"]    = mid * 0.994
-        df.loc[idx, "Close"]  = mid * 1.002   # 收盘偏中上
-        df.loc[idx, "Volume"] = vol_ma * 2.0   # 放量
+        df.loc[idx, "Close"]  = mid * 1.002
+        df.loc[idx, "Volume"] = vol_ma * 2.0
         return df
 
     def test_vsa_returns_three_signal_keys(self):
@@ -382,3 +382,159 @@ class TestDetectVSASignals:
         if ns.get("detected"):
             assert isinstance(ns.get("description"), str)
             assert len(ns["description"]) > 10
+
+
+# ─────────────────────────────────────────────────────────────
+# 孟洪涛重构 5 大偏差修复的专属单元测试 (TestMengReconstruction)
+# ─────────────────────────────────────────────────────────────
+
+class TestMengReconstruction:
+
+    def test_spring_close_position_hard_filter(self):
+        """测试1：Spring 收盘位置硬性过滤 (close_position < 0.7 必须被拦截)"""
+        df = _make_base_df(base_price=20.0, n=120)
+        idx = df.index[-5]
+        vol_ma = df.loc[idx, "Volume_MA20"]
+        
+        # 1. 注入一根 spring 阴线（收盘在低位，例如 close_position = 0.3）
+        df.loc[idx, "Open"]   = 19.5
+        df.loc[idx, "High"]   = 20.2
+        df.loc[idx, "Low"]    = 19.0
+        df.loc[idx, "Close"]  = 19.3  # close_position = (19.3-19.0)/(20.2-19.0) = 0.25 < 0.7
+        df.loc[idx, "Volume"] = vol_ma * 2.0
+        
+        det = _make_detector(df)
+        res_vec = det.detect_spring()  # 检查 Spring 探测
+        assert res_vec.get("detected") is False, "Spring with low close position (< 0.7) must be filtered out"
+        
+        # 2. 注入一根符合标准的 spring 阳线（收盘在高位，例如 close_position = 0.83）
+        df2 = _make_base_df(base_price=20.0, n=120)
+        idx2 = df2.index[-5]
+        vol_ma2 = df2.loc[idx2, "Volume_MA20"]
+        df2.loc[idx2, "Open"]   = 19.2
+        df2.loc[idx2, "High"]   = 20.2
+        df2.loc[idx2, "Low"]    = 19.0
+        df2.loc[idx2, "Close"]  = 20.0  # close_position = (20.0-19.0)/(20.2-19.0) = 0.83 >= 0.7
+        df2.loc[idx2, "Volume"] = vol_ma2 * 2.0
+        
+        det2 = _make_detector(df2)
+        res_vec2 = det2.detect_spring()
+        # 这里仅保证通过了 close_position 的硬卡门槛过滤
+
+    def test_joc_iterative_test_quality_and_window_alignment(self):
+        """测试2：JOC 迭代版 Test Quality 参数与窗口对齐"""
+        df = _make_base_df(base_price=20.0, n=120)
+        creek = df["High"].tail(60).quantile(0.85)
+        df.iloc[-20:, df.columns.get_loc("Close")] = creek * 0.95
+        
+        df = _inject_joc(df, creek, position=-12)
+        df = _inject_joc_test(df, creek, position=-5)
+        
+        det = _make_detector(df)
+        res_vec = det.meng_enhancer.trend._detect_joc_enhanced_vectorized()
+        res_iter = det.meng_enhancer.trend._detect_joc_enhanced_iterative()
+        
+        assert res_iter.get("detected") == res_vec.get("detected")
+        assert res_iter.get("test_detected") == res_vec.get("test_detected")
+        if res_iter.get("test_detected"):
+            assert "test_score" in res_iter
+            assert "test_quality" in res_iter
+            assert abs(res_iter["confidence"] - res_vec["confidence"]) < 1e-5
+
+    def test_stopping_volume_ma50_unbinding_and_defensive_synergy(self):
+        """测试3：Stopping Volume 移除 MA50 限制，支持中高位回调并联动窄价差和量比"""
+        df = _make_base_df(base_price=20.0, n=120)
+        idx = df.index[-1]
+        vol_ma = df.loc[idx, "Volume_MA20"]
+        ma50 = df.loc[idx, "MA50"]
+        
+        # 设置 Close 比 MA50 高（传统硬卡判定会被直接漏掉）
+        df.loc[idx, "Open"]   = ma50 * 1.05
+        df.loc[idx, "High"]   = ma50 * 1.055
+        df.loc[idx, "Low"]    = ma50 * 1.045
+        df.loc[idx, "Close"]  = ma50 * 1.051   # 收盘高出 MA50 5%！
+        df.loc[idx, "Volume"] = vol_ma * 2.2      # 强量比 > 1.5
+        
+        # 满足 Close < MA20 条件，支持在中高位回调触发
+        df.loc[idx, "MA20"] = ma50 * 1.06
+        
+        det = _make_detector(df)
+        vsa_res = det.detect_vsa_signals()
+        assert vsa_res["stopping_vol"]["detected"] is True, "Stopping volume should be detected even if Close >= MA50, under new callback filters"
+
+    def test_recommendation_position_and_low_score_intercept(self):
+        """测试4 & 5：风控仓位极低拦截及仓位推荐配比联动"""
+        from src.wyckoff.core.recommendation_engine import RecommendationEngine
+        
+        engine = RecommendationEngine(WyckoffConfig())
+        data = _make_base_df(n=50)
+        targets = {"target_1": 25.0, "target_2": 30.0}
+        
+        # 1. 信号评分极低 (< 25)，验证拦截为“观望”、仓位“0%”、特定拦截理由
+        events_low = {
+            "joc": {
+                "detected": True,
+                "creek_level": 21.0,
+                "confidence": 0.1,
+                "volume_ratio": 0.5,
+                "breakout_pct": 1.0,
+                "date": "2025-01-31"
+            },
+            "spring": {"detected": False},
+            "sos": {"detected": False},
+            "utad": {"detected": False},
+            "sow": {"detected": False},
+            "lps": {"detected": False},
+            "lpsy": {"detected": False},
+            "fti": {"detected": False},
+            "events_detected": {
+                "joc": {
+                    "detected": True,
+                    "creek_level": 21.0,
+                    "confidence": 0.1,
+                    "volume_ratio": 0.5,
+                    "breakout_pct": 1.0,
+                    "date": "2025-01-31"
+                }
+            },
+            "phase": "Accumulation Phase D"
+        }
+        plan_low = engine.generate_trading_plan(data, events_low, targets)
+        assert plan_low.direction == "观望"
+        assert plan_low.position_sizing.conservative == "0%"
+        assert "信号质量过低风控拦截" in plan_low.entry_zone
+        
+        # 2. 正常的高质量信号，验证仓位推荐值大于以前的 10% 基准（上调至常规 50% 联动）
+        events_high = {
+            "joc": {
+                "detected": True,
+                "creek_level": 21.0,
+                "confidence": 0.9,
+                "volume_ratio": 2.2,
+                "breakout_pct": 5.0,
+                "date": "2025-01-31"
+            },
+            "spring": {"detected": False},
+            "sos": {"detected": True, "detected_keys": ["sos"], "confidence": 0.8, "volume_ratio": 1.8, "date": "2025-01-30"},
+            "events_detected": {
+                "joc": {
+                    "detected": True,
+                    "creek_level": 21.0,
+                    "confidence": 0.9,
+                    "volume_ratio": 2.2,
+                    "breakout_pct": 5.0,
+                    "date": "2025-01-31"
+                },
+                "sos": {"detected": True, "confidence": 0.8, "volume_ratio": 1.8, "date": "2025-01-30"}
+            },
+            "phase": "Accumulation Phase D"
+        }
+        
+        plan_high = engine.generate_trading_plan(data, events_high, targets)
+        assert plan_high.direction == "做多"
+        cons_val = float(plan_high.position_sizing.conservative.replace("%", "").split(" ")[0])
+        # 在 50% 基准仓位与 36 分的加权质量打分下算得的仓位应为 18%，远大于旧版（10% 基准下仅 3.6%）
+        assert cons_val >= 15.0, f"Position sizing should be substantial, got {cons_val}%"
+        assert cons_val == 18.0
+
+

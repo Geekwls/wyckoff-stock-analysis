@@ -228,8 +228,23 @@ class ReversalDetector(BaseDetector):
             return {'detected': False}
 
         if TypeConverter.is_date_like(climax_date):
-            climax_ts = TypeConverter.to_timestamp(climax_date)
-            sc_row = self.data.loc[self.data.index == climax_ts]
+            try:
+                climax_ts = pd.to_datetime(climax_date)
+                if self.data.index.tz is not None and climax_ts.tz is None:
+                    climax_ts = climax_ts.tz_localize('UTC').tz_convert(self.data.index.tz)
+                elif self.data.index.tz is None and climax_ts.tz is not None:
+                    climax_ts = climax_ts.tz_localize(None)
+                
+                # 寻找最接近的 index（时间差在 1 秒内即为同一根K线）
+                time_diffs = np.abs((self.data.index - climax_ts).total_seconds())
+                min_diff_idx = np.argmin(time_diffs)
+                if time_diffs[min_diff_idx] < 1.0:
+                    sc_row = self.data.iloc[[min_diff_idx]]
+                else:
+                    sc_row = self.data.loc[self.data.index == climax_ts]
+            except Exception:
+                sc_row = self.data.loc[self.data.index == climax_date]
+            
             if len(sc_row) > 0:
                 sc_open = sc_row['Open'].iloc[0]
                 sc_close = sc_row['Close'].iloc[0]
@@ -239,44 +254,102 @@ class ReversalDetector(BaseDetector):
         else:
             sc_benchmark = climax_res['price']
 
+        ar_min_pct = self.thresholds.AR_MIN_REBOUND_PCT / 100.0
+
         if climax_res['type'] == 'selling_climax':
-            # 寻找首个摆动高点 (Swing High)
             ar_price = None
             ar_date = None
-            for i in range(2, len(df_after) - 2):
-                h = df_after['High'].iloc[i]
-                if (h >= df_after['High'].iloc[i-1] and h >= df_after['High'].iloc[i-2] and
-                    h >= df_after['High'].iloc[i+1] and h >= df_after['High'].iloc[i+2]):
-                    ar_price = float(h)
-                    ar_date = df_after.index[i]
-                    break
-            
-            # 兜底逻辑：取最大值
+            detection_layer = None
+
+            # 层级 1：Swing 摆动过滤（优先）
+            if len(df_after) >= 7:
+                for i in range(2, len(df_after) - 2):
+                    h = df_after['High'].iloc[i]
+                    if (h >= df_after['High'].iloc[i-1] and h >= df_after['High'].iloc[i-2] and
+                        h >= df_after['High'].iloc[i+1] and h >= df_after['High'].iloc[i+2]):
+                        ar_price = float(h)
+                        ar_date = df_after.index[i]
+                        detection_layer = 'swing_high'
+                        break
+
+            # 层级 2：立即反弹检测（1-3 天）
+            if ar_price is None:
+                df_3 = df_after.head(3)
+                if len(df_3) > 0:
+                    max_high_idx = df_3['High'].idxmax()
+                    max_high_val = float(df_3['High'].max())
+                    if (max_high_val - sc_benchmark) / sc_benchmark >= ar_min_pct:
+                        ar_price = max_high_val
+                        ar_date = max_high_idx
+                        detection_layer = 'immediate_rebound'
+
+            # 层级 3：5日扩展检测（1-5 天）
+            if ar_price is None:
+                df_5 = df_after.head(5)
+                if len(df_5) > 0:
+                    max_high_idx = df_5['High'].idxmax()
+                    max_high_val = float(df_5['High'].max())
+                    if (max_high_val - sc_benchmark) / sc_benchmark >= ar_min_pct:
+                        ar_price = max_high_val
+                        ar_date = max_high_idx
+                        detection_layer = '5d_extended'
+
+            # 层级 4：15 天极值兜底
             if ar_price is None:
                 ar_price = float(df_after['High'].max())
                 ar_date = df_after['High'].idxmax()
+                detection_layer = '15d_extreme_fallback'
 
             rebound_pct = (ar_price - sc_benchmark) / sc_benchmark if sc_benchmark > 0 else 0
             return {
                 'detected': True, 'type': 'automatic_rally', 'date': ar_date, 'price': ar_price,
-                'rebound_pct': round(rebound_pct, 4), 'sc_benchmark': round(sc_benchmark, 2)
+                'rebound_pct': round(rebound_pct, 4), 'sc_benchmark': round(sc_benchmark, 2),
+                'detection_layer': detection_layer
             }
         else:
-            # 寻找首个摆动低点 (Swing Low)
+            # buying_climax
             ar_price = None
             ar_date = None
-            for i in range(2, len(df_after) - 2):
-                l = df_after['Low'].iloc[i]
-                if (l <= df_after['Low'].iloc[i-1] and l <= df_after['Low'].iloc[i-2] and
-                    l <= df_after['Low'].iloc[i+1] and l <= df_after['Low'].iloc[i+2]):
-                    ar_price = float(l)
-                    ar_date = df_after.index[i]
-                    break
+            detection_layer = None
 
-            # 兜底逻辑：取最小值
+            # 层级 1：Swing 摆动过滤（优先）
+            if len(df_after) >= 7:
+                for i in range(2, len(df_after) - 2):
+                    l = df_after['Low'].iloc[i]
+                    if (l <= df_after['Low'].iloc[i-1] and l <= df_after['Low'].iloc[i-2] and
+                        l <= df_after['Low'].iloc[i+1] and l <= df_after['Low'].iloc[i+2]):
+                        ar_price = float(l)
+                        ar_date = df_after.index[i]
+                        detection_layer = 'swing_low'
+                        break
+
+            # 层级 2：立即回落检测（1-3 天）
+            if ar_price is None:
+                df_3 = df_after.head(3)
+                if len(df_3) > 0:
+                    min_low_idx = df_3['Low'].idxmin()
+                    min_low_val = float(df_3['Low'].min())
+                    if (sc_benchmark - min_low_val) / sc_benchmark >= ar_min_pct:
+                        ar_price = min_low_val
+                        ar_date = min_low_idx
+                        detection_layer = 'immediate_reaction'
+
+            # 层级 3：5日扩展检测（1-5 天）
+            if ar_price is None:
+                df_5 = df_after.head(5)
+                if len(df_5) > 0:
+                    min_low_idx = df_5['Low'].idxmin()
+                    min_low_val = float(df_5['Low'].min())
+                    if (sc_benchmark - min_low_val) / sc_benchmark >= ar_min_pct:
+                        ar_price = min_low_val
+                        ar_date = min_low_idx
+                        detection_layer = '5d_extended'
+
+            # 层级 4：15 天极值兜底
             if ar_price is None:
                 ar_price = float(df_after['Low'].min())
                 ar_date = df_after['Low'].idxmin()
+                detection_layer = '15d_extreme_fallback'
 
             decline_pct = (ar_price - sc_benchmark) / sc_benchmark if sc_benchmark > 0 else 0
             bc_high = climax_res.get('price', 0)
@@ -285,6 +358,7 @@ class ReversalDetector(BaseDetector):
                 'detected': True, 'type': 'automatic_reaction', 'date': ar_date, 'price': ar_price,
                 'decline_pct': round(decline_pct, 4), 'sc_benchmark': round(sc_benchmark, 2),
                 'climax_high': round(bc_high, 2), 'nominal_decline_pct': round(nominal_decline, 4),
+                'detection_layer': detection_layer
             }
 
     def detect_secondary_test(self, climax_res: Dict, ar_res: Dict) -> Dict:

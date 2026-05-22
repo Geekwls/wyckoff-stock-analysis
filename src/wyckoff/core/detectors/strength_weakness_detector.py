@@ -54,6 +54,9 @@ class StrengthWeaknessDetector(BaseDetector):
                 df[col] = df['Volume'].rolling(20, min_periods=1).mean()
             elif col == 'MA20':
                 df[col] = df['Close'].rolling(20, min_periods=1).mean()
+            elif col == 'ATR':
+                atr_series = self._calculate_atr_series(self.data, period=14)
+                df[col] = atr_series.reindex(df.index)
                 
         return df
 
@@ -234,6 +237,13 @@ class StrengthWeaknessDetector(BaseDetector):
             tr_data = self.data.tail(60)
             tr_high = tr_data['High'].max()
             sos_close = closes[idx_pos]
+            
+            if sos_close >= tr_high * 0.98:
+                breakout_type = 'breakout_sos'
+            elif sos_close >= pre_sos_high * 0.98:
+                breakout_type = 'range_high_sos'
+            else:
+                breakout_type = 'within_range_sos'
             
             #  P1-2 增强：结合阶段细化分类
             is_phase_b = self._current_phase and 'Phase B' in self._current_phase
@@ -639,7 +649,7 @@ class StrengthWeaknessDetector(BaseDetector):
             if not phase_a_validation['st_detected']:
                 phase_a_validation['missing_events'].append('ST（二次测试）')
 
-        df = self._ensure_columns(self.data.tail(window), ['Volume_MA20', 'MA20'])
+        df = self._ensure_columns(self.data.tail(window), ['Volume_MA20', 'MA20', 'ATR'])
         df_wide = self._ensure_columns(self.data, ['Volume_MA20'])
         vol_ma = df_wide['Volume_MA20'].reindex(df.index)
 
@@ -655,13 +665,20 @@ class StrengthWeaknessDetector(BaseDetector):
             if spring_low is not None and current['Low'] <= spring_low:
                 continue
 
-            # 威科夫 LPS：必须在 TR 下沿支撑位附近（+5% 容差）
+            # 威科夫 LPS：必须在 TR 下沿支撑位附近（自适应容差）
             # 孟洪涛书中定义：LPS 是"最后支撑点"，应在 TR 下沿受支撑后缩量
             near_tr_support = True
             if tr_support is not None:
-                # LPS 低点必须在 TR 下沿的 5% 范围内
+                # LPS 低点必须在 TR 下沿的合理范围内（+动态容差）
                 low_pct_from_support = (current['Low'] - tr_support) / max(tr_support, 1e-9)
-                near_tr_support = -0.03 <= low_pct_from_support <= 0.08
+                # P2 修复：基于 ATR 自适应容差，对高波动收紧、低波动放宽
+                atr_val = current.get('ATR')
+                if pd.isna(atr_val) or atr_val <= 0:
+                    atr_pct = 0.015
+                else:
+                    atr_pct = atr_val / max(current['Close'], 1e-9)
+                tolerance_upper = min(0.08, max(0.04, atr_pct * 1.5))
+                near_tr_support = -0.03 <= low_pct_from_support <= tolerance_upper
 
             # 新增：VCP 波动率收缩验证 (P0)
             vcp_detected = False

@@ -35,6 +35,7 @@ class MengVsaDetector(BaseDetector):
         
         # 🔧 优化：在循环外部一次性计算移动平均线，彻底解决每次循环内全量重算的严重性能漏洞
         ma5 = df['Close'].rolling(5).mean()
+        ma20 = df['MA20'] if 'MA20' in df.columns else df['Close'].rolling(20).mean()
         ma50 = df['MA50'] if 'MA50' in df.columns else df['Close'].rolling(50).mean()
         
         for i in range(10, len(df)):
@@ -141,12 +142,13 @@ class MengVsaDetector(BaseDetector):
                             "description": desc_nd
                         })
             
-            #  修复#6c: Stopping Volume 检测 - 量比>2.0
-            if df['Close'].iloc[i] < ma50.iloc[i]:
-                # 孟洪涛要求：成交量显著放大（>2.0 倍）
-                if vol_r > 2.0 and (abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / pr < 0.3):
+            # 孟洪涛 Stopping Volume 优化：
+            # 价格处于 60 日交易区间的相对中低位（tr_pos < 0.5），或者收盘价低于短期 20 日均线
+            if tr_pos < 0.5 or df['Close'].iloc[i] < ma20.iloc[i]:
+                # 联动配置中的量比、窄幅实体以及下影线阈值，避免放宽位置限制后引入噪点
+                if vol_r > t.MENG_STOPPING_VOL_RATIO and body_pct < t.MENG_STOPPING_BODY_RATIO:
                     ls = min(df['Open'].iloc[i], df['Close'].iloc[i]) - df['Low'].iloc[i]
-                    if ls > pr * 0.3:
+                    if ls > pr * t.MENG_STOPPING_SHADOW_RATIO:
                         sv.append({"date": df.index[i], "vol_ratio": round(vol_r, 2), "price": df['Close'].iloc[i]})
         
         return {

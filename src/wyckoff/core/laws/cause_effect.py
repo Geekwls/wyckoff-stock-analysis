@@ -18,6 +18,51 @@ class CauseEffectMixin:
         trading_range = self.pattern_detector.detect_trading_range()
         tr_story = self._build_tr_story()
         current_close = self.data['Close'].iloc[-1]
+
+        # P3 修复：将原本仅在 facade.py 中的 invalidated_tr 判定规则收拢到底层
+        tr_low = trading_range.get('low', 0.0)
+        tr_high = trading_range.get('high', 0.0)
+        recent_data = self.data.tail(60) if self.data is not None else pd.DataFrame()
+        recent_low = recent_data['Low'].min() if not recent_data.empty else 0.0
+        
+        if tr_low > 0 and recent_low < tr_low and current_close >= tr_low * 1.03:
+            basic_cause_effect = {
+                'method': 'invalidated_tr',
+                'cause_bars': 0,
+                'volatility_contraction': 0.0,
+                'contraction_factor': 0.0,
+                'description': "🚨 原交易区间参考性已下降：价格曾跌破原支撑位且已大幅收回，表明市场已找到新的需求抵抗，当前正在重建结构。根据威科夫原则，原区间已失效，必须暂停目标测算，等待新的有效 TR 形成。",
+                'targets': {'target_1': 0.0, 'target_2': 0.0, 'target_3': 0.0},
+                'theory': "威科夫区间失效原则",
+                'tr_low': tr_low,
+                'tr_high': tr_high,
+                'current_price': current_close
+            }
+            enhanced = {
+                "accumulation_distribution_effort": {
+                    "time_effort": trading_range.get("duration_days", 60),
+                    "price_consolidation": 0.0,
+                    "cause_size": round(tr_high - tr_low, 2),
+                    "effort_quality": "INVALIDATED",
+                },
+                "projected_effects": {
+                    "method": "invalidated_tr",
+                    "current_situation": f"原TR({tr_low:.2f}-{tr_high:.2f})曾跌破后收回，参考性下降",
+                    "effort_assessment": "原TR已失效",
+                    "projected_direction": "UNKNOWN",
+                    "target_projections": {
+                        "status": "pending_recalculation",
+                        "note": "原交易区间参考价格已失效，暂停目标测算",
+                        "old_tr_range": {"low": round(tr_low, 2), "high": round(tr_high, 2)},
+                        "current_price": round(current_close, 2),
+                    },
+                    "wyckoff_logic": "原交易区间参考性已下降：价格曾跌破原支撑位且已大幅收回，暂停目标测算",
+                    "theory": "威科夫区间失效原则"
+                },
+                "tr_story": tr_story
+            }
+            return {"basic_analysis": basic_cause_effect, "enhanced_analysis": enhanced}
+
         phase_result = self.pattern_detector.identify_phase() if self.pattern_detector else {}
         phase = phase_result.get("phase", "") if isinstance(phase_result, dict) else ""
         if not phase:
@@ -272,8 +317,8 @@ class CauseEffectMixin:
         close = recent['Close'].iloc[-1]
         broke_down = close < low
         downside_target_1 = low - width if broke_down else None
-        upthrust = self.pattern_detector.detect_upthrust() if self.pattern_detector else {}
-        spring = self.pattern_detector.detect_spring() if self.pattern_detector else {}
+        upthrust = self.pattern_detector.detect_upthrust() if self.pattern_detector and hasattr(self.pattern_detector, 'detect_upthrust') else {}
+        spring = self.pattern_detector.detect_spring() if self.pattern_detector and hasattr(self.pattern_detector, 'detect_spring') else {}
         rebound_vol = recent['Volume'].tail(10).mean()
         base_vol = recent['Volume'].head(40).mean()
         weak_rebound = rebound_vol < base_vol * 0.9
@@ -338,7 +383,7 @@ class CauseEffectMixin:
             
         # 2. 突破质量加权 (JOC/FTI 质量)
         quality_score = 0
-        joc = self.pattern_detector.detect_joc_menhongtao() if self.pattern_detector else {}
+        joc = self.pattern_detector.detect_joc_menhongtao() if self.pattern_detector and hasattr(self.pattern_detector, 'detect_joc_menhongtao') else {}
 
         if joc.get('detected'):
             #  Weis Wave 波段累加量评估（替换原单K线降级方案）

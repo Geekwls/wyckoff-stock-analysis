@@ -621,62 +621,44 @@ class WyckoffPatternDetector:
         """
         检测自然反弹（Automatic Rally, AR）
         
-        孟洪涛《新威科夫操盘法》定义：
-        - AR 是 SC 后 **立即** 发生的剧烈反弹（1-3 根K线内）
-        - 不是数周后任意时间点的最高价
-        - AR 极值通常形成 TR 上沿
+        重构实现：代理调用 ClassicPatternDetector 的统一 AR 检测方法，实现 DRY。
+        同时对返回结果进行完美包装，向下兼容旧接口的一切字段与格式。
         """
         try:
-            sc_res = self.detect_climax_panic_selling(60)
+            sc_res = self.detect_climax_panic_selling(lookback_days)
             if not sc_res['detected']:
                 return {"detected": False, "reason": "No SC found to baseline AR"}
-            
+
+            # 调用统一的底层 AR 检测逻辑
+            ar_res = self.classic_detector.detect_automatic_reaction(sc_res)
+            if not ar_res.get('detected'):
+                return {"detected": False, "reason": "AR not detected by reversal detector"}
+
             sc_date = pd.to_datetime(sc_res['date'])
             sc_low = sc_res['price']
-
-            after_sc = self.data.loc[self.data.index > sc_date]
-            if len(after_sc) < 2:
-                return {"detected": False, "reason": "Insufficient data after SC"}
-
-            # 威科夫 AR：只在 SC 后 1-3 根K线内寻找反弹高点
-            ar_window = after_sc.head(3)
             
-            # 放宽条件：如果前3根没有明显反弹，扩展到5根
-            ar_high = ar_window['High'].max()
-            ar_idx = ar_window['High'].idxmax()
-
-            # 修正：反弹起点应为 SC 当日的收盘价或实体中位值，而非最低价 (P1 #2.1)
-            sc_bar = self.data.loc[sc_date]
-            baseline = (sc_bar['Open'] + sc_bar['Close']) / 2
+            ar_date = ar_res['date']
+            ar_high = ar_res['price']
+            rebound_pct = float(ar_res['rebound_pct']) * 100.0
             
-            rebound_pct = (ar_high - baseline) / baseline * 100
-            
-            # 威科夫理论中，AR 是剧烈反弹（通常 > 3%）
-            is_ar = rebound_pct > 3
-
-            # 扩展搜索：如果 3 根K线内未找到充分反弹，扩展到 5 根
-            if not is_ar:
-                ar_window_5 = after_sc.head(5)
-                ar_high_5 = ar_window_5['High'].max()
-                ar_idx_5 = ar_window_5['High'].idxmax()
-                rebound_pct_5 = (ar_high_5 - baseline) / baseline * 100
-                if rebound_pct_5 > 3:
-                    ar_high = ar_high_5
-                    ar_idx = ar_idx_5
-                    rebound_pct = rebound_pct_5
-                    is_ar = True
+            # 计算 ar_window_bars 兼容字段
+            ar_window_bars = 3
+            if ar_res.get('detection_layer') == '5d_extended':
+                ar_window_bars = 5
+            elif ar_res.get('detection_layer') in ('swing_high', '15d_extreme_fallback'):
+                ar_window_bars = 15
 
             return {
-                "detected": is_ar,
+                "detected": True,
                 "sc_date": sc_date,
                 "sc_low": float(sc_low),
-                "ar_date": ar_idx,
-                "date": ar_idx,
+                "ar_date": ar_date,
+                "date": ar_date,
                 "price": float(ar_high),
                 "ar_high": float(ar_high),
                 "rebound_pct": float(rebound_pct),
-                "ar_window_bars": 3 if ar_idx in after_sc.head(3).index else 5,
-                "confidence": min(100, max(0, (rebound_pct - 1) * 12)) if is_ar else 0
+                "ar_window_bars": ar_window_bars,
+                "confidence": min(100, max(0, (rebound_pct - 1) * 12))
             }
         except (DataError, MissingFieldError, CalculationError, PatternDetectionError, PatternNotFoundError):
             raise

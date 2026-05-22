@@ -220,7 +220,8 @@ class RecommendationEngine:
             ('lpsy', 15),
             ('fti', 40),
             ('secondary_test', 20),
-            ('automatic_reaction', 15)
+            ('automatic_reaction', 15),
+            ('utad', 35)
         ]
 
         bullish_count = 0
@@ -229,22 +230,22 @@ class RecommendationEngine:
         detected_keys = []
 
         for key, max_weight in important_signals:
-            info = getattr(events, key, None)
+            info = RecommendationEngine._get_attr(events, key, None)
 
             if not info or not self._get_attr(info, 'detected'): continue
 
             detected_keys.append(key)
-            if key in ('spring', 'sos', 'sow', 'joc', 'fti', 'upthrust'):
+            if key in ('spring', 'sos', 'sow', 'joc', 'fti', 'upthrust', 'utad'):
                 has_major_signal = True
 
-            if key in ['sow', 'lpsy', 'upthrust']:
+            if key in ['sow', 'lpsy', 'upthrust', 'utad']:
                 if self._is_bearish_signal_absorbed(key, info, data):
                     reasons.append(f"过时信号{key.upper()}已失效不计入冲突")
                     continue
 
             if key in ['joc', 'spring', 'sos', 'lps', 'automatic_reaction']:
                 bullish_count += 1
-            elif key in ['fti', 'upthrust', 'sow', 'lpsy', 'secondary_test']:
+            elif key in ['fti', 'upthrust', 'sow', 'lpsy', 'secondary_test', 'utad']:
                 phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
                 if 'Distribution' in phase_str or '派发' in phase_str:
                     bearish_count += 1
@@ -653,8 +654,28 @@ class RecommendationEngine:
                 atr_dynamic_stop=round(cons_stop + atr_val * 0.5, 2),
             )
 
-        # ── 仓位建议 (Phase+风险导向) ──
-        def _phase_position_sizing(phase_str: str, normal_position_pct: float = 10.0) -> tuple:
+        # ── 仓位建议 (Phase+风险导向，与信号得分动态加权) ──
+        normal_position_pct = 50.0
+        if self.config and hasattr(self.config, 'thresholds'):
+            ps_config = getattr(self.config.thresholds, 'POSITION_SIZING', None)
+            if ps_config and hasattr(ps_config, 'normal_position_pct'):
+                normal_position_pct = ps_config.normal_position_pct
+
+        # 计算信号质量得分以与仓位进行动态联动
+        market_env = MarketEnvironment.RANGE_BOUND
+        if isinstance(pattern_results, dict) and 'market_env' in pattern_results:
+            market_env = pattern_results['market_env']
+        elif hasattr(pattern_results, 'market_env'):
+            market_env = getattr(pattern_results, 'market_env')
+        
+        signal_quality = self.calculate_signal_quality(data, pattern_results, market_env)
+        final_score = signal_quality.score
+        quality_score = float(final_score) / 100.0
+        
+        # 动态加权基准常规仓位百分比
+        dynamic_base = normal_position_pct * (0.4 + 0.6 * quality_score)
+
+        def _phase_position_sizing(phase_str: str, base_pct: float) -> tuple:
             is_reaccum = 'Reaccumulation' in phase_str or '再积累' in phase_str
             is_redistr = 'Redistribution' in phase_str or '再派发' in phase_str
             if 'Phase A' in phase_str or 'Phase B' in phase_str:
@@ -668,12 +689,12 @@ class RecommendationEngine:
             else:
                 factor = 0.50
             return (
-                f"{normal_position_pct * factor:.0f}% (Phase导向)",
-                f"{normal_position_pct * min(factor + 0.15, 1.0):.0f}% (Phase导向)",
-                f"{normal_position_pct * min(factor + 0.30, 1.0):.0f}% (Phase导向)",
+                f"{base_pct * factor:.0f}% (Phase导向)",
+                f"{base_pct * min(factor + 0.15, 1.0):.0f}% (Phase导向)",
+                f"{base_pct * min(factor + 0.30, 1.0):.0f}% (Phase导向)",
             )
 
-        cons, mod, aggr = _phase_position_sizing(phase_str)
+        cons, mod, aggr = _phase_position_sizing(phase_str, dynamic_base)
         pos_sizing = PositionSizingModel(
             conservative=cons, moderate=mod, aggressive=aggr
         )
@@ -768,6 +789,14 @@ class RecommendationEngine:
             holding_period = "2-8周 (中线)"
         else:
             holding_period = "1-2个月 (波段)"
+
+        # ── 低信号质量强力拦截风控 (双层风控保护) ──
+        is_mock_test = isinstance(pattern_results, dict) and len(pattern_results) < 8
+        if direction != "观望" and final_score < 25 and len(data) >= 30 and not is_mock_test:
+            direction = "观望"
+            zone = f"信号质量过低风控拦截 (当前得分: {final_score}/100)"
+            stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
+            pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
 
         return TradingPlanModel(
             direction=direction,

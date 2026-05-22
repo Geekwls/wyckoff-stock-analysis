@@ -871,3 +871,100 @@ def test_wave4_lps_weis_wave_effort_result():
             f"缩量回调（后期 800 量）应与前序上涨（5000 量）形成显著 Effort vs Result 背离，"
             f"effort_ratio={effort_ratio:.3f} 应 < 0.618"
         )
+
+
+def test_meng_wyckoff_upgrades_all_validation():
+    """
+    任务 8 专项测试：覆盖 SOS 向量化、AR 立即反弹、LPS 动态容差、JOC 评分和因果目标一致性
+    """
+    # 构造数据
+    dates = pd.date_range("2026-01-01", periods=100)
+    data = pd.DataFrame({
+        "Open": [100.0] * 100,
+        "High": [100.0] * 100,
+        "Low": [100.0] * 100,
+        "Close": [100.0] * 100,
+        "Volume": [1000.0] * 100,
+    }, index=dates)
+
+    data["MA20"] = data["Close"].rolling(20, min_periods=1).mean()
+    data["MA50"] = data["Close"].rolling(50, min_periods=1).mean()
+    data["MA200"] = data["Close"].rolling(200, min_periods=1).mean()
+    data["Volume_MA20"] = data["Volume"].rolling(20, min_periods=1).mean()
+    data["ATR"] = 2.0
+
+    config = WyckoffConfig()
+    thresholds = WyckoffThresholds()
+
+    # 1. 验证 JOC 评分与品质映射
+    # 制造一个 JOC 突破（突破 102.0，收盘 107.0）
+    data.loc[dates[70], ["Open", "High", "Low", "Close", "Volume"]] = [101.0, 108.0, 100.0, 107.0, 4000.0]
+    # 随后缩量回踩
+    for i in range(71, 75):
+        data.loc[dates[i], ["Open", "High", "Low", "Close", "Volume"]] = [105.0, 106.0, 102.5, 103.0, 500.0]
+    data["Volume_MA20"] = data["Volume"].rolling(20, min_periods=1).mean()
+
+    trend_detector = TrendDetector(data, config, thresholds, None)
+    joc_res = trend_detector.detect_joc(lookback=100, trading_range={"high": 102.0, "low": 98.0})
+    assert "test_quality" in joc_res
+    assert "test_score" in joc_res
+
+    # 2. 验证 SOS 向量化方法无 NameError，且包含 breakout_type 和 interpretation
+    from src.wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
+    sw_detector = StrengthWeaknessDetector(data, config, thresholds)
+    sw_detector._current_phase = "Accumulation Phase C"
+
+    # 构造一次突破
+    data.loc[dates[90], ["Open", "High", "Low", "Close", "Volume"]] = [100.0, 115.0, 100.0, 114.0, 5000.0]
+    data["Volume_MA20"] = data["Volume"].rolling(20, min_periods=1).mean()
+    sw_detector.data = data
+
+    sos_res = sw_detector._detect_sos_vectorized(window=40)
+    if sos_res.get('detected'):
+        assert 'breakout_type' in sos_res
+        assert 'interpretation' in sos_res
+        assert sos_res['breakout_type'] in ['breakout_sos', 'range_high_sos', 'within_range_sos']
+
+    # 3. 验证 LPS 动态容差
+    # 制造一个 LPS：低点在 TR 下沿 98.0 附近
+    data.loc[dates[95], ["Open", "High", "Low", "Close", "Volume"]] = [99.5, 100.5, 99.0, 100.0, 300.0]
+    data["MA20"] = data["Close"].rolling(20, min_periods=1).mean()
+    data["Volume_MA20"] = data["Volume"].rolling(20, min_periods=1).mean()
+    data["ATR"] = 3.0  # 大 ATR
+    sw_detector.data = data
+    lps_high = sw_detector.detect_lps(window=20, spring_res={"detected": False}, trading_range={"high": 102.0, "low": 98.0})
+
+    data["ATR"] = 0.5  # 小 ATR
+    sw_detector.data = data
+    lps_low = sw_detector.detect_lps(window=20, spring_res={"detected": False}, trading_range={"high": 102.0, "low": 98.0})
+
+    # 4. 验证 calculate_cause_effect 因果测算及区间失效 (invalidated_tr)
+    from src.wyckoff.facade import WyckoffAnalyzer
+    analyzer = WyckoffAnalyzer("AAPL")
+    dates_ca = pd.date_range("2026-01-01", periods=100)
+    data_ca = pd.DataFrame({
+        "Open": [100.0] * 100,
+        "High": [100.0] * 100,
+        "Low": [100.0] * 100,
+        "Close": [100.0] * 100,
+        "Volume": [1000.0] * 100,
+    }, index=dates_ca)
+
+    # 制造一个跌破 TR 低点 100.0 且大幅收回的场景
+    data_ca.loc[dates_ca[80], "Low"] = 90.0
+    data_ca.loc[dates_ca[99], "Close"] = 105.0
+    data_ca["ATR"] = 2.0
+    analyzer.data = data_ca
+
+    class MockDetectorForCA:
+        def detect_trading_range(self):
+            return {"high": 120.0, "low": 100.0}
+        def identify_phase(self):
+            return {"phase": "Accumulation Phase C", "confidence": 0.8}
+
+    analyzer.pattern_detector = MockDetectorForCA()
+    res_ca = analyzer.calculate_cause_effect()
+    assert res_ca.get("method") == "invalidated_tr"
+    assert "targets" in res_ca
+    assert res_ca["targets"]["target_1"] == 0.0
+    assert "原交易区间参考性已下降" in res_ca.get("description", "")

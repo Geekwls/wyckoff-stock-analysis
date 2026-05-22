@@ -24,6 +24,7 @@ class PositionSizingConfig(BaseModel):
     max_conservative_position: float = Field(0.05, description="保守型最高仓位 (5%)")
     volatility_cap_threshold: float = Field(0.04, description="高波动阈值 (ATR/Price > 4%)")
     liquidity_min_volume_ma20: int = Field(1000000, description="最低流动性门槛 (20日均量)")
+    normal_position_pct: float = Field(50.0, description="默认基准常规仓位百分比 (0-100)")
 
 class WyckoffThresholds(BaseModel):
     """威科夫分析阈值集中配置"""
@@ -72,6 +73,9 @@ class WyckoffThresholds(BaseModel):
     JOC_EXCELLENT_CLOSE_POSITION: float = Field(0.9, description="优秀收盘位置阈值，用于置信度评分")
     JOC_GOOD_CLOSE_POSITION: float = Field(0.8, description="良好收盘位置阈值，用于置信度评分")
     JOC_GOOD_VOLUME_RATIO: float = Field(2.0, description="良好量能阈值，用于置信度评分")
+    
+    # ── AR (Automatic Rally/Reaction) 立即反弹参数 ────────────
+    AR_MIN_REBOUND_PCT: float = Field(3.0, description="AR 立即反弹/回落判定最低百分比阈值")
 
     # ── FTI (Fall Through the Ice / 跌破冰层) 参数 ────────────
     FTI_ICE_QUANTILE: float = Field(0.15, description="近期区间低点分位数（冰层支撑）")

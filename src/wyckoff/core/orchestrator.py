@@ -25,30 +25,51 @@ class WyckoffOrchestrator:
     def run_analysis(self, symbol: str, period: str = "1y") -> Dict[str, Any]:
         """
         运行完整分析流程
-
+ 
         将分析流程拆分为清晰的步骤，提高可读性和可测试性。
         """
         try:
             # 步骤1: 数据获取和准备
             resolved_symbol, data = self._fetch_and_prepare_data(symbol, period)
-
+ 
+            # 步骤1.5: 跨周期协调器初始化与数据抓取 (降级兼容)
+            from .multi_timeframe_coordinator import MultiTimeframeCoordinator
+            mtf_coordinator = MultiTimeframeCoordinator()
+            mtf_coordinator.set_timeframe_data('daily', data)
+ 
+            # 尝试抓取周线
+            try:
+                _, weekly_data = self.data_fetcher.fetch_data(symbol, period, frequency="1w")
+                if weekly_data is not None and len(weekly_data) > 0:
+                    mtf_coordinator.set_timeframe_data('weekly', weekly_data)
+            except Exception as e:
+                logger.info(f"无法获取周线数据，忽略周线共振: {e}")
+ 
+            # 尝试获取小时线数据 (通常 1y 的小时线可能太大，我们可以用最近 1 个月 "1m" 的 1h 数据)
+            try:
+                _, hourly_data = self.data_fetcher.fetch_data(symbol, "1m", frequency="1h")
+                if hourly_data is not None and len(hourly_data) > 0:
+                    mtf_coordinator.set_timeframe_data('hourly', hourly_data)
+            except Exception as e:
+                logger.info(f"无法获取小时线数据，忽略小时线共振: {e}")
+ 
             # 步骤2: 形态检测和阶段识别
             patterns, detector = self._detect_patterns_and_phase(data)
-
+ 
             # 步骤3: 市场环境分析
             market_env = self._analyze_market_env(resolved_symbol, period)
-
-            # 步骤4: 生成交易建议
-            quality, trading_plan, risk_advice = self._generate_recommendations(
-                data, patterns, market_env, detector
+ 
+            # 步骤4: 生成交易建议 (注入多周期共振)
+            quality, trading_plan, risk_advice, resonance_result = self._generate_recommendations(
+                data, patterns, market_env, detector, mtf_coordinator
             )
-
+ 
             # 步骤5: 组装结果包
             return self._assemble_result(
                 resolved_symbol, data, patterns, market_env,
-                quality, trading_plan, risk_advice
+                quality, trading_plan, risk_advice, resonance_result
             )
-
+ 
         except (DataError, CalculationError):
             # 数据/计算错误直接向上传播，由调用方根据 silent_fail 决定处理方式
             raise
@@ -95,14 +116,48 @@ class WyckoffOrchestrator:
         return patterns, detector
 
     def _generate_recommendations(
-        self, data: pd.DataFrame, patterns: Dict, market_env: Any, detector
+        self, data: pd.DataFrame, patterns: Dict, market_env: Any, detector,
+        mtf_coordinator: Optional[Any] = None
     ) -> tuple:
         """
         步骤4: 生成交易建议
 
         Returns:
-            (quality, trading_plan, risk_advice) 元组
+            (quality, trading_plan, risk_advice, resonance_result) 元组
         """
+        # 找出当前主要的检测信号并运行跨周期共振验证
+        resonance_result = None
+        has_conflict = False
+        conflict_details = ""
+        
+        if mtf_coordinator:
+            # 找到发生的第一个核心信号
+            detected_signal_type = "spring"  # 默认
+            detected_direction = "long"      # 默认做多
+            
+            for sig in ['joc', 'spring', 'sos', 'lps']:
+                if patterns.get(sig, {}).get('detected'):
+                    detected_signal_type = sig
+                    detected_direction = 'long'
+                    break
+            else:
+                for sig in ['fti', 'upthrust', 'sow', 'lpsy']:
+                    if patterns.get(sig, {}).get('detected'):
+                        detected_signal_type = sig
+                        detected_direction = 'short'
+                        break
+
+            # 运行跨周期共振验证
+            resonance_result = mtf_coordinator.verify_signal_resonance(
+                detected_signal_type, detected_direction, patterns
+            )
+            
+            # 判断是否有跨周期冲突
+            weekly_dir = resonance_result.get('weekly_trend', {}).get('direction', 'neutral')
+            if weekly_dir != 'neutral' and weekly_dir != detected_direction:
+                has_conflict = True
+                conflict_details = f"周线趋势方向为 {weekly_dir}，但日线威科夫信号 {detected_signal_type.upper()} 方向为 {detected_direction}，二者冲突。"
+
         # 计算信号质量
         quality = self.rec_engine.calculate_signal_quality(data, patterns, market_env)
 
@@ -111,15 +166,23 @@ class WyckoffOrchestrator:
 
         # 生成交易计划和风险建议
         trading_plan = self.rec_engine.generate_trading_plan(data, patterns, targets)
+        
+        # 将共振状态融入风险建议与决策中
         risk_advice = self.rec_engine.generate_risk_advice(
-            quality, trading_plan, phase_str=patterns.get('phase', '')
+            quality, trading_plan,
+            has_conflict=has_conflict,
+            conflict_details=conflict_details,
+            market_env=market_env,
+            data=data,
+            phase_str=patterns.get('phase', '')
         )
 
-        return quality, trading_plan, risk_advice
+        return quality, trading_plan, risk_advice, resonance_result
 
     def _assemble_result(
         self, symbol: str, data: pd.DataFrame, patterns: Dict,
-        market_env: Any, quality: Dict, trading_plan: Dict, risk_advice: Dict
+        market_env: Any, quality: Dict, trading_plan: Dict, risk_advice: Dict,
+        resonance_result: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
         步骤5: 组装最终结果包
@@ -127,7 +190,7 @@ class WyckoffOrchestrator:
         Returns:
             包含所有分析结果的字典
         """
-        return {
+        res = {
             "symbol": symbol,
             "data": data,
             "patterns": patterns,
@@ -136,6 +199,9 @@ class WyckoffOrchestrator:
             "trading_plan": trading_plan,
             "risk_advice": risk_advice
         }
+        if resonance_result:
+            res["resonance"] = resonance_result
+        return res
 
     def _collect_patterns(self, detector: WyckoffPatternDetector, phase: str = '') -> Dict[str, Any]:
         """
