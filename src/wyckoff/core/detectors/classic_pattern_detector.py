@@ -45,7 +45,7 @@ class ClassicPatternDetector(BaseDetector):
     
     def detect_joc(self, lookback: int = 90, trading_range: dict = None) -> Dict:
         return self.trend.detect_joc(lookback, trading_range=trading_range)
-    def detect_fti(self, lookback: int = 90) -> Dict: return self.trend.detect_fti(lookback)
+    def detect_fti(self, lookback: int = 90, trading_range: dict = None) -> Dict: return self.trend.detect_fti(lookback, trading_range=trading_range)
     
     def detect_vsa_signals(self, lookback: int = 20) -> Dict: return self.vsa.detect_vsa_signals(lookback)
     def detect_divergence(self, window: int = 30) -> Dict: return self.vsa.detect_divergence(window)

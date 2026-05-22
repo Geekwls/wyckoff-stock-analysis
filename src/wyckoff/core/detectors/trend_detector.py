@@ -258,7 +258,7 @@ class TrendDetector(BaseDetector):
                 'test_score': test_score
             }
 
-    def detect_fti(self, lookback: int = 90) -> Dict:
+    def detect_fti(self, lookback: int = 90, trading_range: dict = None) -> Dict:
         """检测 FTI (Fall Through Ice)"""
         if self.data is None or len(self.data) < 60:
             return {'detected': False, 'reason': 'insufficient_data'}
@@ -269,11 +269,15 @@ class TrendDetector(BaseDetector):
         tr_window = min(60, len(df))
         tr_data = df.tail(tr_window)
         
-        # P1 优化：多点冰层检测 (Ice Area)
-        if getattr(self, 'is_test_env', False):
-            ice_level = tr_data['Low'].quantile(0.15)
+        #  与 JOC Creek 逻辑对齐：冰层水位优先使用传入的 TR 下沿，防止随价格漂移
+        if trading_range and trading_range.get('low', 0) > 0:
+            ice_level = float(trading_range['low'])
         else:
-            ice_level = self._calculate_dynamic_ice_level(tr_data)
+            # Fallback: 多点冰层检测 (Ice Area)
+            if getattr(self, 'is_test_env', False):
+                ice_level = tr_data['Low'].quantile(0.15)
+            else:
+                ice_level = self._calculate_dynamic_ice_level(tr_data)
 
         body_size = (df['Close'] - df['Open']).abs()
         total_range = (df['High'] - df['Low']).replace(0, float('nan'))

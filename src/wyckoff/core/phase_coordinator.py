@@ -137,8 +137,8 @@ class PhaseCoordinator:
         tr_res = self.detector.detect_trading_range()
         lps_res = self.detector.detect_lps(sos_res, spring_res, trading_range=tr_res)
         lpsy_res = self.detector.detect_lpsy(trading_range=tr_res)
-        joc_res = self.detector.detect_joc()
-        fti_res = self.detector.detect_fti()
+        joc_res = self.detector.detect_joc(trading_range=tr_res)
+        fti_res = self.detector.detect_fti(trading_range=tr_res)
 
 
         # 5.5. 运行事件仲裁（解决信号冲突）
@@ -331,23 +331,55 @@ class PhaseCoordinator:
             if not is_sc and is_ar and is_st:
                 return 'Accumulation Phase A (Re-accumulation)'
         
-        # 派发初步迹象：BC + AR + ST（至少BC+AR）
+        # 1. 理论优先级重构：首先由初次支撑 (PS) 和初次供应 (PSY) 奠定趋势衰竭的底色与大方向
+        direction = 'Unknown'
+        if is_ps and not is_psy:
+            direction = 'Accumulation'
+        elif is_psy and not is_ps:
+            direction = 'Distribution'
+        elif is_ps and is_psy:
+            # 两个都存在，由高潮信号判定主次
+            if is_sc:
+                direction = 'Accumulation'
+            elif is_bc:
+                direction = 'Distribution'
+            else:
+                direction = 'Accumulation' if prior_trend == 'markdown' else 'Distribution'
+        
+        # 2. 其次组合 SC/BC + AR / ST 时序底座确认 Phase A 结构
         phase = 'Unknown'
-        if is_bc and is_ar and is_st:
-            phase = 'Distribution Phase A'  # 置信度高：完整结构 BC+AR+ST
-        elif is_bc and is_ar:
-            phase = 'Distribution Phase A'  # 置信度中：BC+AR，ST 待确认
-        # 孟洪涛原则：PSY + BC 也是强有力的派发信号
-        elif is_psy and is_bc:
-            phase = 'Distribution Phase A'  # 置信度中：PSY+BC，预警派发
-        # 吸筹初步迹象：SC + AR（至少两者）才确认 Phase A 结构启动
-        elif is_sc and is_ar and is_st:
-            phase = 'Accumulation Phase A'  # 置信度高：完整结构 SC+AR+ST
-        elif is_sc and is_ar:
-            phase = 'Accumulation Phase A'  # 置信度中：SC+AR，ST 待确认
-        # PS (初次支撑) + SC 确认吸筹结构启动（PS 存在时降低对 AR 的要求）
-        elif is_ps and is_sc:
-            phase = 'Accumulation Phase A'  # 置信度低：PS+SC，等待 AR 确认
+        if direction == 'Accumulation':
+            if is_sc and is_ar and is_st:
+                phase = 'Accumulation Phase A'  # 置信度高：完整结构 SC+AR+ST
+            elif is_sc and is_ar:
+                phase = 'Accumulation Phase A'  # 置信度中：SC+AR，ST 待确认
+            elif is_sc:
+                phase = 'Accumulation Phase A'  # 置信度低：PS+SC，等待 AR 确认
+            elif is_ar and is_st:
+                phase = 'Accumulation Phase A'  # 再吸筹等特殊结构，PS + AR + ST 确认
+            else:
+                phase = 'Accumulation Phase A'  # PS 存在直接奠定弱吸筹底色
+        elif direction == 'Distribution':
+            if is_bc and is_ar and is_st:
+                phase = 'Distribution Phase A'  # 置信度高：完整结构 BC+AR+ST
+            elif is_bc and is_ar:
+                phase = 'Distribution Phase A'  # 置信度中：BC+AR，ST 待确认
+            elif is_bc:
+                phase = 'Distribution Phase A'  # 置信度中：PSY+BC，预警派发
+            elif is_ar and is_st:
+                phase = 'Distribution Phase A'  # 再派发等特殊结构
+            else:
+                phase = 'Distribution Phase A'  # PSY 存在直接奠定弱派发底色
+        else:
+            # 3. 兜底逻辑：若无 PS/PSY，则完全退化为根据 Climax + AR 判断
+            if is_bc and is_ar and is_st:
+                phase = 'Distribution Phase A'
+            elif is_bc and is_ar:
+                phase = 'Distribution Phase A'
+            elif is_sc and is_ar and is_st:
+                phase = 'Accumulation Phase A'
+            elif is_sc and is_ar:
+                phase = 'Accumulation Phase A'
 
         # 孟洪涛原则：Spring 是最重要形态（书中提及 136 次）
         # Spring 直接跳转到 Phase C，且给予最高置信度

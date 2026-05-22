@@ -31,6 +31,7 @@ class TestTheoryFix(unittest.TestCase):
         data['MA200'] = data['Close'].rolling(200).mean()
         data['High_Max_20'] = data['High'].rolling(20).max()
         data['Low_Min_20'] = data['Low'].rolling(20).min()
+        data['ATR'] = 0.5
         return data
 
     def test_ar_baseline_correction(self):

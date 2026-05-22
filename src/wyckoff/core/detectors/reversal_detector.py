@@ -256,7 +256,7 @@ class ReversalDetector(BaseDetector):
 
         ar_min_pct = self.thresholds.AR_MIN_REBOUND_PCT / 100.0
 
-        if climax_res['type'] == 'selling_climax':
+        if climax_res['type'] in ('selling_climax', 'stopping_volume', 'local_extreme_low'):
             ar_price = None
             ar_date = None
             detection_layer = None

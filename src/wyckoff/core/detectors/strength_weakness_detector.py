@@ -576,7 +576,7 @@ class StrengthWeaknessDetector(BaseDetector):
             }
         return {'detected': False}
 
-    def detect_lps(self, window: int = 30, spring_res: Dict = None, trading_range: Dict = None) -> Dict:
+    def detect_lps(self, window: int = 30, spring_res: Dict = None, trading_range: Dict = None, sos_result: Dict = None) -> Dict:
         """
         检测 LPS (Last Point of Support)
 
@@ -589,9 +589,19 @@ class StrengthWeaknessDetector(BaseDetector):
             window: 检测窗口
             spring_res: Spring检测结果，用于验证LPS低点>Spring低点
             trading_range: 交易区间字典（需包含low字段），用于验证LPS靠近TR支撑位
+            sos_result: SOS检测结果（LPS必须发生在SOS强势信号之后）
         """
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
+
+        # 提取 SOS 日期（LPS 必须发生在 SOS 之后）
+        sos_date = None
+        if sos_result and sos_result.get('detected'):
+            sos_date = pd.to_datetime(sos_result.get('date'))
+            if self.data.index.tz is not None and sos_date.tz is None:
+                sos_date = sos_date.tz_localize('UTC').tz_convert(self.data.index.tz)
+            elif self.data.index.tz is None and sos_date.tz is not None:
+                sos_date = sos_date.tz_localize(None)
 
         # 提取 Spring 低点（若有）
         spring_low = None
@@ -718,19 +728,29 @@ class StrengthWeaknessDetector(BaseDetector):
                     signal['tr_support'] = tr_support
                     signal['tr_support_deviation_pct'] = round(float(low_pct), 2)
 
-                # 阶段约束：只有 Accumulation 阶段且具备完整Phase A结构才叫 LPS
+                # 阶段约束：只有 Accumulation 阶段且具备完整Phase A结构、且必须在 SOS 强势信号之后才叫 LPS
                 if is_accumulation:
-                    if has_complete_phase_a_structure:
+                    has_sos = sos_date is not None
+                    is_after_sos = has_sos and pd.to_datetime(df.index[i]) > sos_date
+
+                    if has_complete_phase_a_structure and has_sos and is_after_sos:
                         signal['signal_type'] = 'lps'
-                        note = '吸筹阶段最后支撑点（LPS）| ✅ 具备完整Phase A结构（SC→AR→ST）'
+                        note = '吸筹阶段最后支撑点（LPS）| ✅ 具备完整Phase A结构（SC→AR→ST）并发生在 SOS 强势信号之后 ✓'
                         if tr_support is not None:
                             note += f' | 靠近TR下沿{tr_support:.2f} ✓'
                     else:
                         signal['signal_type'] = 'support_test'
-                        missing = ', '.join(phase_a_validation['missing_events'])
-                        note = (f'⚠️ 降级为支撑测试（非正式LPS）| '
-                                f'缺少完整Phase A结构：缺失[{missing}]| '
-                                f'威科夫理论要求：LPS需前置SC→AR→ST吸筹结构')
+                        reasons = []
+                        if not has_complete_phase_a_structure:
+                            missing = ', '.join(phase_a_validation['missing_events'])
+                            reasons.append(f'缺少完整Phase A结构：缺失[{missing}]')
+                        if not has_sos:
+                            reasons.append('未检测到前置 SOS 强势信号')
+                        elif not is_after_sos:
+                            reasons.append(f'未发生在 SOS 强势信号之后 (SOS 日期: {sos_date.strftime("%Y-%m-%d") if hasattr(sos_date, "strftime") else sos_date})')
+
+                        note = (f'⚠️ 降级为支撑测试（非正式LPS）| ' + ' | '.join(reasons) +
+                                f' | 威科夫理论要求：LPS需前置SC→AR→ST吸筹结构，且必须发生在 SOS 强势突破之后进行确认性回测')
                 elif is_markup:
                     signal['signal_type'] = 'pullback'
                     note = ('上涨趋势缩量回踩（非正式LPS，因缺少SC/AR/ST吸筹前置结构；'
