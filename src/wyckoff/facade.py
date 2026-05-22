@@ -10,7 +10,7 @@ Wyckoff Analyzer - Facade for Orchestrator and Detectors
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
+from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING, Union
 from datetime import datetime
 
 # WIE 3.0 MVP 类型导入 (用于类型提示)
@@ -106,7 +106,7 @@ class WyckoffAnalyzer:
         self.wie3_state_engine = None
         self.wie3_market_state = None  # 存储最新的市场状态
 
-        self._index_analyzer_cache: Optional['WyckoffAnalyzer'] = None
+        self._index_analyzer_cache: Optional[Union['WyckoffAnalyzer', '_IndexDataWrapper']] = None
 
     def __enter__(self): return self
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -462,6 +462,8 @@ class WyckoffAnalyzer:
 
         try:
             import json as _json
+            if self.data is None or self.data.empty or self.pattern_detector is None:
+                return _json.dumps({'error': 'No data or detector available', 'symbol': self.symbol})
             from .core.trading_plan_generator import TradingPlanGenerator
             
             current_price = float(self.data['Close'].iloc[-1])
@@ -785,7 +787,7 @@ class WyckoffAnalyzer:
 
         return result
 
-    def _get_cached_index_analyzer(self) -> Optional['WyckoffAnalyzer']:
+    def _get_cached_index_analyzer(self) -> Optional[Union['WyckoffAnalyzer', '_IndexDataWrapper']]:
         """获取并缓存基准指数分析器"""
         if self._index_analyzer_cache is not None:
             return self._index_analyzer_cache

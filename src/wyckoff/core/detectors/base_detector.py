@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Dict, Optional, cast
+from typing import Dict, Optional, cast, Any
 import pandas as pd
 import os
 
@@ -60,7 +60,7 @@ class BaseDetector(ABC):
         """获取当前分析的基准时间（优先使用数据最新索引，其次使用当前物理时间）"""
         if hasattr(self, 'data') and self.data is not None and len(self.data) > 0:
             try:
-                ts = pd.Timestamp(self.data.index[-1])
+                ts = pd.Timestamp(cast(Any, self.data.index[-1]))
                 if ts.tz is None:
                     return cast(pd.Timestamp, ts.tz_localize('UTC'))
                 return cast(pd.Timestamp, ts.tz_convert('UTC'))
@@ -96,7 +96,7 @@ class BaseDetector(ABC):
                 ts = pd.to_datetime(signal_date)
             else:
                 ts = pd.Timestamp(signal_date)
-            
+
             if ts.tz is None:
                 ts = ts.tz_localize('UTC')
             else:
@@ -128,7 +128,7 @@ class BaseDetector(ABC):
     def _is_signal_falsified(self, signal_type: str, signal_price: float, current_price: float) -> bool:
         """
         根据当前价格判断信号是否已被“证伪”
-        
+
         理论依据：
         - 如果是 FTI (看跌)，但价格已大幅上涨并站稳冰层上方 -> 信号被证伪 (可能是震仓)
         - 如果是 JOC (看涨)，但价格已大幅下跌并站稳小溪下方 -> 信号被证伪 (可能是诱多)
@@ -139,21 +139,21 @@ class BaseDetector(ABC):
         # 🧪 特判：测试数据集兼容，如果处于测试环境，不执行过于严苛的证伪过滤，防止拦截合法的测试信号
         if getattr(self, 'is_test_env', False):
             return False
-            
+
         if signal_type in ['fti', 'sow', 'upthrust']:
             # 看跌信号证伪：价格站稳阻力位上方 5% 以上
             return current_price > signal_price * 1.05
-        
+
         if signal_type in ['joc', 'sos', 'spring']:
             # 看涨信号证伪：价格跌破支撑位下方 5% 以下
             return current_price < signal_price * 0.95
-            
+
         return False
 
     def _get_tech_indicators(self, window: int = 20):
         """统一获取技术指标（Volume MA, Low Min, High Max）"""
         if not self._indicator_cache:
-            if hasattr(self, 'data'):
+            if hasattr(self, 'data') and self.data is not None:
                 from ..indicator_cache import IndicatorCache
                 self._indicator_cache = IndicatorCache(self.data)
             else:
@@ -189,4 +189,4 @@ class BaseDetector(ABC):
                 pass
         high, low, close = df['High'], df['Low'], df['Close'].shift(1)
         tr = pd.concat([high - low, (high - close).abs(), (low - close).abs()], axis=1).max(axis=1)
-        return tr.rolling(window=period, min_periods=1).mean()
+        return cast(pd.Series, tr.rolling(window=period, min_periods=1).mean())

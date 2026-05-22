@@ -55,7 +55,7 @@ class StrengthWeaknessDetector(BaseDetector):
             elif col == 'MA20':
                 df[col] = df['Close'].rolling(20, min_periods=1).mean()
             elif col == 'ATR':
-                atr_series = self._calculate_atr_series(self.data, period=14)
+                atr_series = self._calculate_atr_series(df, period=14)
                 df[col] = atr_series.reindex(df.index)
 
         return df
