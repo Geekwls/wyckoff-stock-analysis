@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
-from typing import Dict, Annotated, Optional
+from typing import Dict, Annotated
 
 class ScoringConfig(BaseModel):
     """评分表显式配置"""
@@ -31,11 +31,16 @@ class WyckoffThresholds(BaseModel):
 
     # ── 波动率分类阈值 ──────────────────────────────────────
     VOLATILITY_THRESHOLDS: Annotated[Dict[str, Dict[str, float]], Field(description="波动率分类阈值")] = {
-        'spring_breakdown': {'low': 0.03, 'medium': 0.04, 'high': 0.05},
-        'upthrust_breakout': {'low': 0.03, 'medium': 0.04, 'high': 0.05},
-        'sos_price_change': {'low': 0.02, 'medium': 0.03, 'high': 0.05},
-        'sow_price_change': {'low': -0.02, 'medium': -0.03, 'high': -0.05},
+        'spring_breakdown': {'low': 0.03, 'medium': 0.04, 'high': 0.05, 'extreme': 0.07},
+        'upthrust_breakout': {'low': 0.03, 'medium': 0.04, 'high': 0.05, 'extreme': 0.07},
+        'sos_price_change': {'low': 0.02, 'medium': 0.03, 'high': 0.05, 'extreme': 0.06},
+        'sow_price_change': {'low': -0.02, 'medium': -0.03, 'high': -0.05, 'extreme': -0.06},
     }
+
+    # ── 波动率百分比边界（百分比数值量纲，如1.5代表1.5%） ───────
+    CRYPTO_VOL_BOUNDARIES: Annotated[Dict[str, float], Field(description="Crypto波动率定界百分比")] = {'low': 3.0, 'medium': 6.0, 'high': 10.0}
+    DEFAULT_VOL_BOUNDARIES: Annotated[Dict[str, float], Field(description="普通市场波动率定界百分比")] = {'low': 1.5, 'medium': 3.0, 'high': 5.0}
+
 
     # 标准 SOS/SOW 价格变化阈值 (不分波动率时的默认值)
     SOS_PRICE_CHANGE_DEFAULT: Annotated[float, Field(description="标准 SOS 价格变化阈值")] = 0.02
@@ -200,18 +205,34 @@ class WyckoffThresholds(BaseModel):
         return max(0.005, min(result, 0.2))
 
     def classify_volatility(self, atr_pct: float) -> str:
-        """根据ATR百分比分类波动率"""
-        if self.market_type == "CRYPTO":
-            if atr_pct < 0.03: return 'low'
-            elif atr_pct < 0.06: return 'medium'
-            elif atr_pct < 0.10: return 'high'
-            else: return 'extreme'
+        """根据ATR百分比分类波动率
 
-        if atr_pct < 0.015:
+        Args:
+            atr_pct: ATR占价格的百分比数值，如1.5代表1.5%。
+                     注意：请传入百分比数值（如1.5），而非小数（如0.015）。
+                     两者量纲一致性由防守性校验保障。
+
+        Returns:
+            波动率分级：'low' | 'medium' | 'high' | 'extreme'
+
+        Raises:
+            ValueError: atr_pct为非正数或检测到潜在量纲混淆（传入了小数而非百分比）
+        """
+        if atr_pct <= 0:
+            raise ValueError(f"ATR百分比必须为正数 (atr_pct={atr_pct})")
+        if atr_pct < 0.2:
+            raise ValueError(
+                f"检测到潜在的参数量纲混淆错误。"
+                f"请传入百分比数值（如 1.5 代表 1.5%），而非小数 (atr_pct={atr_pct})"
+            )
+
+        boundaries = self.CRYPTO_VOL_BOUNDARIES if self.market_type == "CRYPTO" else self.DEFAULT_VOL_BOUNDARIES
+
+        if atr_pct < boundaries['low']:
             return 'low'
-        elif atr_pct < 0.03:
+        elif atr_pct < boundaries['medium']:
             return 'medium'
-        elif atr_pct < 0.05:
+        elif atr_pct < boundaries['high']:
             return 'high'
         else:
             return 'extreme'

@@ -59,29 +59,31 @@ class TestBreakoutAnalyzer:
         """创建包含Upthrust（假突破）的测试数据"""
         dates = pd.date_range(start='2025-01-01', periods=100, freq='D')
 
+        rng = np.random.default_rng(42)  # 固定随机种子，确保测试可重复性
+
         prices = []
         volumes = []
 
         # 前60天：区间震荡（40-50元）
         for i in range(60):
             base_price = 45
-            noise = np.random.randn() * 2
+            noise = rng.standard_normal() * 2
             prices.append(base_price + noise)
-            volumes.append(1000000 + np.random.randn() * 200000)
+            volumes.append(1000000 + rng.standard_normal() * 100000)  # 均值约100万
 
-        # 后5天：快速冲高（到55元）
+        # 后5天：快速冲高（到55元），严格缩量（0.3x均量）确保is_adequate=False
         for i in range(5):
             base_price = 50 + i * 1
-            noise = np.random.randn() * 0.5
+            noise = rng.standard_normal() * 0.5
             prices.append(base_price + noise)
-            volumes.append(1000000 * 0.5)  # 缩量
+            volumes.append(300000)  # 严格缩量：0.3x，确保量比 < 1.2
 
         # 后35天：快速回落
         for i in range(35):
             base_price = 55 - i * 0.3  # 逐步回落
-            noise = np.random.randn() * 1
+            noise = rng.standard_normal() * 1
             prices.append(base_price + noise)
-            volumes.append(1000000 + np.random.randn() * 200000)
+            volumes.append(1000000 + rng.standard_normal() * 100000)
 
         df = pd.DataFrame({
             'Open': [p * 0.99 for p in prices],
@@ -94,6 +96,7 @@ class TestBreakoutAnalyzer:
         df['Volume_MA20'] = df['Volume'].rolling(20).mean()
 
         return df
+
 
     @pytest.fixture
     def analyzer(self, sample_data_with_upside_breakout):
