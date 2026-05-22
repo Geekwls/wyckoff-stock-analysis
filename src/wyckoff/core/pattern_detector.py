@@ -490,10 +490,15 @@ class WyckoffPatternDetector:
         if missing:
             raise MissingFieldError(f"缺失必要列: {missing}")
 
+        # 优化 1: 在全局 DataFrame 上计算滑动均值，避免 tail 截取导致的边界 NaN 丢数据问题
+        global_vol_ma = self.data['Volume_MA20'] if 'Volume_MA20' in self.data.columns else self.data['Volume'].rolling(20).mean()
+        global_high_low_range = self.data['High'] - self.data['Low']
+        global_avg_range = global_high_low_range.rolling(20).mean()
+
         recent_data = self.data.tail(lookback_days)
-        vol_ma = recent_data['Volume_MA20'] if 'Volume_MA20' in recent_data.columns else recent_data['Volume'].rolling(20).mean()
-        high_low_range = recent_data['High'] - recent_data['Low']
-        avg_range = high_low_range.rolling(20).mean()
+        vol_ma = global_vol_ma.loc[recent_data.index]
+        high_low_range = global_high_low_range.loc[recent_data.index]
+        avg_range = global_avg_range.loc[recent_data.index]
 
         # 动态阈值
         climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
@@ -501,7 +506,8 @@ class WyckoffPatternDetector:
 
         if is_selling:
             # SC: 阴线 + 价差放大
-            climax_range_threshold = self._get_dynamic_volume_threshold(1.8)
+            # 优化 4: 纠正价格与成交量动态阈值混用偏差。将 1.8x 乘数与自适应价格波动率自适应绑定
+            climax_range_threshold = 1.8 * (self._get_dynamic_price_threshold(0.03) / 0.03)
             candidates = recent_data[
                 (recent_data['Volume'] > vol_ma * climax_vol_threshold) &
                 (high_low_range > avg_range * climax_range_threshold) &
@@ -627,7 +633,32 @@ class WyckoffPatternDetector:
         try:
             sc_res = self.detect_climax_panic_selling(lookback_days)
             if not sc_res['detected']:
-                return {"detected": False, "reason": "No SC found to baseline AR"}
+                # 优化 5: 若无典型暴量 SC，降级尝试寻找 SOT 作为备用 baseline
+                sot_res = self.detect_stopping_of_transient(lookback_days)
+                if sot_res.get('detected'):
+                    sc_res = {
+                        "detected": True,
+                        "date": pd.to_datetime(sot_res["date"]),
+                        "price": float(sot_res["close"]),
+                        "type": "stopping_volume",
+                        "confidence": 0.5
+                    }
+                    logger.info("SC未检测到，已成功通过 SOT 停止行为进行柔性基准线降级适配")
+                else:
+                    # 二级柔性降级：使用 lookback 窗口内的局部最低价 (Local Low) 作为 baseline
+                    recent_df = self.data.tail(lookback_days)
+                    if not recent_df.empty:
+                        min_idx = recent_df['Low'].idxmin()
+                        sc_res = {
+                            "detected": True,
+                            "date": min_idx,
+                            "price": float(recent_df.loc[min_idx, 'Low']),
+                            "type": "local_extreme_low",
+                            "confidence": 0.4
+                        }
+                        logger.info(f"未检测到 SC 和 SOT，已降级使用近 {lookback_days} 日局部低点 (Local Low) 作为 AR 基准线")
+                    else:
+                        return {"detected": False, "reason": "No SC or fallback data found to baseline AR"}
 
             # 调用统一的底层 AR 检测逻辑
             ar_res = self.classic_detector.detect_automatic_reaction(sc_res)
@@ -715,12 +746,13 @@ class WyckoffPatternDetector:
         if ps_price and sc_price:
             # PS价格应该高于SC低点
             # PS是支撑位，SC应该跌破PS
-            if ps_price < sc_price * 0.95:  # 允许5%容差
+            # 优化 6: 修正反向偏置容差。PS必须是高于或等于SC恐慌抛售低点，仅允许 1% 极端毛刺选定容差
+            if ps_price < sc_price * 0.99:
                 logger.warning(
-                    f"PS价格{ps_price}远低于SC价格{sc_price}，"
-                    f"不符合Phase A逻辑（PS应该是支撑位，SC应跌破PS）"
+                    f"PS价格{ps_price}低于SC价格{sc_price}，"
+                    f"不符合支撑位在上、创新低在下的时序逻辑"
                 )
-                return False, f"PS价格({ps_price})低于SC价格({sc_price})，时序混乱"
+                return False, f"PS价格({ps_price})低于SC价格({sc_price})，违反承接时序"
 
         # 检查时间差
         time_diff = (sc_date - ps_date).days
@@ -861,7 +893,15 @@ class WyckoffPatternDetector:
             
             for idx in range(len(recent_data) - 5, len(recent_data)):
                 row = recent_data.iloc[idx]
-                global_idx = len(self.data) - lookback_days + idx
+                
+                # 优化 2: 安全获取全局整数索引，避免 len(self.data) < lookback_days 时的负切片越界
+                try:
+                    global_idx = self.data.index.get_loc(row.name)
+                except (KeyError, ValueError):
+                    global_idx = len(self.data) - len(recent_data) + idx
+
+                if global_idx < 0 or global_idx >= len(self.data):
+                    continue
                 
                 # 动态计算：只使用当前行及之前的数据
                 # 使用20日窗口，但确保不使用未来数据
@@ -945,7 +985,8 @@ class WyckoffPatternDetector:
             atr = atr_s[-n:]
 
             # 我们要寻找是否有连续至少3天符合吸收特征的 K 线序列
-            is_near_creek = highs > creek_level * 0.95
+            # 优化 3: 限制 Creek 阻力下方的宽容度区间，防止突破暴涨后判定为吸收行为
+            is_near_creek = (highs > creek_level * 0.95) & (closes < creek_level * 1.03)
             is_high_volume = np.zeros(n, dtype=bool)
             is_narrow_range = np.zeros(n, dtype=bool)
             is_high_close = np.zeros(n, dtype=bool)
