@@ -10,7 +10,10 @@
 - 完整序列 = 高置信度；残缺序列 = 降级
 """
 import pandas as pd
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..schemas import EventsModel
 
 
 class SequenceValidator:
@@ -40,7 +43,8 @@ class SequenceValidator:
     # ── helpers ────────────────────────────────────────────
     @staticmethod
     def _get_date(obj: Any, *keys: str) -> Any:
-        if not obj: return None
+        if not obj:
+            return None
         for k in keys:
             v = getattr(obj, k, None)
             if v is not None:

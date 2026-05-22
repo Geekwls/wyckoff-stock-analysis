@@ -220,7 +220,8 @@ class ConclusionSection(BaseSectionBuilder):
             # 其他情况继续使用原有逻辑
             elif quality_score < 4 or phase_conf < 0.5:
                 report += f"⏸️ 观望等待（信号质量不足）:\n   当前评分: {quality_score}/{max_score} | 置信度: {phase_conf*100:.0f}%\n   结论: 信号强度或可靠性低于执行阈值，建议继续观察。\n"
-                if post_breakout: report += f"\n{post_breakout}"
+                if post_breakout:
+                    report += f"\n{post_breakout}"
 
         # 检查单边向下破位寻底模式
         tr_low = self._get_tr_value(trading_range, 'low', 0)
@@ -269,11 +270,13 @@ class ConclusionSection(BaseSectionBuilder):
 """
         elif quality_score < 4 or phase_conf < 0.5:
             report += f"⏸️ 观望等待（信号质量不足）:\n   当前评分: {quality_score}/{max_score} | 置信度: {phase_conf*100:.0f}%\n   结论: 信号强度或可靠性低于执行阈值，建议继续观察。\n"
-            if post_breakout: report += f"\n{post_breakout}"
+            if post_breakout:
+                report += f"\n{post_breakout}"
         else:
             # 详细结论逻辑
             is_distribution = 'Distribution' in phase_str or '派发' in phase_str
-            if post_breakout: report += post_breakout
+            if post_breakout:
+                report += post_breakout
 
             if joc.get('detected') and joc.get('test_detected') and not is_distribution:
                 joc_entry = joc.get('creek_level', current_price)
@@ -699,7 +702,8 @@ class ConclusionSection(BaseSectionBuilder):
         """
         构建因果测算部分 (待激活模式与核心防守轴聚焦)
         """
-        if not cause_effect or 'targets' not in cause_effect: return ''
+        if not cause_effect or 'targets' not in cause_effect:
+            return ''
 
         if cause_effect.get('method') == 'invalidated_tr':
             tr_low = cause_effect.get('tr_low', trading_range.get('low', 0.0))
@@ -780,8 +784,10 @@ class ConclusionSection(BaseSectionBuilder):
         else:
             t1_down = (tr_low if tr_low > total_move * 0.6 else current_price) - total_move * 0.6
             t2_down = (tr_low if tr_low > total_move else current_price) - total_move
-            if t1_down <= 0: t1_down = current_price * 0.8
-            if t2_down <= 0: t2_down = current_price * 0.7
+            if t1_down <= 0:
+                t1_down = current_price * 0.8
+            if t2_down <= 0:
+                t2_down = current_price * 0.7
 
         report = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         report += "【🎯 点数图 (P&F) 因果测算目标推演】\n\n"
@@ -813,11 +819,13 @@ class ConclusionSection(BaseSectionBuilder):
         return report
 
     def _check_post_breakout_state(self, trading_range, joc, current_price) -> str:
-        if not trading_range.get('is_broken'): return ''
+        if not trading_range.get('is_broken'):
+            return ''
         direction = trading_range.get('breakout_direction', 'unknown')
         tr_high, tr_low = trading_range.get('high', 0), trading_range.get('low', 0)
         if direction == 'up':
-            if joc.get('test_detected'): return f"【突破后状态 - 回测确认】\n   价格已突破TR上沿{tr_high:.2f}至{current_price:.2f}，且回测已确认。\n"
+            if joc.get('test_detected'):
+                return f"【突破后状态 - 回测确认】\n   价格已突破TR上沿{tr_high:.2f}至{current_price:.2f}，且回测已确认。\n"
             return f"【突破后状态 - JOC推进中】\n   价格已突破TR上沿{tr_high:.2f}至{current_price:.2f}，JOC已触发。\n"
         return f"【突破后状态 - 向下突破】\n   价格已跌破TR下沿{tr_low:.2f}至{current_price:.2f}。\n"
 
@@ -1002,7 +1010,8 @@ class ConclusionSection(BaseSectionBuilder):
 
     def _build_market_context_section(self, market_env: dict) -> str:
         """构建市场环境背景区块 (v2.6.0 P0)"""
-        if not market_env: return ""
+        if not market_env:
+            return ""
         
         env_label = market_env.get('environment', 'Unknown')
         desc = market_env.get('description', '未知环境')

@@ -113,7 +113,8 @@ class SymbolResolver:
         # 加密货币逻辑 (如 BTC-USD, ETH/USDT)
         if '-' in symbol_upper or '/' in symbol_upper or symbol_upper in ['BTC', 'ETH', 'SOL']:
             normalized = symbol_upper.replace('/', '-')
-            if '-' not in normalized: normalized += "-USD"
+            if '-' not in normalized:
+                normalized += "-USD"
             return SymbolInfo(
                 original=original,
                 normalized=normalized,

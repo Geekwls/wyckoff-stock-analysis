@@ -138,13 +138,16 @@ class BacktestEngine:
         for sig in signals:
             date_str = sig.get("date")
             entry_price = sig.get("price")
-            if not date_str or not entry_price: continue
+            if not date_str or not entry_price:
+                continue
 
             entry_idx = self._get_date_index(date_str)
-            if entry_idx == -1: continue
+            if entry_idx == -1:
+                continue
 
             target_idx = min(entry_idx + self.lookforward_days, len(self.data) - 1)
-            if target_idx - entry_idx < 5: continue
+            if target_idx - entry_idx < 5:
+                continue
 
             # 全程追踪：检查窗口内是否达到目标
             window_df = self.data.iloc[entry_idx:target_idx+1]
@@ -162,7 +165,8 @@ class BacktestEngine:
             net_ret = raw_ret - (cost * 2)
             total_net_returns.append(net_ret)
 
-            if net_ret > 0: winning_trades += 1
+            if net_ret > 0:
+                winning_trades += 1
 
             # 全程最大回撤
             if is_bullish:
@@ -172,7 +176,8 @@ class BacktestEngine:
             max_drawdowns.append(mdd)
 
         valid_count = len(total_net_returns)
-        if valid_count < 1: return None
+        if valid_count < 1:
+            return None
 
         # 计算置信度等级
         # A: >= 10个样本, B: 5-9个, C: < 5个

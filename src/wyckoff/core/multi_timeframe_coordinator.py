@@ -200,7 +200,8 @@ class MultiTimeframeCoordinator:
 
         # 核心逻辑：从真实的 pattern_results 提取日线威科夫信号并验证
         def _get_signal_status(pt_res, key):
-            if not pt_res: return False, None
+            if not pt_res:
+                return False, None
             events = pt_res.get('events_detected') if isinstance(pt_res, dict) else pt_res
             val = pt_res.get(key) if isinstance(pt_res, dict) else getattr(pt_res, key, None)
             if not val and events and isinstance(events, dict):

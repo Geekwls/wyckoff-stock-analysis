@@ -112,12 +112,16 @@ class BaseDetector(ABC):
 
     def _get_signal_age_days(self, signal_date) -> int:
         """获取信号距今的天数"""
-        if signal_date is None: return 0
+        if signal_date is None:
+            return 0
         try:
             ts = pd.to_datetime(signal_date)
-            if ts.tz is None: ts = ts.tz_localize('UTC')
-            else: ts = ts.tz_convert('UTC')
-        except Exception: return 0
+            if ts.tz is None:
+                ts = ts.tz_localize('UTC')
+            else:
+                ts = ts.tz_convert('UTC')
+        except Exception:
+            return 0
         now = self._get_reference_now()
         return max(0, (now - ts).days)
 
@@ -169,7 +173,8 @@ class BaseDetector(ABC):
 
     def _detect_trading_range(self, df: pd.DataFrame, window: int = 60) -> Dict:
         """检测交易区间"""
-        if len(df) < window: return {"is_consolidation": False}
+        if len(df) < window:
+            return {"is_consolidation": False}
         recent_df = df.tail(window)
         high_max, low_min = recent_df['High'].max(), recent_df['Low'].min()
         range_pct = (high_max - low_min) / max(low_min, 1e-9)
@@ -180,7 +185,8 @@ class BaseDetector(ABC):
         if self._indicator_cache:
             try:
                 return self._indicator_cache.get('ATR', period=period)
-            except Exception: pass
+            except Exception:
+                pass
         high, low, close = df['High'], df['Low'], df['Close'].shift(1)
         tr = pd.concat([high - low, (high - close).abs(), (low - close).abs()], axis=1).max(axis=1)
         return tr.rolling(window=period, min_periods=1).mean()

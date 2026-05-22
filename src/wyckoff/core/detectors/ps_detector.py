@@ -73,10 +73,14 @@ class PsDetector(BaseDetector):
                 
                 # 评分逻辑
                 confidence = 50
-                if vol_ratio > vol_strong_threshold: confidence += 15
-                if current['Close'] > current['Open']: confidence += 10
-                if lower_shadow > body: confidence += 10
-                if next_day['Close'] > current['Close']: confidence += 15
+                if vol_ratio > vol_strong_threshold:
+                    confidence += 15
+                if current['Close'] > current['Open']:
+                    confidence += 10
+                if lower_shadow > body:
+                    confidence += 10
+                if next_day['Close'] > current['Close']:
+                    confidence += 15
                 
                 potential_ps.append({
                     "date": downtrend_data.index[i],

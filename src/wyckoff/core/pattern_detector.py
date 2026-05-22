@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, Optional, Any, Tuple, cast, TYPE_CHECKING
 from .detectors.trading_range_detector import TradingRangeDetector
 from .detectors.classic_pattern_detector import ClassicPatternDetector
 from .detectors.strength_weakness_detector import StrengthWeaknessDetector
@@ -12,17 +12,15 @@ from .detectors.ps_detector import PsDetector
 from .detectors.psy_detector import PsyDetector
 from .adaptive.bayesian_updater import BayesianThresholdModel
 from ..config.settings import WyckoffConfig, WyckoffThresholds
-from ..schemas import (
-    ClimaxModel, WyckoffEventModel, SpringModel, UpthrustModel,
-    SosModel, SowModel, LpsModel, LpsyModel, TradingRangeModel,
-    JocModel, FtiModel
-)
 from ..exceptions import (
-    PatternDetectionError, PatternNotFoundError, AnalysisError,
+    PatternDetectionError, PatternNotFoundError,
     DataError, MissingFieldError, CalculationError
 )
 from .utils import TypeConverter
 import logging
+
+if TYPE_CHECKING:
+    from ..schemas import EventsModel
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +72,17 @@ class WyckoffPatternDetector:
                 prior_shrink_mu=getattr(self.config, 'prior_shrink_mu', 0.6),
                 prior_sigma=getattr(self.config, 'prior_sigma', 0.5)
             )
+            breakout_percentile = getattr(self.config, 'amplitude_breakout_percentile', 85)
+            if breakout_percentile is None:
+                breakout_percentile = 85
+            shrink_percentile = getattr(self.config, 'amplitude_shrink_percentile', 15)
+            if shrink_percentile is None:
+                shrink_percentile = 15
+
             self.bayesian_model.fit(
                 self.data,
-                breakout_percentile=getattr(self.config, 'amplitude_breakout_percentile', 85.0),
-                shrink_percentile=getattr(self.config, 'amplitude_shrink_percentile', 15.0)
+                breakout_percentile=int(breakout_percentile),
+                shrink_percentile=int(shrink_percentile)
             )
 
     def _update_all_detectors_context(self, phase: str):
@@ -219,13 +224,13 @@ class WyckoffPatternDetector:
     def detect_secondary_test(self, climax_res: Dict, ar_res: Dict) -> Dict:
         return self.classic_detector.detect_secondary_test(climax_res, ar_res)
 
-    def detect_spring(self, lookback: int = None) -> Dict:
+    def detect_spring(self, lookback: Optional[int] = None) -> Dict:
         #  缺隗3修复：传递TR数据，让子检测器能用TR下沿作为Spring支撑位
         tr = self.range_detector.detect()
-        return self.classic_detector.detect_spring(lookback, trading_range=tr)
+        return self.classic_detector.detect_spring(cast(Any, lookback), trading_range=tr)
 
-    def detect_upthrust(self, lookback: int = None) -> Dict:
-        return self.classic_detector.detect_upthrust(lookback)
+    def detect_upthrust(self, lookback: Optional[int] = None) -> Dict:
+        return self.classic_detector.detect_upthrust(cast(Any, lookback))
 
     def detect_sos(self, window: int = 40) -> Dict:
         return self.sw_detector.detect_sos(window)
@@ -236,7 +241,7 @@ class WyckoffPatternDetector:
     def detect_channels(self) -> Dict:
         return self.channel_detector.detect()
 
-    def detect_joc(self, lookback: int = 90, trading_range: Dict = None) -> Dict:
+    def detect_joc(self, lookback: int = 90, trading_range: Optional[Dict] = None) -> Dict:
         """检测 JOC (Jump Over Creek) 跃过小溪"""
         # 联动逻辑：如遇超买刺穿+放量，则抑制普通 JOC，改报趋势耗尽
         channel_res = self.detect_channels()
@@ -248,7 +253,7 @@ class WyckoffPatternDetector:
                 'channel_warning': ob_os['message']
             }
 
-        joc_res = self.classic_detector.detect_joc(lookback, trading_range=trading_range)
+        joc_res = self.classic_detector.detect_joc(lookback, trading_range=cast(Any, trading_range))
 
         # 联动“吸收”检测，增强置信度
         if joc_res.get('detected'):
@@ -260,7 +265,7 @@ class WyckoffPatternDetector:
                 joc_res['description'] = joc_res.get('description', '') + f" | 🌟 [主力强力吸收确认] 突破前有 {absorption_res['consecutive_days']} 天完美的蓄势吸收，此突破极大概率为真实突破 (JOC)"
 
             #  区间失效级联风控：若 TR 已失效，同步折半置信度并提示风险
-            if trading_range and trading_range.get('invalidated_tr') == True:
+            if trading_range and trading_range.get('invalidated_tr'):
                 joc_res['confidence'] = float(joc_res.get('confidence', 0.8) * 0.5)
                 warning_note = " ⚠️ [风控警告] 当前有效交易区间(TR)已被标记为【已失效/已跌破】，参考系已崩塌，此 JOC 突破的置信度已自动折半（防范假突破）！"
                 joc_res['description'] = joc_res.get('description', '') + warning_note
@@ -268,7 +273,7 @@ class WyckoffPatternDetector:
 
         return joc_res
 
-    def detect_fti(self, lookback: int = 90, trading_range: Dict = None) -> Dict:
+    def detect_fti(self, lookback: int = 90, trading_range: Optional[Dict] = None) -> Dict:
         """检测 FTI (Fall Through Ice) 跌破冰线"""
         # 联动逻辑：如遇超卖刺穿+放量，则抑制普通 FTI，改报趋势耗尽
         channel_res = self.detect_channels()
@@ -280,11 +285,11 @@ class WyckoffPatternDetector:
                 'channel_warning': ob_os['message']
             }
 
-        fti_res = self.classic_detector.detect_fti(lookback, trading_range=trading_range)
+        fti_res = self.classic_detector.detect_fti(lookback, trading_range=cast(Any, trading_range))
 
         #  区间失效级联风控：若 TR 已失效，同步折半置信度并提示风险
         if fti_res.get('detected'):
-            if trading_range and trading_range.get('invalidated_tr') == True:
+            if trading_range and trading_range.get('invalidated_tr'):
                 fti_res['confidence'] = float(fti_res.get('confidence', 0.8) * 0.5)
                 warning_note = " ⚠️ [风控警告] 当前有效交易区间(TR)已被标记为【已失效/已突破】，参考系已崩塌，此 FTI 破位的置信度已自动折半（防范假跌破）！"
                 fti_res['description'] = fti_res.get('description', '') + warning_note
@@ -343,7 +348,7 @@ class WyckoffPatternDetector:
     # 以下复杂方法已迁移到 PhaseCoordinator 类以减少代码复杂度
     # 委托给协调器处理，保持向后兼容性
 
-    def _collect_all_events(self) -> Dict[str, Any]:
+    def _collect_all_events(self) -> 'EventsModel':
         """
         收集所有威科夫事件（委托给阶段协调器）
 
@@ -351,7 +356,7 @@ class WyckoffPatternDetector:
         """
         return self.phase_coordinator.collect_all_events()
 
-    def detect_sow(self, trading_range: Dict = None) -> Dict:
+    def detect_sow(self, trading_range: Optional[Dict] = None) -> Dict:
         """
         检测 SOW (Sign of Weakness)
 
@@ -361,13 +366,13 @@ class WyckoffPatternDetector:
             trading_range = self.detect_trading_range()
         return self.sw_detector.detect_sow(trading_range=trading_range)
 
-    def detect_lps(self, sos_result: Dict = None, spring_res: Dict = None, trading_range: Dict = None) -> Dict:
+    def detect_lps(self, sos_result: Optional[Dict] = None, spring_res: Optional[Dict] = None, trading_range: Optional[Dict] = None) -> Dict:
         """检测 LPS (Last Point of Support)"""
         if trading_range is None:
             trading_range = self.detect_trading_range()
         return self.sw_detector.detect_lps(spring_res=spring_res, trading_range=trading_range, sos_result=sos_result)
 
-    def detect_lpsy(self, sow_result: Dict = None, trading_range: Dict = None) -> Dict:
+    def detect_lpsy(self, sow_result: Optional[Dict] = None, trading_range: Optional[Dict] = None) -> Dict:
         """检测 LPSY (Last Point of Supply)"""
         if trading_range is None:
             trading_range = self.detect_trading_range()
@@ -413,7 +418,7 @@ class WyckoffPatternDetector:
                 vsa_signals['bag_holding'] = {"detected": False}
 
             try:
-                shakeout = self.classic_detector.detect_shakeout(self.sw_detector)
+                shakeout = self.classic_detector.detect_shakeout()
                 vsa_signals['shakeout'] = shakeout
             except Exception as e:
                 logger.debug(f"Shakeout检测失败: {e}")
@@ -525,9 +530,9 @@ class WyckoffPatternDetector:
         global_avg_range = global_high_low_range.rolling(20).mean()
 
         recent_data = self.data.tail(lookback_days)
-        vol_ma = global_vol_ma.loc[recent_data.index]
-        high_low_range = global_high_low_range.loc[recent_data.index]
-        avg_range = global_avg_range.loc[recent_data.index]
+        vol_ma = cast(Any, global_vol_ma).loc[recent_data.index]
+        high_low_range = cast(Any, global_high_low_range).loc[recent_data.index]
+        avg_range = cast(Any, global_avg_range).loc[recent_data.index]
 
         # 动态阈值
         climax_vol_threshold = self._get_dynamic_volume_threshold(max(self.thresholds.VOLUME_CONFIRMATION['strong'], 2.5))
@@ -596,16 +601,14 @@ class WyckoffPatternDetector:
 
         # Effort vs Result 验证
         price_progress = (row['Close'] - row['Open']) / row['Open']
-        is_valid, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, close_pos)
+        _, penalty, warning = self._validate_climax_effort_result(vol_ratio, price_progress, close_pos)
 
         # Squat Bar 联动
         if is_selling and is_squat and squat_dir == "bullish":
-            is_valid = True
             penalty = 1.0
             base_confidence = min(1.0, base_confidence * 1.15)
             logger.info(f"[{label} 蹲坐柱联动] 检测到看涨蹲坐柱，豁免背离惩罚并提升置信度")
         elif not is_selling and is_squat and squat_dir == "bearish":
-            is_valid = True
             penalty = 1.0
             base_confidence = min(1.0, base_confidence * 1.15)
             logger.info(f"[{label} 蹲坐柱联动] 检测到看跌蹲坐柱，豁免背离惩罚并提升置信度")
@@ -950,22 +953,15 @@ class WyckoffPatternDetector:
         """
         检测停止行为（Stopping of Transient, SOT）
 
-        注意：使用动态rolling mean避免前瞻偏差
+        注意：使用 dynamic rolling mean 避免前瞻偏差
         每一天的基准成交量只使用该天及之前的数据计算
         """
         try:
-            # 检查必要字段
-            required_cols = {'Close', 'Open', 'Volume', 'High', 'Low'}
-            missing = required_cols - set(self.data.columns)
-            if missing:
-                raise MissingFieldError(f"缺失必要列: {missing}")
+            if self.data is None or len(self.data) < lookback_days:
+                return {"detected": False, "reason": "insufficient_data"}
 
-            recent_data = self.data.tail(lookback_days)
-            if len(recent_data) < 10:
-                return {"detected": False, "reason": "Insufficient data"}
-
+            recent_data = self.data.tail(lookback_days).copy()
             # 使用动态计算的rolling mean，避免前瞻偏差
-            # 对于每一天，只使用该天及之前的数据计算平均成交量
             volume_series = self.data['Volume']
 
             for idx in range(len(recent_data) - 5, len(recent_data)):
@@ -973,22 +969,32 @@ class WyckoffPatternDetector:
 
                 # 优化 2: 安全获取全局整数索引，避免 len(self.data) < lookback_days 时的负切片越界
                 try:
-                    global_idx = self.data.index.get_loc(row.name)
+                    loc = self.data.index.get_loc(row.name)
+                    if isinstance(loc, slice):
+                        global_idx = int(loc.start or 0)
+                    elif isinstance(loc, np.ndarray):
+                        if loc.dtype == bool:
+                            indices = np.where(loc)[0]
+                            global_idx = int(indices[0]) if len(indices) > 0 else 0
+                        else:
+                            global_idx = int(loc[0]) if len(loc) > 0 else 0
+                    else:
+                        global_idx = int(loc)
                 except (KeyError, ValueError):
-                    global_idx = len(self.data) - len(recent_data) + idx
+                    global_idx = int(len(self.data) - len(recent_data) + idx)
 
                 if global_idx < 0 or global_idx >= len(self.data):
                     continue
 
                 # 动态计算：只使用当前行及之前的数据
-                # 使用20日窗口，但确保不使用未来数据
                 window_start = max(0, global_idx - 19)  # 20日窗口
                 window_data = volume_series.iloc[window_start:global_idx + 1]
                 avg_vol = window_data.mean() if len(window_data) > 0 else 0
 
                 body = abs(row['Close'] - row['Open'])
                 range_size = row['High'] - row['Low']
-                if range_size == 0: continue
+                if range_size == 0:
+                    continue
 
                 vol_ratio = row['Volume'] / avg_vol if avg_vol > 0 else 0
                 body_ratio = body / range_size
@@ -1000,18 +1006,21 @@ class WyckoffPatternDetector:
                 if vol_ratio > sot_vol_threshold and body_ratio < sot_body_threshold:
                     return {
                         "detected": True,
-                        "date": row.name.strftime("%Y-%m-%d"),
-                        "volume_ratio": float(vol_ratio),
-                        "body_ratio": float(body_ratio),
+                        "date": row.name.strftime('%Y-%m-%d') if hasattr(row.name, 'strftime') else str(row.name),
                         "close": float(row['Close']),
                         "volume": float(row['Volume']),
-                        "confidence": min(100, vol_ratio * 40),
-                        "avg_vol_window": int(len(window_data)),
-                        "note": "使用动态rolling mean避免前瞻偏差",
-                        "dynamic_thresholds": {
-                            "vol_threshold": sot_vol_threshold,
-                            "body_threshold": sot_body_threshold,
-                            "atr_pct": self._atr_pct
+                        "volume_ratio": round(vol_ratio, 2),
+                        "body_ratio": round(body_ratio, 2),
+                        "confidence": float(min(1.0, 0.5 + (vol_ratio - 1.3) * 0.3)),
+                        "description": f"发现主力【SOT 停止行为】：在交易日 {row.name.strftime('%Y-%m-%d') if hasattr(row.name, 'strftime') else str(row.name)} 放出巨量({vol_ratio:.2f}倍均量)但K线实体极窄，说明市场出现巨大分歧，原趋势筹码已被主力悉数接盘，趋势即将止步反转。",
+                        "vsa_signals": {
+                            "stopping_vol": {
+                                "detected": True,
+                                "date": row.name,
+                                "price": float(row['Close']),
+                                "volume_ratio": vol_ratio,
+                                "atr_pct": self._atr_pct
+                            }
                         }
                     }
             return {"detected": False, "reason": "No SOT pattern found"}
@@ -1020,7 +1029,7 @@ class WyckoffPatternDetector:
         except Exception as e:
             return self._handle_detection_error("SOT", e)
 
-    def detect_absorption(self, lookback_days: int = 15, trading_range: Dict = None) -> Dict:
+    def detect_absorption(self, lookback_days: int = 15, trading_range: Optional[Dict] = None) -> Dict:
         """
         检测独立的“吸收（Absorption）”行为
         理论依据：大卫·维斯极度强调在阻力位（Creek）下方的吸收行为。
@@ -1040,7 +1049,7 @@ class WyckoffPatternDetector:
                 trading_range = self.detect_trading_range()
 
             #  优化 3: 级联联动：若 TR 已失效，吸收行为失去参考系，跳过检测防止高位滞涨误判
-            if trading_range and trading_range.get('invalidated_tr') == True:
+            if trading_range and trading_range.get('invalidated_tr'):
                 return {
                     "detected": False,
                     "reason": "trading_range_invalidated",
@@ -1052,24 +1061,24 @@ class WyckoffPatternDetector:
                 creek_level = float(trading_range["high"])
             else:
                 # 降级：使用近60日的高点作为 Creek 水位
-                creek_level = float(self.data['High'].tail(60).max())
+                creek_level = float(cast(Any, self.data['High'].tail(60).max()))
 
             df = self.data.tail(lookback_days).copy()
             n = len(df)
             if n < 3:
                 return {"detected": False, "reason": "insufficient_lookback"}
 
-            closes = df['Close'].values
-            highs = df['High'].values
-            lows = df['Low'].values
-            volumes = df['Volume'].values
+            closes = np.asarray(df['Close'], dtype=float)
+            highs = np.asarray(df['High'], dtype=float)
+            lows = np.asarray(df['Low'], dtype=float)
+            volumes = np.asarray(df['Volume'], dtype=float)
 
             # 计算 20日均量与ATR
-            vol_ma20_s = self.data['Volume_MA20'].values if 'Volume_MA20' in self.data.columns else self.data['Volume'].rolling(20).mean().values
-            atr_s = self.data['ATR'].values if 'ATR' in self.data.columns else (self.data['High'] - self.data['Low']).rolling(14).mean().values
+            vol_ma20_s = np.asarray(self.data['Volume_MA20']) if 'Volume_MA20' in self.data.columns else np.asarray(self.data['Volume'].rolling(20).mean())
+            atr_s = np.asarray(self.data['ATR']) if 'ATR' in self.data.columns else np.asarray((self.data['High'] - self.data['Low']).rolling(14).mean())
 
-            vol_ma = vol_ma20_s[-n:]
-            atr = atr_s[-n:]
+            vol_ma = np.asarray(vol_ma20_s[-n:], dtype=float)
+            atr = np.asarray(atr_s[-n:], dtype=float)
 
             # 我们要寻找是否有连续至少3天符合吸收特征的 K 线序列
             # 优化 3: 限制 Creek 阻力下方的宽容度区间，防止突破暴涨后判定为吸收行为
@@ -1110,7 +1119,7 @@ class WyckoffPatternDetector:
                     "detected": True,
                     "creek_level": creek_level,
                     "consecutive_days": best_streak,
-                    "dates": [d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d) for d in absorption_dates],
+                    "dates": [cast(Any, d).strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d) for d in absorption_dates],
                     "avg_volume_ratio": round(avg_vol_multiplier, 2),
                     "confidence": float(min(1.0, 0.5 + (best_streak - 3) * 0.15 + (avg_vol_multiplier - 1.5) * 0.2)),
                     "description": f"🎯 发现主力【蓄势吸收】特征：在阻力位 {creek_level:.2f} 下方连续 {best_streak} 天放量窄幅横盘，收盘强劲，说明所有抛盘已被多头主动蚕食吸收，即将向上跃过小溪 (JOC)"

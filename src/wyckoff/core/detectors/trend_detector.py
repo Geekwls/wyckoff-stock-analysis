@@ -93,7 +93,8 @@ class TrendDetector(BaseDetector):
         
         for joc_idx_temp in joc_candidates.index:
             # 增加：时间衰减检查
-            if self._is_signal_stale(joc_idx_temp, 'joc'): continue
+            if self._is_signal_stale(joc_idx_temp, 'joc'):
+                continue
             
             # 增加：价格证伪检查
             if self._is_signal_falsified('joc', creek_level, current_price):
@@ -135,7 +136,8 @@ class TrendDetector(BaseDetector):
                         test_vol_ratio = round(float(vols[first_hit] / vol_mas[first_hit]), 2)
                     test_count = int(np.sum(test_hits))
                     depths = (joc_row['Close'] - lows) / joc_row['Close']
-                    if len(depths) > 0: test_depth_pct = max(0.0, float(np.max(depths)))
+                    if len(depths) > 0:
+                        test_depth_pct = max(0.0, float(np.max(depths)))
                 except Exception:
                     test_detected, test_date, test_vol_ratio, test_depth_pct, test_count = self._detect_joc_test_iterative(df_after_joc, creek_level, vol_ma, joc_row)
             else:
@@ -303,7 +305,8 @@ class TrendDetector(BaseDetector):
 
         for fti_idx_temp in fti_candidates.index:
             # 增加：时间衰减检查
-            if self._is_signal_stale(fti_idx_temp, 'fti'): continue
+            if self._is_signal_stale(fti_idx_temp, 'fti'):
+                continue
             
             # 增加：价格证伪检查 (解决用户提到的 26元 FTI 在 59元 时依然生效的问题)
             if self._is_signal_falsified('fti', ice_level, current_price):

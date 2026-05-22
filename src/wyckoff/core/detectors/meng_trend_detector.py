@@ -118,24 +118,31 @@ class MengTrendDetector(BaseDetector):
     def detect_joc_enhanced(self) -> Dict:
         """孟洪涛增强版 JOC 检测"""
         if USE_VECTORIZED:
-            try: return self._detect_joc_enhanced_vectorized()
+            try:
+                return self._detect_joc_enhanced_vectorized()
             except Exception as e:
                 logger.warning(f"Vectorized JOC failed: {e}. Falling back to iterative method.")
                 return self._detect_joc_enhanced_iterative()
         return self._detect_joc_enhanced_iterative()
 
     def _detect_joc_enhanced_vectorized(self) -> Dict:
-        if self.data is None or len(self.data) < 40: return {"detected": False, "reason": "insufficient_data"}
+        if self.data is None or len(self.data) < 40:
+            return {"detected": False, "reason": "insufficient_data"}
         df = self.data.copy()
         tr = self._detect_trading_range(df, window=60)
-        if not tr.get("is_consolidation"): return {"detected": False, "reason": "not_in_consolidation"}
+        if not tr.get("is_consolidation"):
+            return {"detected": False, "reason": "not_in_consolidation"}
         
         # 🔧 v1.3重构：滚动计算每一天的 Creek 颈线，彻底消除前瞻偏差 (Lookahead Bias)
         creek_levels = np.array([self._calculate_adaptive_creek(df, window=60, idx=idx) for idx in range(len(df))])
         
         vol_ma20_s = df['Volume_MA20'].values if 'Volume_MA20' in df.columns else df['Volume'].rolling(20, min_periods=1).mean().values
         vol_ma20 = vol_ma20_s[-1]
-        closes, opens, highs, lows, volumes = df['Close'].values, df['Open'].values, df['High'].values, df['Low'].values, df['Volume'].values
+        closes  = np.asarray(df['Close'].values,  dtype=np.float64)
+        opens   = np.asarray(df['Open'].values,   dtype=np.float64)
+        highs   = np.asarray(df['High'].values,   dtype=np.float64)
+        lows    = np.asarray(df['Low'].values,    dtype=np.float64)
+        volumes = np.asarray(df['Volume'].values, dtype=np.float64)
         prev_closes = np.roll(closes, 1)
         prev_closes[0] = closes[0]
         
@@ -216,17 +223,20 @@ class MengTrendDetector(BaseDetector):
                 "test_quality": test_quality if test_detected else None,
                 "confidence": self._calculate_joc_confidence(price_changes[i], volume_ratios[i], close_positions[i], test_detected, test_score if test_detected else 0)
             })
-        if not signals: return {"detected": False, "reason": "no_valid_joc_found"}
+        if not signals:
+            return {"detected": False, "reason": "no_valid_joc_found"}
         ls = signals[-1]
         ls["confidence"] = round(ls["confidence"], 2)
         return {"detected": True, "signals": signals, "latest": ls, "method": "meng_hongtao_joc_vectorized", "description": "孟洪涛JOC检测"}
 
 
     def _detect_joc_enhanced_iterative(self) -> Dict:
-        if self.data is None or len(self.data) < 40: return {"detected": False, "reason": "insufficient_data"}
+        if self.data is None or len(self.data) < 40:
+            return {"detected": False, "reason": "insufficient_data"}
         df = self.data.copy()
         tr = self._detect_trading_range(df, window=60)
-        if not tr.get("is_consolidation"): return {"detected": False, "reason": "not_in_consolidation"}
+        if not tr.get("is_consolidation"):
+            return {"detected": False, "reason": "not_in_consolidation"}
         vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
         vol_ma20_s = df['Volume_MA20'].values if 'Volume_MA20' in df.columns else df['Volume'].rolling(20, min_periods=1).mean().values
 
@@ -264,12 +274,15 @@ class MengTrendDetector(BaseDetector):
             current_creek = self._calculate_adaptive_creek(df.iloc[:i+1], window=60)
             if df['Close'].iloc[i] > current_creek and df['Close'].iloc[i-1] <= current_creek:
                 price_change = (df['Close'].iloc[i] - df['Open'].iloc[i]) / df['Open'].iloc[i] * 100
-                if price_change < self.thresholds.JOC_MIN_BREAKOUT_PCT: continue
+                if price_change < self.thresholds.JOC_MIN_BREAKOUT_PCT:
+                    continue
                 vol_ratio = df['Volume'].iloc[i] / vol_ma20_s[i] if vol_ma20_s[i] > 0 else 1.0
-                if vol_ratio < self.thresholds.JOC_VOLUME_RATIO: continue
+                if vol_ratio < self.thresholds.JOC_VOLUME_RATIO:
+                    continue
                 daily_range = df['High'].iloc[i] - df['Low'].iloc[i]
                 close_pos = (df['Close'].iloc[i] - df['Low'].iloc[i]) / daily_range if daily_range > 0 else 0.5
-                if close_pos < self.thresholds.JOC_CLOSE_POSITION: continue
+                if close_pos < self.thresholds.JOC_CLOSE_POSITION:
+                    continue
                 
                 td, tdt, tvr = False, None, None
                 test_score, test_quality = 0, None
@@ -300,7 +313,8 @@ class MengTrendDetector(BaseDetector):
                     "test_quality": test_quality if td else None,
                     "confidence": self._calculate_joc_confidence(price_change, vol_ratio, close_pos, td, test_score if td else 0)
                 })
-        if not signals: return {"detected": False, "reason": "no_valid_joc_found"}
+        if not signals:
+            return {"detected": False, "reason": "no_valid_joc_found"}
         ls = signals[-1]
         ls["confidence"] = round(ls["confidence"], 2)
         return {"detected": True, "signals": signals, "latest": ls, "method": "meng_hongtao_joc", "description": "孟洪涛JOC检测"}
@@ -310,23 +324,32 @@ class MengTrendDetector(BaseDetector):
         t = self.thresholds
         # 突破幅度评分：优秀阈值取配置值与5%的较大者
         excellent_breakout_threshold = max(t.JOC_EXCELLENT_BREAKOUT_PCT, t.JOC_MIN_BREAKOUT_PCT)
-        if breakout_pct >= excellent_breakout_threshold: score += 25
-        elif breakout_pct >= t.JOC_MIN_BREAKOUT_PCT: score += 20
+        if breakout_pct >= excellent_breakout_threshold:
+            score += 25
+        elif breakout_pct >= t.JOC_MIN_BREAKOUT_PCT:
+            score += 20
 
         # 量能评分
-        if volume_ratio >= t.JOC_EXCELLENT_VOLUME_RATIO: score += 25
-        elif volume_ratio >= t.JOC_GOOD_VOLUME_RATIO: score += 20
-        elif volume_ratio >= t.JOC_VOLUME_RATIO: score += 15
+        if volume_ratio >= t.JOC_EXCELLENT_VOLUME_RATIO:
+            score += 25
+        elif volume_ratio >= t.JOC_GOOD_VOLUME_RATIO:
+            score += 20
+        elif volume_ratio >= t.JOC_VOLUME_RATIO:
+            score += 15
 
         # 收盘位置评分
-        if close_position >= t.JOC_EXCELLENT_CLOSE_POSITION: score += 25
-        elif close_position >= t.JOC_GOOD_CLOSE_POSITION: score += 20
-        elif close_position >= t.JOC_CLOSE_POSITION: score += 15
+        if close_position >= t.JOC_EXCELLENT_CLOSE_POSITION:
+            score += 25
+        elif close_position >= t.JOC_GOOD_CLOSE_POSITION:
+            score += 20
+        elif close_position >= t.JOC_CLOSE_POSITION:
+            score += 15
 
         # 回测权重提升
         if has_test:
             score += 25
-            if test_score >= 80: score += 10  # 高质量回测额外加分
+            if test_score >= 80:
+                score += 10  # 高质量回测额外加分
 
         return min(100, score)
 
@@ -339,9 +362,12 @@ class MengTrendDetector(BaseDetector):
         
         # 1. 成交量评分 (40分)
         vol_ratio = vol / vol_ma20 if vol_ma20 > 0 else 1.0
-        if vol_ratio < 0.6: score += 40
-        elif vol_ratio < 0.8: score += 30
-        elif vol_ratio < 1.0: score += 20
+        if vol_ratio < 0.6:
+            score += 40
+        elif vol_ratio < 0.8:
+            score += 30
+        elif vol_ratio < 1.0:
+            score += 20
         
         # 2. 价格行为评分 (40分)
         body = abs(close - open)
@@ -355,7 +381,8 @@ class MengTrendDetector(BaseDetector):
             if prev_body_pct is not None:
                 # 如果 prev_body 极小 (十字星)，允许 1.2x 容差
                 is_shrinking = body_pct < prev_body_pct * 1.2 if prev_body_pct < 0.1 else body_pct < prev_body_pct
-                if is_shrinking: score += 10
+                if is_shrinking:
+                    score += 10
             else:
                 score += 5 # 无前日数据给中等分
         elif body_pct < 3.0 and is_above_creek:
@@ -376,19 +403,24 @@ class MengTrendDetector(BaseDetector):
             score += 5
             
         # 等级判定
-        if score >= 80: quality = "HIGH"
-        elif score >= 60: quality = "MEDIUM"
-        else: quality = "LOW"
+        if score >= 80:
+            quality = "HIGH"
+        elif score >= 60:
+            quality = "MEDIUM"
+        else:
+            quality = "LOW"
         
         return score, quality
 
     def detect_dead_corner_breakout(self, vsa_detector=None) -> Dict:
         """检测死角突破"""
-        if not vsa_detector: return {"detected": False, "reason": "vsa_detector_required"}
+        if not vsa_detector:
+            return {"detected": False, "reason": "vsa_detector_required"}
         boring_res = vsa_detector.detect_boring_zone(window=10)
         if not boring_res.get("detected") and boring_res.get("score", 0) < 85:
             return {"detected": False, "reason": "boring_score_too_low", "boring_zone": boring_res, "required_score": 85}
-        if self.data is None or len(self.data) < 20: return {"detected": False, "reason": "insufficient_data"}
+        if self.data is None or len(self.data) < 20:
+            return {"detected": False, "reason": "insufficient_data"}
         df = self.data.tail(20).copy()
         boring_high = df['High'].iloc[-10:-1].max()
         vol_ma20 = df['Volume'].rolling(20).mean().iloc[-1]
@@ -397,7 +429,8 @@ class MengTrendDetector(BaseDetector):
             if df['Volume'].iloc[i] > vol_ma20 * 2.0 and df['Close'].iloc[i] > boring_high:
                 bf, b_idx, b_bar = True, i, df.iloc[i]
                 break
-        if not bf or b_bar is None: return {"detected": False, "reason": "no_breakout_found", "boring_zone": boring_res}
+        if not bf or b_bar is None:
+            return {"detected": False, "reason": "no_breakout_found", "boring_zone": boring_res}
         ft_conf, max_pb = False, 0
         if b_idx < len(df) - 1:
             for j in range(1, min(3, len(df) - b_idx - 1) + 1):
@@ -408,7 +441,8 @@ class MengTrendDetector(BaseDetector):
                     break
         conf_factors = {'boring': boring_res.get('score', 0) / 100, 'vol': min(b_bar['Volume'] / vol_ma20 / 3, 1), 'ft': 1.0 if ft_conf else 0.5, 'pb': max(0, 1 - max_pb * 10)}
         conf = conf_factors['boring'] * 0.3 + conf_factors['vol'] * 0.3 + conf_factors['ft'] * 0.25 + conf_factors['pb'] * 0.15
-        if not (bf and conf > 0.6): return {"detected": False, "reason": "confidence_too_low", "confidence": round(conf * 100, 1)}
+        if not (bf and conf > 0.6):
+            return {"detected": False, "reason": "confidence_too_low", "confidence": round(conf * 100, 1)}
         return {
             "detected": True, "boring_zone": boring_res, "breakout_price": round(float(b_bar['Close']), 2),
             "breakout_volume_ratio": round(float(b_bar['Volume']) / vol_ma20, 2), "breakout_date": df.index[b_idx],
@@ -418,20 +452,26 @@ class MengTrendDetector(BaseDetector):
 
     def detect_dead_corner_breakout_enhanced(self, vsa_detector=None) -> Dict:
         base = self.detect_dead_corner_breakout(vsa_detector)
-        if not base.get("detected"): return base
+        if not base.get("detected"):
+            return base
         strength = self._classify_breakout_strength(base)
         base.update({"breakout_strength": strength, "trading_advice": self._generate_breakout_trading_advice(base, strength)})
         return base
 
     def _classify_breakout_strength(self, res: Dict) -> str:
         conf, vol_r, ft = res.get("confidence", 0), res.get("breakout_volume_ratio", 0), res.get("follow_through_confirmation", False)
-        if conf >= 85 and vol_r >= 2.5 and ft: return "SUPER_STRONG"
-        if conf >= 75 and vol_r >= 2.0: return "STRONG"
-        if conf >= 65: return "MODERATE"
+        if conf >= 85 and vol_r >= 2.5 and ft:
+            return "SUPER_STRONG"
+        if conf >= 75 and vol_r >= 2.0:
+            return "STRONG"
+        if conf >= 65:
+            return "MODERATE"
         return "WEAK"
 
     def _generate_breakout_trading_advice(self, res: Dict, strength: str) -> Dict:
         bp = res.get("breakout_price", 0)
-        if strength == "SUPER_STRONG": return {"action": "STRONG_BUY", "entry": "激进追涨", "sl": round(bp * 0.98, 2), "target": f"{round(bp*1.1, 2)}/{round(bp*1.2, 2)}"}
-        if strength == "STRONG": return {"action": "BUY", "entry": "稳健做多", "sl": round(bp * 0.97, 2), "target": f"{round(bp*1.08, 2)}/{round(bp*1.15, 2)}"}
+        if strength == "SUPER_STRONG":
+            return {"action": "STRONG_BUY", "entry": "激进追涨", "sl": round(bp * 0.98, 2), "target": f"{round(bp*1.1, 2)}/{round(bp*1.2, 2)}"}
+        if strength == "STRONG":
+            return {"action": "BUY", "entry": "稳健做多", "sl": round(bp * 0.97, 2), "target": f"{round(bp*1.08, 2)}/{round(bp*1.15, 2)}"}
         return {"action": "WATCH", "entry": "观望等待"}

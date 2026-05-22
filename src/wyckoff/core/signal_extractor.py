@@ -166,19 +166,24 @@ class SignalExtractor:
                     sig_type = key
                     data = info
 
-            if not data or not getattr(data, 'detected', False): continue
+            if not data or not getattr(data, 'detected', False):
+                continue
 
             # 判断方向供冲突检测
-            if sig_type in ['spring', 'sos', 'lps']: bullish_count += 1
-            elif sig_type in ['upthrust', 'sow', 'lpsy']: bearish_count += 1
+            if sig_type in ['spring', 'sos', 'lps']:
+                bullish_count += 1
+            elif sig_type in ['upthrust', 'sow', 'lpsy']:
+                bearish_count += 1
 
             # 计算该信号的质量因子 (0.5 - 1.2)
             quality_factor = 0.8 # 默认基础分
 
             # 考虑成交量比 (Volume Ratio)
             vol_ratio = getattr(data, 'volume_ratio', 1.0)
-            if vol_ratio > 2.0: quality_factor += weights['volume_ratio']
-            elif vol_ratio > 1.5: quality_factor += weights['volume_ratio'] * 0.5
+            if vol_ratio > 2.0:
+                quality_factor += weights['volume_ratio']
+            elif vol_ratio > 1.5:
+                quality_factor += weights['volume_ratio'] * 0.5
 
             # 考虑置信度 (Confidence)
             conf = getattr(data, 'confidence', 0.5)
@@ -188,7 +193,8 @@ class SignalExtractor:
             sig_date = getattr(data, 'date', None)
             if sig_date:
                 if isinstance(sig_date, str):
-                    try: sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
+                    try:
+                        sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
                     except Exception:
                         pass
 

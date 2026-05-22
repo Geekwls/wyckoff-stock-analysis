@@ -40,7 +40,8 @@ class MengVsaDetector(BaseDetector):
         
         for i in range(10, len(df)):
             pr = df['High'].iloc[i] - df['Low'].iloc[i]
-            if pr <= 0: continue
+            if pr <= 0:
+                continue
             body_pct, vol_r = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / pr, df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
             
             # 计算 5 日均线价格重心波段方向 (Swing Direction)
@@ -159,7 +160,8 @@ class MengVsaDetector(BaseDetector):
 
     def detect_boring_zone(self, window: int = 14) -> Dict:
         """检测枯燥区"""
-        if self.data is None or len(self.data) < window + 20: return {"detected": False, "reason": "insufficient_data"}
+        if self.data is None or len(self.data) < window + 20:
+            return {"detected": False, "reason": "insufficient_data"}
         df = self.data.tail(window + 20).copy()
         atr_s = self._calculate_atr_series(df, 14)
         df['ATR_Pct'] = atr_s / df['Close'] * 100
@@ -197,15 +199,24 @@ class MengVsaDetector(BaseDetector):
 
     def calculate_boring_alert_score(self, vc, ac, dur) -> int:
         score = 0
-        if vc < 0.5: score += 40
-        elif vc < 0.7: score += 30
-        elif vc < 0.85: score += 15
-        if ac < 0.6: score += 40
-        elif ac < 0.75: score += 30
-        elif ac < 0.9: score += 15
-        if dur >= 20: score += 20
-        elif dur >= 10: score += 15
-        elif dur >= 5: score += 10
+        if vc < 0.5:
+            score += 40
+        elif vc < 0.7:
+            score += 30
+        elif vc < 0.85:
+            score += 15
+        if ac < 0.6:
+            score += 40
+        elif ac < 0.75:
+            score += 30
+        elif ac < 0.9:
+            score += 15
+        if dur >= 20:
+            score += 20
+        elif dur >= 10:
+            score += 15
+        elif dur >= 5:
+            score += 10
         return score
 
     def detect_volume_trend(self, window: int = 10) -> Dict:
