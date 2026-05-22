@@ -189,14 +189,21 @@ class EventArbitrator:
     def _extract_sos_signals(self, sos: SosModel) -> List[ArbitrationSignal]:
         """提取SOS信号"""
         signals = []
+        sos_sigs = getattr(sos, 'signals', None) or []
+        if (not sos_sigs) and hasattr(sos, 'latest') and sos.latest:
+            sos_sigs = [sos.latest]
 
-        if hasattr(sos, 'signals') and sos.signals:
-            for sig in sos.signals:
+        if sos_sigs:
+            for sig in sos_sigs:
+                date_val = sig.date if hasattr(sig, 'date') else (sig.get('date') if isinstance(sig, dict) else None)
+                conf_val = sig.confidence if hasattr(sig, 'confidence') else (sig.get('confidence') if isinstance(sig, dict) else 0.7)
+                if conf_val is None:
+                    conf_val = 0.7
                 signals.append(ArbitrationSignal(
                     signal_type='sos',
-                    date=sig.date,
+                    date=date_val,
                     direction='bullish',
-                    confidence=sig.confidence if hasattr(sig, 'confidence') else 0.7,
+                    confidence=conf_val,
                     raw_data={'sos': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
                 ))
 
@@ -205,14 +212,21 @@ class EventArbitrator:
     def _extract_sow_signals(self, sow: SowModel) -> List[ArbitrationSignal]:
         """提取SOW信号"""
         signals = []
+        sow_sigs = getattr(sow, 'signals', None) or []
+        if (not sow_sigs) and hasattr(sow, 'latest') and sow.latest:
+            sow_sigs = [sow.latest]
 
-        if hasattr(sow, 'signals') and sow.signals:
-            for sig in sow.signals:
+        if sow_sigs:
+            for sig in sow_sigs:
+                date_val = sig.date if hasattr(sig, 'date') else (sig.get('date') if isinstance(sig, dict) else None)
+                conf_val = sig.confidence if hasattr(sig, 'confidence') else (sig.get('confidence') if isinstance(sig, dict) else 0.7)
+                if conf_val is None:
+                    conf_val = 0.7
                 signals.append(ArbitrationSignal(
                     signal_type='sow',
-                    date=sig.date,
+                    date=date_val,
                     direction='bearish',
-                    confidence=sig.confidence if hasattr(sig, 'confidence') else 0.7,
+                    confidence=conf_val,
                     raw_data={'sow': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
                 ))
 

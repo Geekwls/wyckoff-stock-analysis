@@ -60,7 +60,7 @@ class APSEngine:
         # 预先计算衰减因子数组 (从0到 window-1 的衰减)
         decay_weights = np.exp(-self.decay_lambda * np.arange(self.window))
 
-        weighted_evr_arr = out_df['weighted_evr'].values
+        weighted_evr_arr = np.asarray(out_df['weighted_evr'])
 
         for i in range(n_rows):
             start_idx = max(0, i - self.window + 1)

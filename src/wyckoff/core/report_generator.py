@@ -141,8 +141,12 @@ class WyckoffReportGenerator:
         try:
             if hasattr(self.pattern_detector, 'phase_coordinator'):
                 events = self.pattern_detector.phase_coordinator.collect_all_events()
-                arbitration_result = events.get('arbitration_result')
-                breakout_analysis = events.get('breakout_analysis')
+                if isinstance(events, dict):
+                    arbitration_result = events.get('arbitration_result')
+                    breakout_analysis = events.get('breakout_analysis')
+                else:
+                    arbitration_result = getattr(events, 'arbitration_result', None)
+                    breakout_analysis = getattr(events, 'breakout_analysis', None)
         except Exception as e:
             logger.debug(f"Failed to get arbitration/breakout analysis: {e}")
 
@@ -247,8 +251,12 @@ class WyckoffReportGenerator:
         try:
             if hasattr(self.pattern_detector, 'phase_coordinator'):
                 events = self.pattern_detector.phase_coordinator.collect_all_events()
-                arbitration_result = events.get('arbitration_result')
-                breakout_analysis = events.get('breakout_analysis')
+                if isinstance(events, dict):
+                    arbitration_result = events.get('arbitration_result')
+                    breakout_analysis = events.get('breakout_analysis')
+                else:
+                    arbitration_result = getattr(events, 'arbitration_result', None)
+                    breakout_analysis = getattr(events, 'breakout_analysis', None)
         except Exception as e:
             logger.debug(f"Failed to get arbitration/breakout analysis: {e}")
 
@@ -380,12 +388,19 @@ class WyckoffReportGenerator:
             try:
                 raw_patterns = self.pattern_detector._collect_all_events()
                 if raw_patterns:
-                    # 如果能采集到，我们就合并/使用采集到的数据
-                    patterns['phase'] = raw_patterns.get('phase', patterns['phase'])
-                    patterns['sequence_validation'] = raw_patterns.get('sequence_validation', {})
-                    events = raw_patterns.get('events_detected', {})
-                    if events:
-                        patterns['events_detected'] = {**default_events, **events}
+                    if not isinstance(raw_patterns, dict) and hasattr(raw_patterns, 'model_dump'):
+                        raw_dict = raw_patterns.model_dump()
+                    elif isinstance(raw_patterns, dict):
+                        raw_dict = raw_patterns
+                    else:
+                        raw_dict = {}
+                    
+                    if raw_dict:
+                        patterns['phase'] = raw_dict.get('phase', patterns['phase'])
+                        patterns['sequence_validation'] = raw_dict.get('sequence_validation', {})
+                        events = raw_dict.get('events_detected', {})
+                        if events:
+                            patterns['events_detected'] = {**default_events, **events}
             except Exception:
                 pass
                 

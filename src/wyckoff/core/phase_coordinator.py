@@ -87,7 +87,7 @@ class PhaseCoordinator:
         ps_res = self.detector.detect_preliminary_support()
         psy_res = self.detector.detect_preliminary_supply()
 
-        spring_res = self.detector.detect_spring()
+        spring_res = self.detector.detect_spring_menhongtao()
         upthrust_res = self.detector.detect_upthrust()
 
         boring_zone_res = self.detector.detect_boring_zone()

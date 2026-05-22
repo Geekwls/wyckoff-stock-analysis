@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Any, Optional
+from typing import List, Any, cast
 
 @dataclass
 class WeisWave:
@@ -28,19 +28,22 @@ class WeisWaveGenerator:
 
     def _calculate_atr(self, window: int = 14) -> pd.Series:
         if 'ATR' in self.data.columns:
-            return self.data['ATR']
-        
+            res = self.data['ATR']
+            if isinstance(res, pd.DataFrame):
+                return cast(pd.Series, res.iloc[:, 0])
+            return cast(pd.Series, res)
+
         high = self.data['High']
         low = self.data['Low']
         close = self.data['Close'].shift(1)
-        
+
         tr1 = high - low
         tr2 = (high - close).abs()
         tr3 = (low - close).abs()
-        
+
         tr = pd.DataFrame({'tr1': tr1, 'tr2': tr2, 'tr3': tr3}).max(axis=1)
         atr = tr.rolling(window=window, min_periods=1).mean()
-        return atr
+        return cast(pd.Series, atr)
 
     def find_pivots(self) -> List[dict]:
         """寻找波段的高低转折点"""
@@ -51,27 +54,27 @@ class WeisWaveGenerator:
         highs = self.data['High'].values
         lows = self.data['Low'].values
         closes = self.data['Close'].values
-        
+
         pivots = []
         direction = 0  # 1 for up, -1 for down
-        
+
         extreme_idx = 0
         extreme_high = highs[0]
         extreme_low = lows[0]
         #  缺陷1修复：独立跟踪极值高低点各自的真实索引
         extreme_high_idx = 0
         extreme_low_idx = 0
-        
+
         for i in range(1, len(self.data)):
             current_high = highs[i]
             current_low = lows[i]
-            
+
             current_atr = atr.iloc[i]
             if pd.notna(current_atr) and current_atr > 0:
                 reversal_amount = current_atr * self.atr_multiplier
             else:
                 reversal_amount = closes[i] * self.fallback_pct
-            
+
             if direction == 0:
                 if current_high >= extreme_low + reversal_amount:
                     direction = 1
@@ -97,7 +100,7 @@ class WeisWaveGenerator:
                         extreme_low = current_low
                         extreme_low_idx = i
                         extreme_idx = i
-                    
+
             elif direction == 1:
                 if current_high > extreme_high:
                     extreme_high = current_high
@@ -110,7 +113,7 @@ class WeisWaveGenerator:
                     extreme_low = current_low
                     extreme_low_idx = i
                     extreme_idx = i
-                    
+
             elif direction == -1:
                 if current_low < extreme_low:
                     extreme_low = current_low
@@ -123,13 +126,13 @@ class WeisWaveGenerator:
                     extreme_high = current_high
                     extreme_high_idx = i
                     extreme_idx = i
-                    
+
         # 处理最后一个未闭合的波段
         if not pivots or extreme_idx != pivots[-1]['idx']:
             p_type = 'high' if direction == 1 else 'low'
             p_price = extreme_high if direction == 1 else extreme_low
             pivots.append({'idx': extreme_idx, 'price': p_price, 'type': p_type})
-            
+
         return pivots
 
     def generate(self) -> List[WeisWave]:
@@ -137,35 +140,35 @@ class WeisWaveGenerator:
         pivots = self.find_pivots()
         waves = []
         indices = self.data.index
-        volumes = self.data['Volume'].values
-        
+        volumes = np.asarray(self.data['Volume'])
+
         for i in range(1, len(pivots)):
             start_pivot = pivots[i-1]
             end_pivot = pivots[i]
-            
+
             start_idx = start_pivot['idx']
             end_idx = end_pivot['idx']
-            
+
             if end_idx <= start_idx:
                 continue
-                
+
             direction = 'up' if end_pivot['type'] == 'high' else 'down'
             start_price = start_pivot['price']
             end_price = end_pivot['price']
-            
+
             # 成交量累加：从转折点后一根 K 线开始，直到（并包含）当前波段的极值点
             vol_sum = float(np.sum(volumes[start_idx + 1 : end_idx + 1]))
-            
+
             waves.append(WeisWave(
                 direction=direction,
                 start_idx=indices[start_idx],
                 end_idx=indices[end_idx],
                 start_price=float(start_price),
                 end_price=float(end_price),
-                #  缺陷2修复：改用百分比推力，使不同价位的波段推力可横向比较
+                # 改用百分比推力，使不同价位的波段推力可横向比较
                 thrust=float(abs(end_price - start_price) / start_price) if start_price > 0 else 0.0,
                 volume=vol_sum,
                 duration=int(end_idx - start_idx)
             ))
-            
+
         return waves

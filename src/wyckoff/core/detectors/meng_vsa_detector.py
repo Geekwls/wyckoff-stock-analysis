@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, List
+from typing import Dict, List, cast, Any
 from .base_detector import BaseDetector
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class MengVsaDetector(BaseDetector):
         """
         if self.data is None or len(self.data) < 20:
             return {"no_supply": {"detected": False}, "no_demand": {"detected": False}, "stopping_vol": {"detected": False}}
-        df = self.data.copy()
+        df = cast(Any, self.data).copy()
         vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
         ns, nd, sv = [], [], []
         t = self.thresholds
@@ -162,7 +162,7 @@ class MengVsaDetector(BaseDetector):
         """检测枯燥区"""
         if self.data is None or len(self.data) < window + 20:
             return {"detected": False, "reason": "insufficient_data"}
-        df = self.data.tail(window + 20).copy()
+        df = cast(Any, self.data).tail(window + 20).copy()
         atr_s = self._calculate_atr_series(df, 14)
         df['ATR_Pct'] = atr_s / df['Close'] * 100
         avg_atr_p = df['ATR_Pct'].iloc[:-window].mean()
@@ -238,11 +238,9 @@ class MengVsaDetector(BaseDetector):
                 'ratio': float
             }
         """
-        if self.data is None or len(self.data) < window * 2:
-            return {'trend': 'unknown', 'reason': 'insufficient_data'}
-
-        df = self.data.tail(window * 2).copy()
-        volumes = df['Volume'].values
+        slope = 0.0
+        df = cast(Any, self.data).tail(window * 2).copy()
+        volumes = np.asarray(df['Volume'])
 
         # 计算短期和长期成交量均线
         short_window = max(3, window // 2)
@@ -287,7 +285,7 @@ class MengVsaDetector(BaseDetector):
             'short_ma': round(float(vol_ma_short), 0),
             'long_ma': round(float(vol_ma_long), 0),
             'ratio': round(vol_ratio, 2),
-            'slope': round(float(slope), 2) if 'slope' in locals() else 0
+            'slope': round(float(slope), 2)
         }
 
     def detect_vsa_with_trend_context(self) -> Dict:
