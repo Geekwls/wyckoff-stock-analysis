@@ -1,7 +1,7 @@
 ---
 name: wyckoff-stock-analysis
 description: This skill acts as an expert Wyckoff trading analyst and system router. Use it to analyze stocks, interpret market phases, and identify key events based on Richard D. Wyckoff's theory.
-version: 2.6.0
+version: 3.1.0
 ---
 
 # Wyckoff Stock Analysis - Expert System Router
@@ -77,15 +77,22 @@ When asked to analyze a stock, you MUST follow these steps precisely:
    **# 📚 Jargon Explained**
    *(Directly read and list terms from `[terminology_guide]` with their `simple` and `action` explanations; skip if no data available)*
 
-   **⚠️ CRITICAL TERMINOLOGY RULES** — You MUST follow these rules whenever explaining Wyckoff terms:
-   - **LPSY (Last Point of Supply)**:
-     * In **Accumulation** context: A *weak* rally (low volume, fails to reclaim resistance) before markdown begins. It is NOT a buy point. Do NOT write "吸笹尾声特征" or "可在LPSY回调时建仓".
-     * In **Distribution** context: The final low-volume rally before price breaks down through Ice. It is a **short-entry signal**, not a long opportunity.
-     * **ALWAYS clarify context**. LPSY and LPS (Last Point of Support) are **opposite signals** — never conflate them.
-   - **Phase A (Stopping the Trend)**:
-     * Correct: "恐慧抛售停止，市场从急跌转为横盘，主力开始**试探性**承接（PS→SC→AR→ST）。"
-     * **Do NOT write** "主力开始承接" without the qualifier "试探性". Phase A does NOT guarantee price will not fall further.
-     * **Spring CANNOT occur in Phase A**. Spring is a Phase C event. If both are detected simultaneously, the system automatically upgrades the phase to Phase C.
+    **⚠️ CRITICAL TERMINOLOGY RULES** — You MUST follow these rules whenever explaining Wyckoff terms:
+    - **LPS (Last Point of Support)**:
+      * Only exists in **Accumulation / Re-accumulation** Phase C/D.
+      * It represents the last point of support on a reaction with dry volume, showing that supply is exhausted. It is a **key buying point**.
+      * Do NOT conflate with LPSY.
+    - **LPSY (Last Point of Supply)**:
+      * Only exists in **Distribution / Re-distribution** Phase D/E.
+      * It represents a weak rally on narrow spread and low volume, showing that demand is completely exhausted before markdown begins. It is a **key shorting/selling point**.
+      * **ALWAYS clarify context**. Never recommend buying or building long positions at an LPSY.
+    - **Phase A (Stopping the Trend)**:
+      * Correct: "恐慌抛售停止，市场从急跌转为横盘，主力开始**试探性**承接（PS→SC→AR→ST）。"
+      * **Do NOT write** "主力开始承接" without the qualifier "试探性". Phase A does NOT guarantee price will not fall further.
+      * **Spring CANNOT occur in Phase A**. Spring is a Phase C event. If both are detected simultaneously, the system automatically upgrades the phase to Phase C.
+    - **Spring Validation (Meng Hongtao's Rule)**:
+      * A valid Spring must have its recovery day close in the upper 70% of the daily range (close_position >= 0.7).
+      * If a shakeout closes at a low position, it indicates heavy supply still exists and is NOT a valid Spring. Explicitly state this difference to avoid false breakouts.
 
 
    **# 📊 Historical Performance**
@@ -127,7 +134,11 @@ Your internal prompt context is deliberately kept small. If you are unsure about
    - **Exception - Market-Wide Benchmarks**: When stock-specific data is insufficient (e.g., sample size < 30), you MAY use market-wide statistics (e.g., "historically 65% of Spring signals in similar market conditions succeed") BUT MUST clearly label it as:
      > "⚠️ 此为全市场统计基准，非本股票历史数据"
    - **Principle**: Transparency over withholding. It's better to provide labeled benchmarks than to hide useful reference information.
-4. **Adaptive Verbosity**: If the user asks a simple question (e.g., "What phase is AAPL in?"), provide a 1-2 sentence direct answer. Only provide a full, structured 8-part report if requested or if performing a "full analysis".
+ 4. **Adaptive Verbosity**: If the user asks a simple question (e.g., "What phase is AAPL in?"), provide a 1-2 sentence direct answer. Only provide a full, structured 8-part report if requested or if performing a "full analysis".
+ 5. **TR Invalidation & Cause-Effect Cease (CRITICAL)**: If the JSON output indicates `invalidated_tr` is `true`, you MUST:
+    - Explicitly and prominently state: "⚠️ 交易区间已实质性失效 (Trading Range Invalidated) ⚠️"
+    - Declare all target prices calculated from the previous cause-and-effect structure to be **void**.
+    - Explain that according to Wyckoff's core risk control principles, a deep breach of support (or breakout of resistance that doesn't hold) invalidates the accumulation/distribution structure. The market has entered a state of structural disruption, and we must wait for a new trading range to form before attempting any new projections. Do NOT present any targets.
 
 ## 🛡️ Error Handling
 

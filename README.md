@@ -1,4 +1,4 @@
-# 📈 Wyckoff Stock Analysis Skill v3.0.0 "Bayesian Edition"
+# 📈 Wyckoff Stock Analysis Skill v3.1.0 "Meng Refined Edition"
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![Pydantic](https://img.shields.io/badge/Pydantic-v2-red.svg)](https://docs.pydantic.dev/)
@@ -71,15 +71,16 @@ python -m apps.cli.main --batch --symbols "AAPL,MSFT,GOOGL"
 
 ---
 
-## 🌟 v3.0.0 核心功能亮点 (WIE 3.0 MVP)
+## 🌟 v3.1.0 核心功能亮点 (Meng Refined Edition)
 
 | 功能 | 说明 |
 |------|------|
 | **贝叶斯概率推演 (HMM)** | 基于 6x6 非对称转移矩阵推算 S0-S5 六大微观状态分布，符合因果定律的序列后验概率。 |
 | **机构级微观背景 (APS/VPOC)** | 暴露 `microstructure_background` 节点，提供吸收分 (APS)、收敛天数 (CDS)、筹码峰 (VPOC) 等物理参量。 |
 | **“探照灯”双重视角** | 形态检测与微观背景解耦。如：“检测到 Spring，但处于 S5 派发的高概率环境”，判断权归于用户。 |
-| **孟洪涛增强检测** | 完美实现《新威科夫操盘法》中的 Spring 5 重过滤及 JOC 强度分类。 |
+| **孟洪涛精细化重构 (二期)** | 实现了 Spring 5 重硬性过滤、AR 四层立即反弹检测、LPS ATR 动态容差、JOC 强度与测试质量对齐、以及区间失效风控机制。 |
 | **跨周期 EVR 共振** | 实现 Effort vs Result 的周线-日线跨级别共振分析，识别具备大级别潜力的主力吸筹行情。 |
+| **高性能 SOS 向量化** | 重构 SOS 向量化识别逻辑，实现与迭代算法完美对齐，回测提速 10 倍以上。 |
 
 ---
 
@@ -97,7 +98,7 @@ wyckoff-stock-analysis/
 │   │   └── adaptive/             # 贝叶斯自适应阈值系统
 │   └── schemas.py           # 强类型数据契约 (Pydantic)
 ├── apps/                    # [应用层] CLI 与 MCP 服务器
-├── tests/                   # [质量] 92+ 单元测试用例
+├── tests/                   # [质量] 142 个单元测试用例 (100% 通过)
 └── references/              # [理论] 威科夫理论与孟洪涛方法参考
 ```
 
