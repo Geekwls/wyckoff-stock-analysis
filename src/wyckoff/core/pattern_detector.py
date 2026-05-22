@@ -455,14 +455,6 @@ class WyckoffPatternDetector:
         """检测特征变异 (CHoCH)"""
         return self.meng_enhancer.reversal.detect_choch()
 
-    def detect_preliminary_support(self, lookback: int = 90) -> Dict:
-        """检测初次支撑 (Preliminary Support, PS)"""
-        return self.meng_enhancer.detect_preliminary_support(lookback)
-
-    def detect_preliminary_supply(self, lookback: int = 90) -> Dict:
-        """检测初次供应 (Preliminary Supply, PSY)"""
-        return self.meng_enhancer.detect_preliminary_supply(lookback)
-
     def _handle_detection_error(self, pattern_type: str, exc: Exception) -> Dict:
         """
         统一异常处理逻辑
@@ -733,17 +725,19 @@ class WyckoffPatternDetector:
         except Exception as e:
             return self._handle_detection_error("AR", e)
 
-    def detect_preliminary_support(self, lookback_days: int = 90) -> Dict:
+    def detect_preliminary_support(self, lookback_days: int = 90, lookback: Optional[int] = None) -> Dict:
         """
         检测初次支撑（Preliminary Support, PS）
         """
-        return self.ps_detector.detect(lookback_days)
+        days = lookback if lookback is not None else lookback_days
+        return self.ps_detector.detect(days)
 
-    def detect_preliminary_supply(self, lookback_days: int = 90) -> Dict:
+    def detect_preliminary_supply(self, lookback_days: int = 90, lookback: Optional[int] = None) -> Dict:
         """
         检测初次供应（Preliminary Supply, PSY）
         """
-        return self.psy_detector.detect(lookback_days)
+        days = lookback if lookback is not None else lookback_days
+        return self.psy_detector.detect(days)
 
     def _validate_ps_sc_sequence(self, ps_res: Dict, sc_res: Dict) -> Tuple[bool, str]:
         """
