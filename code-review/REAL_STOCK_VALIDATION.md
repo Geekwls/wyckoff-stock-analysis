@@ -1,4 +1,4 @@
-# 真实股票验证报告 (Phase 13 后)
+# 真实股票验证报告 (Phase 14 后)
 
 **日期:** 2026-05-23  
 **脚本:** `scripts/validate_real_stocks.py`  
@@ -6,40 +6,42 @@
 
 ## 本轮结果：2/6（Yahoo 限流）
 
-| 代码 | 状态 | 最终 phase | phase_description | 方向 |
-|------|------|------------|-------------------|------|
-| AAPL/MSFT/NVDA | ❌ 429 | — | — | — |
-| sh.600519 | ✅ | **Distribution Phase A** | 派发特征确认文案（独立字段） | **观望** |
-| sz.000001 | ✅ | **Accumulation Phase C** | — | 做多 |
-| 0700.HK | ❌ 429 | — | — | — |
+| 代码 | 状态 | 最终 phase | identifier_phase | 方向 | 信号 |
+|------|------|------------|------------------|------|------|
+| AAPL/MSFT/NVDA/0700.HK | ❌ 429 | — | — | — | — |
+| sh.600519 | ✅ | **Distribution Phase A** | C+ 待 FTI | **观望** | SOW+JOC |
+| sz.000001 | ✅ | **Accumulation Phase C** | C+ 待 JOC | **观望** | Spring |
 
-## Phase 13 改进已验证（A 股）
+## Phase 14 改进已验证（A 股）
 
-1. **阶段标签规范化** — 600519 的 `phase` 为 `Distribution Phase A`，不再被 `[经典威科夫派发...]` 长文案覆盖  
-2. **描述分离** — 吸收/派发得分 narrative 写入 `phase_description`  
-3. **Coordinator 合并** — `phase_source=coordinator_reconcile`，identifier 仍为 Phase B 时用户可见阶段以 coordinator 为准  
-4. **交易门控** — 600519 派发 A + SOW → 观望  
+1. **600519 不再误判 Accumulation Phase D** — BC+SOW 语境下 JOC 不升吸筹 D，identifier 为 `C+ 待 FTI`
+2. **000001 Spring 无 JOC → 观望** — 符合孟氏 checklist（Phase C 震仓观察，等 JOC/LPS）
+3. **phase_description 与 coordinator 一致** — 600519 不再出现 Phase B 文案覆盖 Phase A 标签
+4. **VSA/dead_corner 主链采集** — `vsa_menhongtao` 已写入 EventsModel
 
 ## 数据层
 
-- A 股：AkShare 代理失败 → BaoStock 回退正常  
-- 美股/港股：Yahoo **429 限流**（短期频繁请求导致）  
-- 已加：**yfinance 本地缓存**（`.cache/yfinance/`，6h 新鲜 / 7d 过期兜底）+ 重试退避  
+- A 股：AkShare 代理失败 → BaoStock 回退正常
+- 美股/港股：Yahoo **429 限流**（建议间隔 15min+ 或使用 `.cache/yfinance/` 缓存）
 
 ## 复现
 
 ```bash
-# 全量（建议间隔 15min+ 若 Yahoo 仍 429）
+# 全量
 PYTHONPATH=src .venv/bin/python scripts/validate_real_stocks.py
 
-# 仅 A 股（不依赖 Yahoo）
+# 仅 A 股
 PYTHONPATH=src .venv/bin/python -c "
 from scripts.validate_real_stocks import analyze_one
 for s,m in [('sh.600519','茅台'),('sz.000001','平安')]:
-    r=analyze_one(s,m); print(s, r['phase'], r['direction'])
+    r=analyze_one(s,m)
+    print(s, r['phase'], r['identifier_phase'], r['direction'])
 "
 ```
 
 ## 单元测试
 
-38+ tests OK（含 `test_phase13_fixes` orchestrator 合成 E2E）
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest tests.test_phase14_optimizations -q
+# 12 tests OK（含 Phase 14 全量回归 52 tests）
+```

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 9–13 真实股票数据验证脚本"""
+"""Phase 9–14 真实股票数据验证脚本"""
 import json
 import sys
 import time
@@ -58,6 +58,7 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
         "fti": "-",
         "sow": "-",
         "vsa": "-",
+        "dead_corner": "-",
         "revisions": 0,
     }
     try:
@@ -87,6 +88,15 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
             vsa = getattr(events, "vsa_signals", None) if events else None
             if isinstance(vsa, dict):
                 row["vsa"] = "Y" if any(vsa.get(k) for k in ("is_no_supply", "is_no_demand", "is_stopping_vol")) else "-"
+            vsa_meng = getattr(events, "vsa_menhongtao", None) if events else None
+            if row["vsa"] == "-" and isinstance(vsa_meng, dict):
+                row["vsa"] = "Y" if any(
+                    (vsa_meng.get(k) or {}).get("detected")
+                    for k in ("no_supply", "no_demand", "stopping_vol")
+                ) else "-"
+            dc = getattr(events, "dead_corner_breakout", None) if events else None
+            if isinstance(dc, dict):
+                row["dead_corner"] = "Y" if dc.get("detected") else "-"
 
             # 交易计划（复用已带 cache 的 detector，避免 orchestrator 二次建 detector 崩溃）
             try:
@@ -112,7 +122,7 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
 
 def main():
     print("=" * 72)
-    print("威科夫真实股票验证 (Phase 9–13)")
+    print("威科夫真实股票验证 (Phase 9–14)")
     print("=" * 72)
 
     results = []

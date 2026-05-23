@@ -93,18 +93,33 @@ class VsaDetector(BaseDetector):
             }
         return {'detected': False}
 
-    def detect_shakeout(self, spring_detector=None) -> Dict:
-        """检测 Shakeout (终极震仓)"""
-        if not spring_detector:
+    def detect_shakeout(self, spring_detector=None, spring_result: Dict = None) -> Dict:
+        """检测 Shakeout (终极震仓) — 优先使用已采集的孟氏 Spring 结果。"""
+        spring_res = spring_result
+        if not spring_res and spring_detector:
+            for method in ('detect_spring_enhanced', 'detect_spring_menhongtao', 'detect_spring'):
+                fn = getattr(spring_detector, method, None)
+                if callable(fn):
+                    spring_res = fn()
+                    break
+        if not spring_res or not spring_res.get('detected'):
             return {'detected': False}
-        spring_res = spring_detector.detect_spring()
-        if spring_res.get('detected'):
-            latest = spring_res['latest_spring']
-            support, breakdown_price = latest['support_level'], latest['breakdown_price']
-            if support > 0:
-                breakdown_pct = (support - breakdown_price) / support
-                if breakdown_pct >= self.thresholds.VSA_SHAKEOUT_DEPTH:
-                    return {'detected': True, 'date': latest['date'], 'depth': round(breakdown_pct * 100, 2), 'description': 'Shakeout - 剧烈震仓，深度洗盘后快速回收'}
+        latest = spring_res.get('latest_spring') or spring_res.get('latest')
+        if not latest and spring_res.get('signals'):
+            latest = spring_res['signals'][-1]
+        if not latest:
+            return {'detected': False}
+        support = latest.get('support_level', 0)
+        breakdown_price = latest.get('breakdown_price', 0)
+        if support > 0:
+            breakdown_pct = (support - breakdown_price) / support
+            if breakdown_pct >= self.thresholds.VSA_SHAKEOUT_DEPTH:
+                return {
+                    'detected': True,
+                    'date': latest.get('date'),
+                    'depth': round(breakdown_pct * 100, 2),
+                    'description': 'Shakeout - 剧烈震仓，深度洗盘后快速回收',
+                }
         return {'detected': False}
 
     def detect_divergence(self, window: int = 30) -> Dict:

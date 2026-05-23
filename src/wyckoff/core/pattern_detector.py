@@ -242,7 +242,7 @@ class WyckoffPatternDetector:
         return self.channel_detector.detect()
 
     def detect_joc(self, lookback: int = 90, trading_range: Optional[Dict] = None) -> Dict:
-        """检测 JOC (Jump Over Creek) 跃过小溪"""
+        """检测 JOC (Jump Over Creek) 跃过小溪 — 孟氏增强版优先，classic 作 fallback"""
         # 联动逻辑：如遇超买刺穿+放量，则抑制普通 JOC，改报趋势耗尽
         channel_res = self.detect_channels()
         ob_os = channel_res.get('overbought_oversold')
@@ -253,7 +253,18 @@ class WyckoffPatternDetector:
                 'channel_warning': ob_os['message']
             }
 
-        joc_res = self.classic_detector.detect_joc(lookback, trading_range=cast(Any, trading_range))
+        joc_res: Dict = {'detected': False}
+        try:
+            joc_res = self.meng_enhancer.detect_joc_enhanced()
+        except Exception as e:
+            logger.exception(f"孟洪涛JOC检测失败: {e}")
+
+        if not joc_res.get('detected') and not joc_res.get('joc_overload_warning'):
+            classic = self.classic_detector.detect_joc(
+                lookback, trading_range=cast(Any, trading_range)
+            )
+            if classic.get('detected'):
+                joc_res = classic
 
         # 联动“吸收”检测，增强置信度
         if joc_res.get('detected'):
@@ -369,8 +380,15 @@ class WyckoffPatternDetector:
             return phase_result
 
         from .enums import WyckoffPhase
+        identifier_phase = phase_result.get('phase', '')
         phase_result['phase'] = coord_final
         phase_result['phase_source'] = 'coordinator' if has_marker_override else 'coordinator_reconcile'
+
+        # Phase 14: coordinator 覆盖 identifier 时，清除与之矛盾的 phase_description
+        if identifier_phase != coord_final and phase_result.get('phase_description'):
+            phase_result.pop('phase_description', None)
+            if revision_log:
+                phase_result['phase_description'] = revision_log[-1]
         if 'Phase E' in coord_final or 'Markup' in coord_final:
             phase_result['phase_enum'] = WyckoffPhase.PHASE_E
         elif 'Phase D' in coord_final:
@@ -460,7 +478,8 @@ class WyckoffPatternDetector:
             return self.meng_enhancer.detect_joc_enhanced()
         except Exception as e:
             logger.exception(f"孟洪涛JOC检测失败: {e}")
-            return self.detect_joc()
+            tr = self.detect_trading_range()
+            return self.classic_detector.detect_joc(90, trading_range=cast(Any, tr))
 
     def detect_vsa_menhongtao(self) -> Dict:
         """
@@ -480,7 +499,8 @@ class WyckoffPatternDetector:
                 vsa_signals['bag_holding'] = {"detected": False}
 
             try:
-                shakeout = self.classic_detector.detect_shakeout()
+                spring_res = self.detect_spring_menhongtao()
+                shakeout = self.classic_detector.vsa.detect_shakeout(spring_result=spring_res)
                 vsa_signals['shakeout'] = shakeout
             except Exception as e:
                 logger.debug(f"Shakeout检测失败: {e}")

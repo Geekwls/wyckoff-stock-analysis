@@ -91,8 +91,10 @@ def continuous_price_confirmation(
     df: pd.DataFrame,
     days: int,
     phase_label: str = '',
+    *,
+    require_volume: bool = False,
 ) -> bool:
-    """阶段感知的连续价格确认（D→E：吸筹需连涨、派发需连跌）。"""
+    """阶段感知的连续价格确认（D→E：吸筹需连涨、派发需连跌；可选量能同向确认）。"""
     if df is None or len(df) < days + 1:
         return False
     try:
@@ -102,11 +104,39 @@ def continuous_price_confirmation(
             return False
         positive_ratio = (changes > 0).sum() / len(changes)
         negative_ratio = (changes < 0).sum() / len(changes)
+        price_ok = False
         if PhaseAdapter.is_accumulation(phase_label) or PhaseAdapter.is_markup(phase_label):
-            return positive_ratio >= 0.8 and negative_ratio <= 0.25
+            price_ok = positive_ratio >= 0.8 and negative_ratio <= 0.25
+        elif PhaseAdapter.is_distribution(phase_label) or PhaseAdapter.is_markdown(phase_label):
+            price_ok = negative_ratio >= 0.8 and positive_ratio <= 0.25
+        else:
+            price_ok = positive_ratio >= 0.8 or negative_ratio >= 0.8
+
+        if not price_ok:
+            return False
+        if not require_volume or 'Volume' not in tail.columns:
+            return True
+
+        vol = tail['Volume'].iloc[1:]
+        up_mask = changes > 0
+        down_mask = changes < 0
+        up_vol = float(vol[up_mask].mean()) if up_mask.any() else 0.0
+        down_vol = float(vol[down_mask].mean()) if down_mask.any() else 0.0
+        if PhaseAdapter.is_accumulation(phase_label) or PhaseAdapter.is_markup(phase_label):
+            if down_vol <= 0:
+                up_vols = vol[up_mask]
+                if len(up_vols) >= 2:
+                    return float(up_vols.iloc[-1]) >= float(up_vols.iloc[0]) * 0.85
+                return len(up_vols) > 0
+            return up_vol >= down_vol * 0.85
         if PhaseAdapter.is_distribution(phase_label) or PhaseAdapter.is_markdown(phase_label):
-            return negative_ratio >= 0.8 and positive_ratio <= 0.25
-        return positive_ratio >= 0.8 or negative_ratio >= 0.8
+            if up_vol <= 0:
+                down_vols = vol[down_mask]
+                if len(down_vols) >= 2:
+                    return float(down_vols.iloc[-1]) >= float(down_vols.iloc[0]) * 0.85
+                return len(down_vols) > 0
+            return down_vol >= up_vol * 0.85
+        return True
     except Exception:
         return False
 

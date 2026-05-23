@@ -208,15 +208,7 @@ class PhaseCoordinator:
         sc_res = self.detector.detect_climax_panic_selling()
         bc_res = self.detector.detect_climax_buying()
 
-        # 仲裁：如果同时检测到SC和BC（比如先暴涨后暴跌），取距离当前最近的一个作为主高潮
-        if sc_res.get('detected') and bc_res.get('detected'):
-            climax_res = sc_res if sc_res.get('date') > bc_res.get('date') else bc_res
-        elif sc_res.get('detected'):
-            climax_res = sc_res
-        elif bc_res.get('detected'):
-            climax_res = bc_res
-        else:
-            climax_res = {'detected': False}
+        climax_res = self._arbitrate_climax(sc_res, bc_res)
         ar_res = self.detector.detect_automatic_reaction(climax_res)
         st_res = self.detector.detect_secondary_test(climax_res, ar_res)
 
@@ -230,6 +222,8 @@ class PhaseCoordinator:
         upthrust_res = self.detector.detect_upthrust()
 
         boring_zone_res = self.detector.detect_boring_zone()
+        vsa_meng_res = self.detector.detect_vsa_menhongtao()
+        dead_corner_res = self.detector.detect_dead_corner_breakout()
         choch_res = self.detector.detect_choch()
 
         spring_res = _normalize_spring_event(spring_res)
@@ -343,6 +337,8 @@ class PhaseCoordinator:
             'utad': _safe_model(WyckoffEventModel, utad_res) if utad_res.get('detected') else WyckoffEventModel(detected=False),
             'choch': _safe_model(WyckoffEventModel, choch_res) if choch_res.get('detected') else WyckoffEventModel(detected=False),
             'vsa_signals': vsa_signals,
+            'vsa_menhongtao': vsa_meng_res if isinstance(vsa_meng_res, dict) else None,
+            'dead_corner_breakout': dead_corner_res if isinstance(dead_corner_res, dict) else None,
         }
 
         if spring_res.get('detected'):
@@ -563,6 +559,75 @@ class PhaseCoordinator:
             if sc_low and ar_high and ar_high > sc_low:
                 tr_detector.update_from_phase_events(ar_high, sc_low, "SC-AR")
 
+    def _arbitrate_climax(self, sc_res: Dict, bc_res: Dict) -> Dict:
+        """SC/BC 双高潮仲裁：近距时用前序趋势，否则取较近事件。"""
+        if sc_res.get('detected') and bc_res.get('detected'):
+            try:
+                sc_date = pd.Timestamp(sc_res.get('date'))
+                bc_date = pd.Timestamp(bc_res.get('date'))
+                days_apart = abs((sc_date - bc_date).days)
+                if days_apart <= 15:
+                    prior = self._detect_prior_trend()
+                    if prior == 'markdown':
+                        return sc_res
+                    if prior == 'markup':
+                        return bc_res
+                return sc_res if sc_date >= bc_date else bc_res
+            except Exception:
+                return sc_res if sc_res.get('date', '') >= bc_res.get('date', '') else bc_res
+        if sc_res.get('detected'):
+            return sc_res
+        if bc_res.get('detected'):
+            return bc_res
+        return {'detected': False}
+
+    def _days_since_event(self, events: 'EventsModel', event_names: Tuple[str, ...]) -> int:
+        """自指定事件日期起至当前的数据条数（阶段最短停留估算）。"""
+        if not hasattr(self.detector, 'data') or self.detector.data is None:
+            return 0
+        df = self.detector.data
+        for name in event_names:
+            obj = getattr(events, name, None)
+            if obj is None:
+                continue
+            detected = getattr(obj, 'detected', False) if not isinstance(obj, dict) else obj.get('detected', False)
+            if not detected:
+                continue
+            date_val = getattr(obj, 'date', None) if not isinstance(obj, dict) else obj.get('date')
+            if date_val is None:
+                latest = getattr(obj, 'latest', None) if not isinstance(obj, dict) else obj.get('latest')
+                if isinstance(latest, dict):
+                    date_val = latest.get('date')
+            if date_val is None:
+                continue
+            try:
+                return len(df[df.index >= pd.Timestamp(date_val)])
+            except Exception:
+                continue
+        return 0
+
+    def _days_since_phase_c_trigger(self, events: 'EventsModel') -> int:
+        """自 Spring/Upthrust 触发 Phase C 起计天数。"""
+        for name in ('spring', 'upthrust'):
+            days = self._days_since_event(events, (name,))
+            if days > 0:
+                return days
+        su = getattr(events, 'spring_upthrust', None)
+        if su and getattr(su, 'data', None) and getattr(su.data, 'detected', False):
+            data = su.data
+            if hasattr(data, 'latest_spring') and data.latest_spring:
+                date_val = getattr(data.latest_spring, 'date', None) or getattr(data.latest_spring, 'breakdown_date', None)
+            elif hasattr(data, 'latest_upthrust') and data.latest_upthrust:
+                date_val = getattr(data.latest_upthrust, 'date', None)
+            else:
+                date_val = None
+            if date_val and hasattr(self.detector, 'data') and self.detector.data is not None:
+                try:
+                    return len(self.detector.data[self.detector.data.index >= pd.Timestamp(date_val)])
+                except Exception:
+                    pass
+        return 0
+
     def _detect_prior_trend(self) -> str:
         """识别前序趋势 (Markup / Markdown)"""
         df = self.detector.data
@@ -603,11 +668,10 @@ class PhaseCoordinator:
         is_ar = ar_res.get('detected')
         is_st = st_res.get('detected')
 
-        # P1: 再吸筹识别 (Re-accumulation Mode)
+        # P1: 再吸筹识别 (Re-accumulation Mode) — 须 markup 趋势 + PS 或 AR 结构
         prior_trend = self._detect_prior_trend()
         if prior_trend == 'markup':
-            # 在上涨趋势中，即使没有明显的 SC，只要有回踩后的 AR 和 ST
-            if not is_sc and is_ar and is_st:
+            if not is_sc and is_ar and is_st and (is_ps or not is_bc):
                 return 'Accumulation Phase A (Re-accumulation)'
 
         # 1. 理论优先级重构：首先由初次支撑 (PS) 和初次供应 (PSY) 奠定趋势衰竭的底色与大方向
@@ -715,14 +779,14 @@ class PhaseCoordinator:
                 # 不满足强证据链的普通上冲，仅归为 Phase B 普通阻力测试，防范交易指令逻辑越位
                 return 'Distribution Phase B (Upthrust阻力测试)'
 
-        # 孟洪涛：CHoCH 是阶段转换的终极确认 (P0)
-        if choch_res and choch_res.get('detected'):
+        # CHoCH 仅作为已有 Phase A 结构的辅助确认，不可单独升 Phase A
+        if choch_res and choch_res.get('detected') and phase != 'Unknown' and 'Phase A' in phase:
             from .utils import is_bullish_choch, is_bearish_choch
             direction = choch_res.get('direction')
-            if is_bullish_choch(direction):
-                return 'Accumulation Phase A (CHoCH 确认特征变异)'
-            if is_bearish_choch(direction):
-                return 'Distribution Phase A (CHoCH 确认特征变异)'
+            if is_bullish_choch(direction) and 'Accumulation' in phase:
+                return f'{phase} (CHoCH 确认特征变异)'
+            if is_bearish_choch(direction) and 'Distribution' in phase:
+                return f'{phase} (CHoCH 确认特征变异)'
 
         # 长周期重构检查 (避免 2 年以上长跨度机械停留在 Phase A)
         if 'Phase A' in phase and hasattr(self.detector, 'data') and self.detector.data is not None and not self.detector.data.empty:
@@ -876,7 +940,8 @@ class PhaseCoordinator:
 
         # 计算震荡持续时间
         consolidation_days = self._calculate_consolidation_duration(events)
-        if consolidation_days < criteria.A_TO_B_MIN_DAYS:
+        min_a_days = max(criteria.A_TO_B_MIN_DAYS, criteria.MIN_PHASE_A_DURATION)
+        if consolidation_days < min_a_days:
             return current_phase, 0.6
 
         # 检查Phase B→C的触发信号
@@ -891,6 +956,10 @@ class PhaseCoordinator:
 
     def _transition_from_phase_b(self, current_phase: str, events: 'EventsModel', criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """从Phase B转换的逻辑"""
+        consolidation_days = self._calculate_consolidation_duration(events)
+        if consolidation_days < criteria.MIN_PHASE_B_DURATION:
+            return current_phase, 0.65
+
         # 检查Phase C触发信号
         trigger = self._check_phase_triggers(events, criteria.B_TO_C_SIGNALS)
         if trigger:
@@ -902,6 +971,10 @@ class PhaseCoordinator:
 
     def _transition_from_phase_c(self, current_phase: str, events: 'EventsModel', criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """从Phase C转换的逻辑 — Phase D 须 JOC(吸筹) 或 FTI(派发) 硬约束。"""
+        days_in_c = self._days_since_phase_c_trigger(events)
+        if days_in_c > 0 and days_in_c < criteria.MIN_PHASE_C_DURATION:
+            return current_phase, 0.65
+
         is_accumulation = 'Accumulation' in current_phase
         is_distribution = 'Distribution' in current_phase
 
@@ -916,7 +989,11 @@ class PhaseCoordinator:
 
     def _transition_from_phase_d(self, current_phase: str, events: 'EventsModel', criteria: 'PhaseTransitionCriteria') -> Tuple[str, float]:
         """从Phase D转换的逻辑"""
-        # 检查是否有连续3天的确认
+        days_in_d = self._days_since_event(events, ('joc', 'fti'))
+        if days_in_d > 0 and days_in_d < criteria.MIN_PHASE_D_DURATION:
+            return current_phase, 0.65
+
+        # 检查是否有连续3天的确认（含量能同向）
         if self._has_continuous_confirmation(criteria.D_TO_E_CONFIRMATION_DAYS, current_phase, events):
             new_phase = self._replace_phase_type(current_phase, 'Phase E')
             return new_phase, 0.9
@@ -1054,10 +1131,12 @@ class PhaseCoordinator:
         current_phase: str = '',
         events: Optional['EventsModel'] = None,
     ) -> bool:
-        """B10: 阶段感知的 D→E 连续确认（吸筹需上涨、派发需下跌）。"""
+        """B10: 阶段感知的 D→E 连续确认（吸筹需上涨、派发需下跌 + 量能同向）。"""
         from .utils import continuous_price_confirmation
         if hasattr(self.detector, 'data') and self.detector.data is not None:
-            return continuous_price_confirmation(self.detector.data, days, current_phase)
+            return continuous_price_confirmation(
+                self.detector.data, days, current_phase, require_volume=True,
+            )
         return False
 
     def _arbitrate_events(self, raw_events: Dict) -> Optional['ArbitrationResult']:

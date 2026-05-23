@@ -279,7 +279,7 @@ class PhaseIdentifier(BaseDetector):
             return self._phase_tuple(breakout_phase)
 
         # Phase C+ 决断信号须在 Phase B 之前（B3：Upthrust+SOW 无 FTI 不应被 Phase B 覆盖）
-        phase_c_plus = self._detect_phase_c_plus_signals(flags)
+        phase_c_plus = self._detect_phase_c_plus_signals(events, flags)
         if phase_c_plus:
             return self._phase_tuple(phase_c_plus)
 
@@ -347,6 +347,23 @@ class PhaseIdentifier(BaseDetector):
             'is_fti': bool(fti and getattr(fti, 'detected', False)),
         }
 
+    def _is_accumulation_joc_context(self, events: Dict, flags: Dict[str, bool]) -> bool:
+        """派发/BC/SOW 语境下向上突破不应归类为吸筹 JOC → Phase D。"""
+        climax = getattr(events, 'climax', None)
+        if climax and getattr(climax, 'detected', False):
+            if getattr(climax, 'type', None) == 'buying_climax':
+                return False
+        if flags.get('is_sow'):
+            return False
+        joc = getattr(events, 'joc', None)
+        if joc is not None:
+            if getattr(joc, 'joc_overload_warning', False):
+                return False
+            reason = getattr(joc, 'reason', None)
+            if reason in ('joc_volume_overload_buying_climax', 'suppressed_by_overbought_climax'):
+                return False
+        return True
+
     def _detect_breakout_phase_d(
         self, events: Dict, flags: Dict[str, bool]
     ) -> Optional[Tuple[str, WyckoffPhase, float]]:
@@ -355,6 +372,8 @@ class PhaseIdentifier(BaseDetector):
         须在 Phase B 主动检测之前调用（Phase 9 / B1、B3）。
         """
         if flags.get('is_joc'):
+            if not self._is_accumulation_joc_context(events, flags):
+                return None
             joc = getattr(events, 'joc', None)
             conf = 0.85
             if getattr(joc, 'test_detected', False) and getattr(joc, 'test_score', 0) >= 60:
@@ -381,7 +400,7 @@ class PhaseIdentifier(BaseDetector):
         from ..utils import continuous_price_confirmation
         if self.data is None:
             return phase_d_label, phase_enum, confidence
-        if not continuous_price_confirmation(self.data, 3, phase_d_label):
+        if not continuous_price_confirmation(self.data, 3, phase_d_label, require_volume=True):
             return phase_d_label, phase_enum, confidence
         if 'Accumulation' in phase_d_label:
             return 'Accumulation Phase E (Markup推进)', WyckoffPhase.PHASE_E, min(confidence + 0.05, 0.95)
@@ -390,13 +409,23 @@ class PhaseIdentifier(BaseDetector):
         return phase_d_label.replace('Phase D', 'Phase E'), WyckoffPhase.PHASE_E, min(confidence + 0.05, 0.95)
 
     def _detect_phase_c_plus_signals(
-        self, flags: Dict[str, bool]
+        self, events: Dict, flags: Dict[str, bool]
     ) -> Optional[Tuple[str, WyckoffPhase, float]]:
-        """Spring+SOS / Upthrust+SOW 决断性组合，突破确认前最高 Phase C+。"""
+        """Spring+SOS / Upthrust+SOW / 孤立 SOW(SOS) 决断性组合，突破确认前最高 Phase C+。"""
+        climax = getattr(events, 'climax', None)
+        climax_type = getattr(climax, 'type', None) if climax and getattr(climax, 'detected', False) else None
+
         if flags.get('is_spring') and flags.get('is_sos'):
             return 'Accumulation Phase C+ (SOS出现待JOC确认)', WyckoffPhase.PHASE_C, 0.75
         if flags.get('is_upthrust') and flags.get('is_sow'):
             return 'Distribution Phase C+ (SOW出现待FTI确认)', WyckoffPhase.PHASE_C, 0.75
+
+        # Phase 14: 孤立 SOW/SOS 对称升级 C+（须匹配派发/吸筹 climax 语境）
+        if flags.get('is_sow') and not flags.get('is_fti') and climax_type == 'buying_climax':
+            return 'Distribution Phase C+ (SOW出现待FTI确认)', WyckoffPhase.PHASE_C, 0.72
+        if flags.get('is_sos') and not flags.get('is_joc') and climax_type == 'selling_climax':
+            return 'Accumulation Phase C+ (SOS出现待JOC确认)', WyckoffPhase.PHASE_C, 0.72
+
         return None
 
     def _detect_phase_b_active(self, events: Dict) -> Optional[Tuple[str, WyckoffPhase, float, Optional[str]]]:
@@ -486,7 +515,7 @@ class PhaseIdentifier(BaseDetector):
         ar = getattr(events, 'automatic_reaction', None)
         st = getattr(events, 'secondary_test', None)
 
-        # 检查是否有基础结构（至少有 Climax + AR）
+        # 检查是否有基础结构（Climax + AR；Phase B 还须 ST 或 ≥2 次区间测试）
         has_climax = self._safe_check_detected(climax)
         has_ar = self._safe_check_detected(ar)
 
@@ -500,6 +529,9 @@ class PhaseIdentifier(BaseDetector):
         # Phase B 判定：至少有 2 次支撑测试或多次震荡
         total_tests = lps_count + ut_count
         has_st = self._safe_check_detected(st)
+
+        if not has_st and total_tests < 2:
+            return None
 
         # 新增：检查 VSA 枯竭信号
         vsa_signals = getattr(events, 'vsa_signals', None) or {}

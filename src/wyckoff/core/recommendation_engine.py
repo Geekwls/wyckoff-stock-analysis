@@ -429,6 +429,8 @@ class RecommendationEngine:
                 reasons.append("🔥 高能预警：系统已进入「死角突破」严密监控模式")
 
         dead_corner = RecommendationEngine._get_attr(events, 'dead_corner_breakout') or {}
+        if not self._get_attr(dead_corner, 'detected'):
+            dead_corner = RecommendationEngine._get_attr(events, 'dead_corner') or dead_corner
         skip_conflict_penalty = False
         if self._get_attr(dead_corner, 'detected'):
             base_score += 25
@@ -720,11 +722,12 @@ class RecommendationEngine:
                 zone = "Spring 生命周期已失效，等待新结构确认"
                 stop = StopLossModel(conservative=0.0, aggressive=0.0)
             else:
-                direction = "做多"
+                # Phase 14: 孟氏 checklist — Spring 震仓后须 JOC 突破小溪再入场
+                direction = "观望"
                 spring_low = _get_spring_low(spring)
                 if spring_low <= 0:
                     spring_low = current_price * 0.95
-                zone = f"{current_price:.2f} 附近 (Spring震仓)"
+                zone = "Spring 震仓已现，等待 JOC 突破小溪或 LPS 缩量回测确认"
                 stop = StopLossModel(
                     conservative=round(spring_low * 0.99, 2),
                     aggressive=round(spring_low * 0.995, 2),

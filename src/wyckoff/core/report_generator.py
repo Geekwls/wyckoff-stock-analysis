@@ -38,14 +38,21 @@ class WyckoffReportGenerator:
     def _prepare_analysis_context(self) -> Dict[str, Any]:
         """
         单次 identify_phase()，从 events_detected 构建报告上下文（唯一事实源）。
-        VSA / dead_corner 不在 EventsModel 内，仍单独检测一次。
+        VSA / dead_corner 已在 EventsModel 内采集，报告不再二次 detect。
         """
         phase_result = self.pattern_detector.identify_phase()
         set_cached_phase_result(self.pattern_detector, phase_result)
         ctx = SignalExtractor.build_report_context(phase_result)
 
-        ctx['vsa'] = self.pattern_detector.detect_vsa_menhongtao()
-        ctx['dead_corner'] = self.pattern_detector.detect_dead_corner_breakout()
+        events = ctx.get('events')
+        vsa = SignalExtractor.get_event_dict(events, 'vsa_menhongtao') if events else {}
+        dead_corner = SignalExtractor.get_event_dict(events, 'dead_corner_breakout') if events else {}
+        if not vsa:
+            vsa = self.pattern_detector.detect_vsa_menhongtao()
+        if not dead_corner:
+            dead_corner = self.pattern_detector.detect_dead_corner_breakout()
+        ctx['vsa'] = vsa
+        ctx['dead_corner'] = dead_corner
 
         market_idx_analyzer = getattr(self.analyzer, '_get_cached_index_analyzer', lambda: None)()
         market_df = market_idx_analyzer.data if market_idx_analyzer else None

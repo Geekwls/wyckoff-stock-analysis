@@ -10,3 +10,4 @@
 | [PHASE10_ISSUES.md](./PHASE10_ISSUES.md) | Phase 10 架构收尾与 Phase 11 进度 |
 | [REAL_STOCK_VALIDATION.md](./REAL_STOCK_VALIDATION.md) | Phase 9–12 真实股票数据验证报告 |
 | [PHASE13_FIXES.md](./PHASE13_FIXES.md) | Phase 13 审查问题修复清单 |
+| [PHASE14_OPTIMIZATIONS.md](./PHASE14_OPTIMIZATIONS.md) | Phase 14 威科夫理论优化（JOC 主链 / 阶段同步 / P2 收尾） |

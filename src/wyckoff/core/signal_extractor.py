@@ -375,6 +375,8 @@ class SignalExtractor:
             'ps': cls.get_event_dict(events, 'preliminary_support'),
             'psy': cls.get_event_dict(events, 'preliminary_supply'),
             'boring_res': cls.get_event_dict(events, 'boring_zone'),
+            'vsa_menhongtao': cls.get_event_dict(events, 'vsa_menhongtao'),
+            'dead_corner': cls.get_event_dict(events, 'dead_corner_breakout'),
             'arbitration_result': event_to_dict(cls.get_event(events, 'arbitration_result'), default=None),
             'breakout_analysis': event_to_dict(cls.get_event(events, 'breakout_analysis'), default=None),
         }

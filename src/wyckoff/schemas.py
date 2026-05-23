@@ -338,6 +338,8 @@ class EventsModel(BaseModel):
     sequence_validation: Optional[Any] = Field(default=None, description="事件序列验证")
     coordinator_final_phase: Optional[str] = Field(default=None, description="协调器证伪/仲裁后的最终阶段")
     vsa_signals: Optional[Dict[str, Any]] = Field(default=None, description="VSA 量价信号摘要")
+    vsa_menhongtao: Optional[Dict[str, Any]] = Field(default=None, description="孟氏 VSA 完整检测结果")
+    dead_corner_breakout: Optional[Dict[str, Any]] = Field(default=None, description="死角突破检测结果")
 
 
 # ============================================================

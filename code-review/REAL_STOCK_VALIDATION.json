@@ -19,8 +19,9 @@
     "fti": "-",
     "sow": "-",
     "vsa": "-",
+    "dead_corner": "-",
     "revisions": 0,
-    "trace": "Traceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/strategies/yfinance_strategy.py\", line 45, in fetch\n    data = stock.history(period=period, interval=yf_interval)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/utils.py\", line 95, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/base.py\", line 129, in history\n    return self._lazy_load_price_history().history(*args, **kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\nyfinance.exceptions.YFRateLimitError: Too Many Requests. Rate limited. Try after a while.\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/scripts/validate_real_stocks.py\", line 65, in analyze_one\n    data = az.fetch_data()\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/facade.py\", line 124, in fetch_data\n    self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)\n                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/data_fetcher.py\", line 116, in fetch_data\n    data = strategy.fetch(info.normalized, period, frequency=frequency)\nwyckoff.exceptions.DataFetchError: 获取 AAPL 数据失败: Too Many Requests. Rate limited. Try after a while.\n"
+    "trace": "Traceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/strategies/yfinance_strategy.py\", line 101, in fetch\n    data = stock.history(period=period, interval=yf_interval)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/utils.py\", line 95, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/base.py\", line 129, in history\n    return self._lazy_load_price_history().history(*args, **kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\nyfinance.exceptions.YFRateLimitError: Too Many Requests. Rate limited. Try after a while.\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/scripts/validate_real_stocks.py\", line 66, in analyze_one\n    data = az.fetch_data()\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/facade.py\", line 124, in fetch_data\n    self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)\n                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/data_fetcher.py\", line 116, in fetch_data\n    data = strategy.fetch(info.normalized, period, frequency=frequency)\nwyckoff.exceptions.DataFetchError: 获取 AAPL 数据失败: Too Many Requests. Rate limited. Try after a while.\n"
   },
   {
     "symbol": "MSFT",
@@ -42,8 +43,9 @@
     "fti": "-",
     "sow": "-",
     "vsa": "-",
+    "dead_corner": "-",
     "revisions": 0,
-    "trace": "Traceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/strategies/yfinance_strategy.py\", line 45, in fetch\n    data = stock.history(period=period, interval=yf_interval)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/utils.py\", line 95, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/base.py\", line 129, in history\n    return self._lazy_load_price_history().history(*args, **kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\nyfinance.exceptions.YFRateLimitError: Too Many Requests. Rate limited. Try after a while.\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/scripts/validate_real_stocks.py\", line 65, in analyze_one\n    data = az.fetch_data()\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/facade.py\", line 124, in fetch_data\n    self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)\n                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/data_fetcher.py\", line 116, in fetch_data\n    data = strategy.fetch(info.normalized, period, frequency=frequency)\nwyckoff.exceptions.DataFetchError: 获取 MSFT 数据失败: Too Many Requests. Rate limited. Try after a while.\n"
+    "trace": "Traceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/strategies/yfinance_strategy.py\", line 101, in fetch\n    data = stock.history(period=period, interval=yf_interval)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/utils.py\", line 95, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/base.py\", line 129, in history\n    return self._lazy_load_price_history().history(*args, **kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\nyfinance.exceptions.YFRateLimitError: Too Many Requests. Rate limited. Try after a while.\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/scripts/validate_real_stocks.py\", line 66, in analyze_one\n    data = az.fetch_data()\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/facade.py\", line 124, in fetch_data\n    self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)\n                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/data_fetcher.py\", line 116, in fetch_data\n    data = strategy.fetch(info.normalized, period, frequency=frequency)\nwyckoff.exceptions.DataFetchError: 获取 MSFT 数据失败: Too Many Requests. Rate limited. Try after a while.\n"
   },
   {
     "symbol": "NVDA",
@@ -65,8 +67,9 @@
     "fti": "-",
     "sow": "-",
     "vsa": "-",
+    "dead_corner": "-",
     "revisions": 0,
-    "trace": "Traceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/strategies/yfinance_strategy.py\", line 45, in fetch\n    data = stock.history(period=period, interval=yf_interval)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/utils.py\", line 95, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/base.py\", line 129, in history\n    return self._lazy_load_price_history().history(*args, **kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\nyfinance.exceptions.YFRateLimitError: Too Many Requests. Rate limited. Try after a while.\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/scripts/validate_real_stocks.py\", line 65, in analyze_one\n    data = az.fetch_data()\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/facade.py\", line 124, in fetch_data\n    self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)\n                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/data_fetcher.py\", line 116, in fetch_data\n    data = strategy.fetch(info.normalized, period, frequency=frequency)\nwyckoff.exceptions.DataFetchError: 获取 NVDA 数据失败: Too Many Requests. Rate limited. Try after a while.\n"
+    "trace": "Traceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/strategies/yfinance_strategy.py\", line 101, in fetch\n    data = stock.history(period=period, interval=yf_interval)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/utils.py\", line 95, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/base.py\", line 129, in history\n    return self._lazy_load_price_history().history(*args, **kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\nyfinance.exceptions.YFRateLimitError: Too Many Requests. Rate limited. Try after a while.\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/scripts/validate_real_stocks.py\", line 66, in analyze_one\n    data = az.fetch_data()\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/facade.py\", line 124, in fetch_data\n    self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)\n                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/data_fetcher.py\", line 116, in fetch_data\n    data = strategy.fetch(info.normalized, period, frequency=frequency)\nwyckoff.exceptions.DataFetchError: 获取 NVDA 数据失败: Too Many Requests. Rate limited. Try after a while.\n"
   },
   {
     "symbol": "sh.600519",
@@ -77,17 +80,18 @@
     "phase": "Distribution Phase A",
     "confidence": 0.8,
     "coordinator_phase": "Distribution Phase A",
-    "identifier_phase": "Distribution Phase B (派发区震荡测试)",
-    "phase_description": "[经典威科夫派发特征确认] 筹码派发特征明显：波幅在整理期间显著收敛了 23%，且下跌波段的累积派发努力压倒上涨波段达 216%。",
+    "identifier_phase": "Distribution Phase C+ (SOW出现待FTI确认)",
+    "phase_description": null,
     "phase_source": "coordinator_reconcile",
     "direction": "观望",
     "action": null,
     "spring": "-",
-    "joc": "-",
+    "joc": "Y",
     "sos": "-",
     "fti": "-",
     "sow": "Y",
-    "vsa": "-",
+    "vsa": "Y",
+    "dead_corner": "-",
     "revisions": 1
   },
   {
@@ -100,16 +104,17 @@
     "confidence": 0.8,
     "coordinator_phase": "Accumulation Phase C",
     "identifier_phase": "Accumulation Phase C+ (LPS出现待JOC确认)",
-    "phase_description": "[警告] 非筹码派发性宽幅震荡整理 (波幅收敛比: 0.85)，置信度降至 0.50。",
+    "phase_description": "[Phase Transition] Accumulation Phase A → Accumulation Phase C (置信度:85%)",
     "phase_source": "coordinator",
-    "direction": "做多",
+    "direction": "观望",
     "action": null,
     "spring": "Y",
     "joc": "-",
     "sos": "-",
     "fti": "-",
     "sow": "-",
-    "vsa": "-",
+    "vsa": "Y",
+    "dead_corner": "-",
     "revisions": 1
   },
   {
@@ -132,7 +137,8 @@
     "fti": "-",
     "sow": "-",
     "vsa": "-",
+    "dead_corner": "-",
     "revisions": 0,
-    "trace": "Traceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/strategies/yfinance_strategy.py\", line 45, in fetch\n    data = stock.history(period=period, interval=yf_interval)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/utils.py\", line 95, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/base.py\", line 129, in history\n    return self._lazy_load_price_history().history(*args, **kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\nyfinance.exceptions.YFRateLimitError: Too Many Requests. Rate limited. Try after a while.\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/scripts/validate_real_stocks.py\", line 65, in analyze_one\n    data = az.fetch_data()\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/facade.py\", line 124, in fetch_data\n    self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)\n                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/data_fetcher.py\", line 116, in fetch_data\n    data = strategy.fetch(info.normalized, period, frequency=frequency)\nwyckoff.exceptions.DataFetchError: 获取 0700.HK 数据失败: Too Many Requests. Rate limited. Try after a while.\n"
+    "trace": "Traceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/strategies/yfinance_strategy.py\", line 101, in fetch\n    data = stock.history(period=period, interval=yf_interval)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/utils.py\", line 95, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/.venv/lib/python3.14/site-packages/yfinance/base.py\", line 129, in history\n    return self._lazy_load_price_history().history(*args, **kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\nyfinance.exceptions.YFRateLimitError: Too Many Requests. Rate limited. Try after a while.\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/scripts/validate_real_stocks.py\", line 66, in analyze_one\n    data = az.fetch_data()\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/facade.py\", line 124, in fetch_data\n    self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)\n                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andyzhang/Code/github/wyckoff-stock-analysis/src/wyckoff/core/data_fetcher.py\", line 116, in fetch_data\n    data = strategy.fetch(info.normalized, period, frequency=frequency)\nwyckoff.exceptions.DataFetchError: 获取 0700.HK 数据失败: Too Many Requests. Rate limited. Try after a while.\n"
   }
 ]
