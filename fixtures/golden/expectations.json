@@ -1,0 +1,33 @@
+{
+  "version": "phase28",
+  "description": "Golden stock expectations for offline regression (--golden-validate). Scores allow ±15 tolerance.",
+  "score_tolerance": 15,
+  "samples": [
+    {
+      "symbol": "sh.600519",
+      "market": "A股茅台",
+      "expect": {
+        "ok": true,
+        "phase_contains": "Distribution",
+        "direction": "观望",
+        "spring": "-",
+        "lps": "-",
+        "score_max": 60,
+        "score_min": 30
+      }
+    },
+    {
+      "symbol": "sz.000001",
+      "market": "A股平安",
+      "expect": {
+        "ok": true,
+        "phase_contains": "Phase B",
+        "direction": "观望",
+        "spring": "Y",
+        "lps": "-",
+        "score_max": 60,
+        "score_min": 30
+      }
+    }
+  ]
+}

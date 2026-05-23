@@ -762,28 +762,36 @@ class StrengthWeaknessDetector(BaseDetector):
             'sc_detected': False,
             'ar_detected': False,
             'st_detected': False,
+            'ps_detected': False,
             'structure_complete': False,
             'missing_events': []
         }
 
         if is_accumulation and phase_a_events:
-            # 只有在吸筹阶段才验证Phase A结构
+            from ..utils import PhaseAdapter
+            pa_view = {
+                'preliminary_support': phase_a_events.get('ps'),
+                'preliminary_supply': phase_a_events.get('psy'),
+                'climax': phase_a_events.get('climax'),
+                'automatic_reaction': phase_a_events.get('ar'),
+                'secondary_test': phase_a_events.get('st'),
+            }
+            climax = phase_a_events.get('climax') or {}
+            phase_a_validation['ps_detected'] = (phase_a_events.get('ps') or {}).get('detected', False)
             phase_a_validation['sc_detected'] = (
-                phase_a_events.get('climax', {}).get('type') == 'selling_climax' and
-                phase_a_events.get('climax', {}).get('detected', False)
+                climax.get('type') == 'selling_climax' and climax.get('detected', False)
             )
-            phase_a_validation['ar_detected'] = phase_a_events.get('ar', {}).get('detected', False)
-            phase_a_validation['st_detected'] = phase_a_events.get('st', {}).get('detected', False)
+            phase_a_validation['ar_detected'] = (phase_a_events.get('ar') or {}).get('detected', False)
+            phase_a_validation['st_detected'] = (phase_a_events.get('st') or {}).get('detected', False)
 
-            has_complete_phase_a_structure = (
-                phase_a_validation['sc_detected'] and
-                phase_a_validation['ar_detected'] and
-                phase_a_validation['st_detected']
-            )
+            has_complete_phase_a_structure = PhaseAdapter.is_phase_a_structure_complete(pa_view)
             phase_a_validation['structure_complete'] = has_complete_phase_a_structure
 
-            # 记录缺失的事件
-            if not phase_a_validation['sc_detected']:
+            if phase_a_validation['sc_detected'] and not phase_a_validation['ps_detected']:
+                phase_a_validation['missing_events'].append('PS（初次支撑）')
+            if not phase_a_validation['sc_detected'] and not (
+                phase_a_validation['ar_detected'] and phase_a_validation['st_detected']
+            ):
                 phase_a_validation['missing_events'].append('SC（恐慌抛售）')
             if not phase_a_validation['ar_detected']:
                 phase_a_validation['missing_events'].append('AR（自然反弹）')
@@ -798,7 +806,6 @@ class StrengthWeaknessDetector(BaseDetector):
         for i in range(5, len(df)):
             current = df.iloc[i]
 
-            is_pullback = (current['Low'] < df.iloc[i-5:i]['High'].max()) and (current['Close'] > df['MA20'].iloc[i])
             low_volume = current['Volume'] < vol_ma.iloc[i] * self.thresholds.VOLUME_CONFIRMATION['weak']
             higher_low = current['Low'] > df.iloc[i-20:i-5]['Low'].min()
 
@@ -828,6 +835,15 @@ class StrengthWeaknessDetector(BaseDetector):
                 near_lps_anchor = bool(matches)
                 if matches:
                     _, matched_anchor_label, matched_anchor_value, matched_anchor_deviation = min(matches, key=lambda item: item[0])
+
+            # B11: 有 Creek/SOS 锚点时，允许 Close 在 MA20 下方但贴近锚点
+            is_pullback_shape = current['Low'] < df.iloc[i-5:i]['High'].max()
+            close_above_ma20 = current['Close'] > df['MA20'].iloc[i]
+            close_near_creek = (
+                matched_anchor_value is not None
+                and current['Close'] >= matched_anchor_value * 0.97
+            )
+            is_pullback = is_pullback_shape and (close_above_ma20 or close_near_creek)
 
             # 新增：VCP 波动率收缩验证 (P0)
             vcp_detected = False
@@ -966,10 +982,13 @@ class StrengthWeaknessDetector(BaseDetector):
             except Exception as _ww_err:
                 logger.debug(f"[Wave4] Weis Wave LPS 校验失败 (non-critical): {_ww_err}")
 
+            formal_signals = [s for s in lps_signals if s.get('signal_type') == 'lps']
             return {
-                'detected': True,
+                'detected': bool(formal_signals),
+                'observation_detected': True,
                 'signals': lps_signals,
                 'latest': lps_signals[-1],
+                'latest_formal': formal_signals[-1] if formal_signals else None,
                 'spring_low': spring_low,
                 'tr_support': tr_support,
                 'anchor_candidates': [
@@ -980,11 +999,7 @@ class StrengthWeaknessDetector(BaseDetector):
                     'phase': self._current_phase or 'unknown',
                     'is_accumulation': is_accumulation,
                     'has_breakout_context': bool(breakout_dates),
-                    'has_lps_qualification': (
-                        is_accumulation and
-                        has_complete_phase_a_structure and
-                        bool(breakout_dates)
-                    ),
+                    'has_lps_qualification': bool(formal_signals),
                     'note': ('当前阶段不是标准Accumulation，'
                              '信号已按阶段上下文重新定性为"缩量回踩"而非正式LPS'
                              if not is_accumulation else None),
@@ -994,16 +1009,24 @@ class StrengthWeaknessDetector(BaseDetector):
         return {'detected': False}
 
 
-    def detect_lpsy(self, window: int = 30, trading_range: Optional[Dict] = None) -> Dict:
+    def detect_lpsy(
+        self,
+        window: int = 30,
+        trading_range: Optional[Dict] = None,
+        fti_result: Optional[Dict] = None,
+        sow_result: Optional[Dict] = None,
+    ) -> Dict:
         """
         检测 LPSY (Last Point of Supply)
 
-        威科夫严格定义：价格跌破关键支撑后，出现的缩量无力反弹。
-        若支撑未被跌破，信号归类为"weak_reaction"而非 LPSY。
+        威科夫严格定义：Ice/FTI 跌破后的缩量无力反弹。
+        B7: 阻力锚定 Ice 层，且需 FTI 或 SOW 前置确认。
 
         Args:
             window: 检测窗口
             trading_range: 当前交易区间（需包含 'low' 支撑位）
+            fti_result: FTI 检测结果（提供 ice_level）
+            sow_result: SOW 检测结果（FTI 缺失时的替代确认）
         """
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
@@ -1017,18 +1040,40 @@ class StrengthWeaknessDetector(BaseDetector):
         if trading_range and 'low' in trading_range:
             tr_support = trading_range['low']
 
+        # B7: Ice 层作为 LPSY 阻力锚点
+        ice_level = None
+        fti_confirmed = False
+        if fti_result and self._get_event_field(fti_result, 'detected'):
+            fti_detail = self._latest_event_detail(fti_result)
+            ice_level = self._numeric_value(
+                self._get_event_field(fti_detail, 'ice_level') or
+                self._get_event_field(fti_result, 'ice_level')
+            )
+            fti_confirmed = bool(
+                self._get_event_field(fti_detail, 'test_detected') or
+                self._get_event_field(fti_result, 'test_detected')
+            )
+
+        has_fti_context = fti_confirmed or (
+            sow_result and self._get_event_field(sow_result, 'detected')
+        )
+
         # 检查支撑是否已被有效跌破（仅检查窗口近半段，避免引用BC前历史低点）
         support_broken = False
         if tr_support is not None:
             recent_half = df.tail(max(len(df) // 2, 5))
             support_broken = recent_half['Low'].min() < tr_support
+        if ice_level and ice_level > 0:
+            recent_half = df.tail(max(len(df) // 2, 5))
+            support_broken = support_broken or recent_half['Close'].max() < ice_level * 0.99
 
         signals = []
         weak_reactions = []
         for i in range(5, len(df)):
             current = df.iloc[i]
 
-            is_rebound = (current['High'] > df.iloc[i-5:i]['Low'].min()) and (current['Close'] < df['MA20'].iloc[i])
+            resistance = ice_level if ice_level and ice_level > 0 else df['MA20'].iloc[i]
+            is_rebound = (current['High'] > df.iloc[i-5:i]['Low'].min()) and (current['Close'] < resistance)
             low_volume = current['Volume'] < vol_ma.iloc[i] * self.thresholds.VOLUME_CONFIRMATION['weak']
             lower_high = current['High'] < df.iloc[i-20:i-5]['High'].max()
 
@@ -1059,11 +1104,16 @@ class StrengthWeaknessDetector(BaseDetector):
                     'price': current['Close'],
                     'volume': float(current['Volume']),
                     'volume_ratio': round(current['Volume'] / vol_ma.iloc[i], 2),
-                    'resistance_level': df['MA20'].iloc[i],
+                    'resistance_level': resistance,
+                    'ice_level': ice_level,
                     'vcp_detected': bool(vcp_detected),
                     'confidence_score': 'HIGH' if vcp_detected else 'MEDIUM'
                 }
-                if tr_support is not None and not support_broken:
+                if not has_fti_context:
+                    signal['signal_type'] = 'weak_reaction'
+                    signal['note'] = '缺少 FTI/SOW 前置确认，此为弱势反抽，非严格 LPSY'
+                    weak_reactions.append(signal)
+                elif tr_support is not None and not support_broken:
                     signal['signal_type'] = 'weak_reaction'
                     signal['note'] = f'支撑 {tr_support:.2f} 未被跌破，此为TR内弱势反抽，非严格LPSY'
                     weak_reactions.append(signal)
@@ -1071,7 +1121,7 @@ class StrengthWeaknessDetector(BaseDetector):
                     signal['signal_type'] = 'lpsy'
                     signals.append(signal)
 
-        result: Dict[str, Any] = {'detected': bool(signals or weak_reactions)}
+        result: Dict[str, Any] = {'detected': bool(signals)}
         if signals:
             result['signals'] = signals
             result['latest'] = signals[-1]
@@ -1081,58 +1131,15 @@ class StrengthWeaknessDetector(BaseDetector):
         if tr_support is not None:
             result['support_level'] = tr_support
             result['support_broken'] = support_broken
+        if ice_level is not None:
+            result['ice_level'] = ice_level
+            result['fti_confirmed'] = fti_confirmed
         return result
 
     def detect_choch(self) -> Dict:
-        """
-        特征变异 (Change of Character, CHoCH) 检测
-
-        理论依据：趋势中出现的第一个显著的反向波段，其强度远超前序波段，标志着供求秩序的改变。
-
-        Returns:
-            {
-                'detected': bool,
-                'direction': 'up' | 'down',
-                'thrust_ratio': float,
-                'volume_ratio': float,
-                'description': str
-            }
-        """
-        from ..weis_wave import WeisWaveGenerator
-        if self.data is None or len(self.data) < 40:
-            return {'detected': False}
-
-        generator = WeisWaveGenerator(self.data)
-        waves = generator.generate()
-        if len(waves) < 4:
-            return {'detected': False}
-
-        last_wave = waves[-1]
-        # 找到前序同方向的波段进行对比
-        prev_same_dir = [w for w in waves[:-1] if w.direction == last_wave.direction]
-        if len(prev_same_dir) < 2:
-            return {'detected': False}
-
-        avg_thrust = np.mean([w.thrust for w in prev_same_dir[-3:]])
-        avg_vol = np.mean([w.volume for w in prev_same_dir[-3:]])
-
-        # CHoCH 判定标准：推力或成交量显著超过均值（1.5倍以上）
-        thrust_ratio = last_wave.thrust / avg_thrust if avg_thrust > 0 else 1.0
-        volume_ratio = last_wave.volume / avg_vol if avg_vol > 0 else 1.0
-
-        is_choch = (thrust_ratio > 1.8) or (volume_ratio > 2.0 and thrust_ratio > 1.2)
-
-        if is_choch:
-            dir_str = "上涨" if last_wave.direction == 'up' else "下跌"
-            return {
-                'detected': True,
-                'direction': last_wave.direction,
-                'thrust_ratio': round(thrust_ratio, 2),
-                'volume_ratio': round(volume_ratio, 2),
-                'date': last_wave.end_idx,
-                'description': f"检测到{dir_str}特征变异(CHoCH)! 波段推力是前序均值的{thrust_ratio:.1f}倍，标志着供求关系发生根本性变化。"
-            }
-        return {'detected': False}
+        """特征变异 (CHoCH) — 委托 Weis Wave 统一实现。"""
+        from ..utils import detect_choch_weis
+        return detect_choch_weis(self.data)
 
     def detect_sos_variants(self) -> Dict:
         return self._detect_variants(is_bullish=True)

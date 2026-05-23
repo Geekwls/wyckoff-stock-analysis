@@ -58,7 +58,7 @@ class TradingRangeDetector(BaseDetector):
             high = self._phase_high
             low = self._phase_low
             method = "phase_events"
-            return self._build_result(high, low, method)
+            return self._build_result(high, low, method, window=window)
 
         # ---------- 摆动点检测 ----------
         swing_highs = _swing_levels(self.data['High'], kind='high', window=3)
@@ -84,9 +84,9 @@ class TradingRangeDetector(BaseDetector):
             low = recent['Low'].min()
             method = "mechanical"
 
-        return self._build_result(high, low, method)
+        return self._build_result(high, low, method, window=window)
 
-    def _build_result(self, high: float, low: float, method: str) -> Dict:
+    def _build_result(self, high: float, low: float, method: str, window: int = 60) -> Dict:
         range_pct = (high - low) / low if low > 0 else 0
 
         # 使用 ATR 动态计算合理振幅阈值
@@ -123,15 +123,14 @@ class TradingRangeDetector(BaseDetector):
         current_price = self.data['Close'].iloc[-1]
         position = (current_price - low) / (high - low) if high > low else 0.5
 
-        # 检测 TR 是否已被价格突破而失效 (P2 #2.2)
-        # 威科夫理论：有效 TR 的前提是价格停留在区间内。
+        # 检测价格是否已离开 TR；突破本身不等于旧结构失效。
         # 但 TR 高/低位数据仍然有用（为 JOC 回测、LPS/LPSY 支撑提供参考基准）
         breakout_margin = atr_pct * 2.0 if atr_pct else 0.05
         above_range = current_price > high * (1 + breakout_margin)
         below_range = current_price < low * (1 - breakout_margin)
         is_broken = above_range or below_range
         
-        #  修复：TR 失效时保留 high/low 数据，仅标记状态变化
+        #  修复：TR 被突破时保留 high/low 数据，仅标记状态变化
         # 孟洪涛书中强调：TR 突破后其边界仍是 JOC 回测 / FTI 反抽的重要参考位
         if is_broken:
             method = f"{method} (BROKEN)"
@@ -139,6 +138,12 @@ class TradingRangeDetector(BaseDetector):
             # 但增加 broken 标记让调用方知道 TR 已失效
         
         breakout_direction = "up" if above_range else ("down" if below_range else None)
+        recent_low = float(recent['Low'].min()) if not recent.empty else current_price
+        recent_high = float(recent['High'].max()) if not recent.empty else current_price
+        invalidated_tr = (
+            (low > 0 and recent_low < low and current_price >= low * 1.03)
+            or (high > 0 and recent_high > high and current_price <= high * 0.97)
+        )
 
         # 质量评分：支撑/阻力被测试次数 + 区间宽度合理性
         support_tests = int((self.data['Low'] <= low * 1.03).sum())
@@ -199,15 +204,23 @@ class TradingRangeDetector(BaseDetector):
                 absorption_detected = True
                 absorption_score += 1.0  # 放量吸收信号强烈
 
+        duration = min(window, len(self.data))
+        # 记录 TR 窗口起点，供 BreakoutAnalyzer / P&F 只在当前区间之后搜索突破与计数
+        range_start_idx = max(0, len(self.data) - duration)
+        range_start_date = self.data.index[range_start_idx]
+
         return {
             'is_consolidation': is_consolidation,
             'is_broken': is_broken,
+            'invalidated_tr': invalidated_tr,
             'breakout_direction': breakout_direction,
             'high': high,
             'low': low,
             'range_pct': range_pct,
-            'duration_days': 60,
-            'consolidation_duration_days': 60,
+            'duration_days': duration,
+            'consolidation_duration_days': duration,
+            'range_start_idx': int(range_start_idx),
+            'range_start_date': range_start_date,
             'volume_trend': vol_trend,
             'position': position,
             'current_price': current_price,

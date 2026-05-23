@@ -25,10 +25,25 @@ JOC_MIN_VOLUME_RATIO = 1.5          # JOC最小量比
 JOC_MIN_CLOSE_POSITION = 0.75       # JOC最低收盘位置
 SOT_VOLUME_THRESHOLD = 1.3          # SOT量比阈值
 SOT_BODY_RATIO_THRESHOLD = 0.3      # SOT实体占比阈值
-# 威科夫理论标准：Spring必须在1-3天内收回支撑位
-# 失败Spring：价格3+天未收回 → 真下跌开始
-MAX_RECOVERY_DAYS_STANDARD = 3      # 统一标准：3天（所有波动率体制）
+# 威科夫经典标准：低波动 Spring 须在 1–3 天内收回支撑位
+# 孟氏扩展：中等/高波动允许至 4–5 天 — 见 spring_max_recovery_days()
+MAX_RECOVERY_DAYS_STANDARD = 3      # 低波动基准（classic Wyckoff）
 MIN_RECOVERY_DAYS_STANDARD = 1      # 最小收回天数
+
+
+def spring_max_recovery_days(atr_pct: float) -> int:
+    """
+    Spring 收回窗口（单一事实源，孟氏动态 + 经典低波动对齐）。
+
+    - 低波动 (ATR% < 1.5): 3 天（经典威科夫）
+    - 中等波动: 4 天
+    - 高波动: 5 天
+    """
+    if atr_pct < 1.5:
+        return MAX_RECOVERY_DAYS_STANDARD
+    if atr_pct < 3.0:
+        return 4
+    return 5
 
 
 @dataclass(frozen=True)

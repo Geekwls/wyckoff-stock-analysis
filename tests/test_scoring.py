@@ -1,9 +1,10 @@
 import pytest
+import json
 import pandas as pd
 import numpy as np
-from src.wyckoff.core.report_generator import WyckoffReportGenerator
-from src.wyckoff.config.settings import ScoringConfig, PositionSizingConfig, WyckoffConfig
-from src.wyckoff.core.enums import MarketEnvironment, MarketSide
+from wyckoff.core.report_generator import WyckoffReportGenerator
+from wyckoff.config.settings import ScoringConfig, PositionSizingConfig, WyckoffConfig
+from wyckoff.core.enums import MarketEnvironment, MarketSide
 from datetime import datetime
 
 class MockAnalyzer:
@@ -184,14 +185,25 @@ def test_signal_conflict_detection():
         'position': 0.5, 'volume_trend': 'neutral'
     }
     
-    # Mock _collect_all_events to return events with enough signals for quality score
-    generator.pattern_detector._collect_all_events = lambda: {
+    # Mock identify_phase with events_detected (报告唯一事实源)
+    generator.pattern_detector.identify_phase = lambda: {
+        'phase': 'Accumulation Phase D',
+        'confidence': 0.8,
         'events_detected': {
             'joc': {'detected': True, 'volume_ratio': 2.0, 'confidence': 0.9, 'date': datetime.now()},
-            'upthrust': {'detected': True, 'volume_ratio': 1.5, 'confidence': 0.8, 'date': datetime.now()}
+            'upthrust': {'detected': True, 'volume_ratio': 1.5, 'confidence': 0.8, 'date': datetime.now()},
+            'spring': {'detected': False},
+            'sos': {'detected': False},
+            'sow': {'detected': False},
+            'lps': {'detected': False},
+            'lpsy': {'detected': False},
+            'fti': {'detected': False},
+            'trading_range': {
+                'is_consolidation': True, 'low': 100, 'high': 110,
+                'range_pct': 0.1, 'position': 0.5, 'volume_trend': 'neutral',
+            },
         },
-        'phase': 'Accumulation Phase D',
-        'sequence_validation': {'score': {'rating': 'B'}}
+        'sequence_validation': {'score': {'rating': 'B'}},
     }
     
     # Mock cross-timeframe conflict to not gate signal conflict detection
@@ -228,26 +240,35 @@ def test_threshold_gating_low_score():
     assert "观望等待（信号质量不足）" in report
     assert "信号强度或可靠性低于执行阈值" in report
 
+def test_generate_json_signal_quality_is_structured():
+    data = create_mock_data([100.0, 101.0], [1000, 1100], vol_ma20=1000)
+    analyzer = MockAnalyzer(data)
+    generator = WyckoffReportGenerator(analyzer)
+
+    payload = json.loads(generator.generate_json())
+
+    assert isinstance(payload["signal_quality"], dict)
+    assert "score" in payload["signal_quality"]
+    assert "reasons" in payload["signal_quality"]
+
 def test_market_aware_direction_a_stock():
-    from src.wyckoff.core.trading_plan_generator import TradingPlanGenerator
+    from wyckoff.core.trading_plan_generator import TradingPlanGenerator
     data = create_mock_data([100.0, 100.0], [1000, 1000])
     # detect_trading_range in generator is called without args, but my mock might be receiving self.
     pattern_detector = type('obj', (object,), {'detect_trading_range': lambda self: {}})()
     generator = TradingPlanGenerator(data, pattern_detector)
     
-    # Bearish case for A-stock
+    # Phase 26：派发 Phase E 无 FTI+LPSY 第五步确认 → 观望
     plan = generator.generate(phase_str="Distribution Phase E", is_a_stock=True)
-    assert plan['direction'] == "减仓/对冲"
-    assert "A股无法直接做空" in plan['market_constraint']
-    
-    # Bearish case for Non-A-stock
+    assert plan['direction'] == "观望"
+    assert "FTI+LPSY" in plan.get('dynamic_warning', '')
+
     plan = generator.generate(phase_str="Distribution Phase E", is_a_stock=False)
-    assert plan['direction'] == "做空"
-    assert plan.get('market_constraint') is None
+    assert plan['direction'] == "观望"
 
 def test_early_distribution_intercept():
-    from src.wyckoff.core.recommendation_engine import RecommendationEngine
-    from src.wyckoff.schemas import SignalQualityModel, TradingPlanModel
+    from wyckoff.core.recommendation_engine import RecommendationEngine
+    from wyckoff.schemas import SignalQualityModel, TradingPlanModel
     import pandas as pd
 
     engine = RecommendationEngine()

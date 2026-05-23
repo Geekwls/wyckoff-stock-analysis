@@ -18,6 +18,8 @@ class BaseDetector(ABC):
         self._current_phase = ""
         #  P1-1修复：存储Phase A事件检测结果，供LPS等信号验证前置结构
         self._phase_a_events = {}
+        self._structural_support: Optional[float] = None
+        self._structural_resistance: Optional[float] = None
         #  v1.2新增：信号有效期配置（天数）
         self._signal_decay_days = 60  # 默认信号有效期60天
         self._indicator_cache = indicator_cache
@@ -55,6 +57,39 @@ class BaseDetector(ABC):
     def get_phase_a_events(self) -> dict:
         """获取Phase A事件检测结果"""
         return self._phase_a_events
+
+    def set_structural_levels(
+        self,
+        support: Optional[float] = None,
+        resistance: Optional[float] = None,
+    ) -> None:
+        """设置 TR/SC/BC 结构价位，供 Spring/Upthrust 锚定。"""
+        if support is not None and support > 0:
+            self._structural_support = float(support)
+        if resistance is not None and resistance > 0:
+            self._structural_resistance = float(resistance)
+
+    def _resolve_structural_support(self) -> Optional[float]:
+        if self._structural_support and self._structural_support > 0:
+            return self._structural_support
+        phase_a = self.get_phase_a_events()
+        climax = phase_a.get('climax') if phase_a else None
+        if isinstance(climax, dict) and climax.get('detected') and climax.get('type') == 'selling_climax':
+            price = climax.get('price')
+            if price and price > 0:
+                return float(price)
+        return None
+
+    def _resolve_structural_resistance(self) -> Optional[float]:
+        if self._structural_resistance and self._structural_resistance > 0:
+            return self._structural_resistance
+        phase_a = self.get_phase_a_events()
+        climax = phase_a.get('climax') if phase_a else None
+        if isinstance(climax, dict) and climax.get('detected') and climax.get('type') == 'buying_climax':
+            price = climax.get('price')
+            if price and price > 0:
+                return float(price)
+        return None
 
     def _get_reference_now(self) -> pd.Timestamp:
         """获取当前分析的基准时间（优先使用数据最新索引，其次使用当前物理时间）"""

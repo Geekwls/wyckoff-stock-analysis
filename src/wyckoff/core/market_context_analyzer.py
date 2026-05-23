@@ -102,7 +102,12 @@ class MarketContextAnalyzer:
         仅在批量扫描或明确要求时启用
         """
         # 单股分析默认跳过市场广度
-        return {"status": "SKIPPED", "reason": "单股分析默认跳过（耗时较长）"}
+        return {
+            "status": "SKIPPED",
+            "enabled": False,
+            "reason": "单股分析默认跳过（耗时较长）",
+            "note": "广度维度未参与环境修正",
+        }
 
     def _get_pf_targets(self) -> Dict:
         """计算大盘 P&F 目标 (P2)"""
@@ -206,7 +211,12 @@ class MarketContextAnalyzer:
         
         interp = evr_info.get('interpretation')
         vol_ratio = evr_info.get('vol_ratio', 1.0)
-        breadth_align = breadth_info.get('alignment')
+        # 广度数据未启用或 SKIPPED 时不参与环境修正，避免「无数据却当背离」
+        breadth_active = (
+            breadth_info.get('enabled', True)
+            and breadth_info.get('status') != 'SKIPPED'
+        )
+        breadth_align = breadth_info.get('alignment') if breadth_active else None
         
         # 1. 多头环境修正
         if base_env == MarketEnvironment.STRONG_BULL:

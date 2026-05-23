@@ -5,16 +5,16 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from src.wyckoff.core.pattern_detector import WyckoffPatternDetector
-from src.wyckoff.core.detectors.reversal_detector import ReversalDetector
-from src.wyckoff.core.detectors.meng_trend_detector import MengTrendDetector
-from src.wyckoff.core.detectors.trend_detector import TrendDetector
-from src.wyckoff.core.recommendation_engine import RecommendationEngine
-from src.wyckoff.core.phase_coordinator import PhaseCoordinator
-from src.wyckoff.core.point_and_figure import PointAndFigureCalculator
-from src.wyckoff.core.laws.effort_result import EffortResultMixin
-from src.wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
-from src.wyckoff.schemas import SignalQualityModel, PositionSizingModel, StopLossModel
+from wyckoff.core.pattern_detector import WyckoffPatternDetector
+from wyckoff.core.detectors.reversal_detector import ReversalDetector
+from wyckoff.core.detectors.meng_trend_detector import MengTrendDetector
+from wyckoff.core.detectors.trend_detector import TrendDetector
+from wyckoff.core.recommendation_engine import RecommendationEngine
+from wyckoff.core.phase_coordinator import PhaseCoordinator
+from wyckoff.core.point_and_figure import PointAndFigureCalculator
+from wyckoff.core.laws.effort_result import EffortResultMixin
+from wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
+from wyckoff.schemas import SignalQualityModel, PositionSizingModel, StopLossModel
 
 
 def test_spring_type_1_and_st_confirmation():
@@ -84,7 +84,7 @@ def test_spring_type_1_and_st_confirmation():
     
     plan = engine.generate_trading_plan(rec_data, pattern_results, {})
     assert plan.direction == "观望"
-    assert plan.entry_zone == "等待低点高于 Spring 且缩量的二次测试确认"
+    assert plan.entry_zone == "Spring 震仓已现，等待 JOC 突破小溪或 LPS 缩量回测确认"
     assert plan.position_sizing.conservative == "0%"
 
 
@@ -108,8 +108,8 @@ def test_adaptive_weis_wave_window(monkeypatch):
     
     # 模拟 WeisWave 缺失以强制触发降级 Fallback 模式
     try:
-        from src.wyckoff.core.weis_wave import WeisWaveGenerator
-        monkeypatch.setattr("src.wyckoff.core.weis_wave.WeisWaveGenerator", lambda *args, **kwargs: 1/0)
+        from wyckoff.core.weis_wave import WeisWaveGenerator
+        monkeypatch.setattr("wyckoff.core.weis_wave.WeisWaveGenerator", lambda *args, **kwargs: 1/0)
     except Exception:
         pass
         
@@ -137,7 +137,7 @@ def test_adaptive_weis_wave_window(monkeypatch):
 
 
 def test_redistribution_phase_override_and_long_blocking(monkeypatch):
-    from src.wyckoff.core.phase_coordinator import PhaseCoordinator
+    from wyckoff.core.phase_coordinator import PhaseCoordinator
     
     class MockDetector:
         def __init__(self):
@@ -509,7 +509,7 @@ def test_joc_rolling_sloped_creek_no_lookahead():
 
 
 def test_phase_b_quantitative_absorption_scoring():
-    from src.wyckoff.core.detectors.phase_identifier import PhaseIdentifier
+    from wyckoff.core.detectors.phase_identifier import PhaseIdentifier
     
     config = WyckoffConfig()
     thresholds = WyckoffThresholds()
@@ -567,6 +567,7 @@ def test_phase_b_quantitative_absorption_scoring():
             self.secondary_test = MockEvent(detected=True, date=dates[15])
             self.lps_list = [MockEvent(detected=True), MockEvent(detected=True)]
             self.ut_list = []
+            self.fti = MockEvent(detected=False)
 
     class MockEvent:
         def __init__(self, detected=False, **kwargs):
@@ -575,10 +576,10 @@ def test_phase_b_quantitative_absorption_scoring():
                 setattr(self, k, v)
 
     detector_a = PhaseIdentifier(data_a, config, thresholds)
-    desc, phase_enum, conf = detector_a._detect_phase_b_active(MockEvents())
+    desc, phase_enum, conf, phase_note = detector_a._detect_phase_b_active(MockEvents())
     
     assert phase_enum.value == "Phase B"
-    assert "经典威科夫吸筹特征确认" in desc
+    assert "经典威科夫吸筹特征确认" in (phase_note or desc)
     assert conf >= 0.80  # 基础 0.65 + 0.10 (测试数) + 0.15 奖励 => 0.90 
 
     # ────────────────────────────────────────────────────────
@@ -601,15 +602,15 @@ def test_phase_b_quantitative_absorption_scoring():
     
     data_b["ATR"] = 2.0
     detector_b = PhaseIdentifier(data_b, config, thresholds)
-    desc_b, phase_enum_b, conf_b = detector_b._detect_phase_b_active(MockEvents())
+    desc_b, phase_enum_b, conf_b, phase_note_b = detector_b._detect_phase_b_active(MockEvents())
     
     assert phase_enum_b.value == "Phase B"
-    assert "非吸收性无方向宽幅震荡整理" in desc_b
+    assert "非吸收性无方向宽幅震荡整理" in (phase_note_b or desc_b)
     assert conf_b == 0.50  # 被惩罚降级
 
 
 def test_spring_sow_sequence_and_volume_coexistence():
-    from src.wyckoff.core.sequence_validator import SequenceValidator
+    from wyckoff.core.sequence_validator import SequenceValidator
     
     class MockEvent:
         def __init__(self, detected=False, **kwargs):
@@ -629,6 +630,7 @@ def test_spring_sow_sequence_and_volume_coexistence():
             self.lps = lps or MockEvent(detected=False)
             self.lpsy = lpsy or MockEvent(detected=False)
             self.joc = joc or MockEvent(detected=False)
+            self.fti = MockEvent(detected=False)
 
     dates = pd.date_range("2026-01-01", periods=100)
     dummy_data = pd.DataFrame(index=dates)
@@ -699,8 +701,8 @@ def test_wave4_vsa_comparative_volume_constraint():
           即使绝对量比 >= 0.5，也应能触发 No Supply 信号
     同时测试：涨跌停日（>= 9.5% 变动）的成交量被正确过滤，不误判为比较性缩量
     """
-    from src.wyckoff.core.detectors.meng_vsa_detector import MengVsaDetector
-    from src.wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
+    from wyckoff.core.detectors.meng_vsa_detector import MengVsaDetector
+    from wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
 
     dates = pd.date_range("2026-01-01", periods=50)
     closes = [100.0 + i * 0.3 for i in range(50)]
@@ -752,7 +754,7 @@ def test_wave4_pnf_target_overrides_atr():
     测试 A：PnF 返回有效目标（count >= 3, target > current_price）→ 目标价使用 PnF
     测试 B：PnF 计算抛出异常 → 退回 ATR 兜底
     """
-    from src.wyckoff.core.trading_plan_generator import TradingPlanGenerator
+    from wyckoff.core.trading_plan_generator import TradingPlanGenerator
     from unittest.mock import MagicMock, patch
 
     dates = pd.date_range("2025-01-01", periods=120)
@@ -770,7 +772,7 @@ def test_wave4_pnf_target_overrides_atr():
     gen = TradingPlanGenerator(data, mock_detector)
 
     # 场景 A：PnF 有效
-    with patch('src.wyckoff.core.point_and_figure.calculate_cause_effect_from_pnf') as mock_pnf:
+    with patch('wyckoff.core.point_and_figure.calculate_cause_effect_from_pnf') as mock_pnf:
         mock_pnf.return_value = {
             'horizontal_count': 8,
             'targets': {'target_1': 130.0, 'target_2': 146.18},
@@ -787,7 +789,7 @@ def test_wave4_pnf_target_overrides_atr():
         "note 字段应含 PnF 来源说明"
 
     # 场景 B：PnF 失败
-    with patch('src.wyckoff.core.point_and_figure.calculate_cause_effect_from_pnf',
+    with patch('wyckoff.core.point_and_figure.calculate_cause_effect_from_pnf',
                side_effect=RuntimeError("PnF 模拟错误")):
         _, _, targets_b = gen._calculate_levels(current_price, 2.0, 110.0, 90.0, True)
 
@@ -834,7 +836,7 @@ def test_wave4_lps_weis_wave_effort_result():
     测试：缩量回调波段（低量下跌）的成交量应远小于前序放量上涨波段
           effort_ratio < 0.618 → 供应耗尽验证通过
     """
-    from src.wyckoff.core.weis_wave import WeisWaveGenerator
+    from wyckoff.core.weis_wave import WeisWaveGenerator
 
     dates = pd.date_range("2025-01-01", periods=100)
     # 前50日：强势上涨（高量），后50日：缩量回调
@@ -910,7 +912,7 @@ def test_meng_wyckoff_upgrades_all_validation():
     assert "test_score" in joc_res
 
     # 2. 验证 SOS 向量化方法无 NameError，且包含 breakout_type 和 interpretation
-    from src.wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
+    from wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
     sw_detector = StrengthWeaknessDetector(data, config, thresholds)
     sw_detector._current_phase = "Accumulation Phase C"
 
@@ -939,7 +941,7 @@ def test_meng_wyckoff_upgrades_all_validation():
     lps_low = sw_detector.detect_lps(window=20, spring_res={"detected": False}, trading_range={"high": 102.0, "low": 98.0})
 
     # 4. 验证 calculate_cause_effect 因果测算及区间失效 (invalidated_tr)
-    from src.wyckoff.facade import WyckoffAnalyzer
+    from wyckoff.facade import WyckoffAnalyzer
     analyzer = WyckoffAnalyzer("AAPL")
     dates_ca = pd.date_range("2026-01-01", periods=100)
     data_ca = pd.DataFrame({

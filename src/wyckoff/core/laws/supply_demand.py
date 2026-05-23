@@ -1,6 +1,8 @@
 import pandas as pd
 import logging
+from typing import Any
 from ...config.settings import WyckoffConfig
+from ..signal_extractor import SignalExtractor, get_events_from_phase, get_cached_phase_result
 
 logger = logging.getLogger(__name__)
 
@@ -14,23 +16,29 @@ class SupplyDemandMixin:
             raise InsufficientDataError("供求分析", required=60, actual=len(self.data) if self.data is not None else 0)
 
         df = self.data
-        phase_result = self.pattern_detector.identify_phase()
-        phase_obj = phase_result.get('phase_enum') or phase_result.get('phase', 'Unknown')
+        phase_result = get_cached_phase_result(self.pattern_detector)
+        phase_obj = phase_result.get('phase_enum') or SignalExtractor.get_effective_phase(phase_result)
         from ..utils import PhaseAdapter
         is_accumulation = PhaseAdapter.is_accumulation(phase_obj)
         is_distribution = PhaseAdapter.is_distribution(phase_obj)
 
-        trading_range = self.pattern_detector.detect_trading_range()
+        # 第一定律与报告共用 events_detected；TR 缺失时才 fallback 到 detect_trading_range
+        events = get_events_from_phase(phase_result)
+        trading_range = SignalExtractor.get_event_dict(events, 'trading_range')
+        if not trading_range.get('high') or not trading_range.get('low'):
+            trading_range = self.pattern_detector.detect_trading_range()
         in_range = trading_range.get("is_consolidation", False)
 
         current_price = df['Close'].iloc[-1]
         current_vol = df['Volume'].iloc[-1]
         vol_ma20 = df['Volume_MA20'].iloc[-1]
 
-        spring = self.pattern_detector.detect_spring()
-        upthrust = self.pattern_detector.detect_upthrust()
-        sos = self.pattern_detector.detect_sos()
-        sow = self.pattern_detector.detect_sow()
+        spring = SignalExtractor.get_event_dict(events, 'spring')
+        upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
+        sos = SignalExtractor.get_event_dict(events, 'sos')
+        sow = SignalExtractor.get_event_dict(events, 'sow')
+        joc = SignalExtractor.get_event_dict(events, 'joc')
+        fti = SignalExtractor.get_event_dict(events, 'fti')
 
         supply_demand_analysis = {
             "current_phase": phase_obj,
@@ -49,9 +57,12 @@ class SupplyDemandMixin:
                 "spring_status": "detected" if spring.get('detected') else "not_detected",
                 "sos_status": "detected" if sos.get('detected') else "not_detected"
             }
-            if spring.get('detected') and sos.get('detected'):
+            if spring.get('detected') and sos.get('detected') and joc.get('detected'):
                 stage = "Phase D-E (准备突破)"
                 supply_demand_balance = "需求主导，准备进入上涨期"
+            elif spring.get('detected') and sos.get('detected'):
+                stage = "Phase C+ (SOS待JOC确认)"
+                supply_demand_balance = "SOS出现，等待JOC突破小溪确认"
             elif in_range:
                 stage = "Phase B-C (积累震荡)"
                 supply_demand_balance = "供求平衡，主力吸筹中"
@@ -81,9 +92,12 @@ class SupplyDemandMixin:
                 "upthrust_status": "detected" if upthrust.get('detected') else "not_detected",
                 "sow_status": "detected" if sow.get('detected') else "not_detected"
             }
-            if upthrust.get('detected') and sow.get('detected'):
+            if upthrust.get('detected') and sow.get('detected') and fti.get('detected'):
                 stage = "Phase D-E (准备下跌)"
                 supply_demand_balance = "供应主导，准备进入下跌期"
+            elif upthrust.get('detected') and sow.get('detected'):
+                stage = "Phase C+ (SOW待FTI确认)"
+                supply_demand_balance = "SOW出现，等待FTI跌破冰层确认"
             elif in_range:
                 stage = "Phase B-C (派发震荡)"
                 supply_demand_balance = "供求平衡，主力出货中"
@@ -110,6 +124,7 @@ class SupplyDemandMixin:
             raise InsufficientDataError("供需定律分析", required=20, actual=len(self.data) if self.data is not None else 0)
 
         df = self.data
+        events = None
         try:
             trading_range = self.pattern_detector.detect_trading_range()
         except Exception as e:
@@ -117,17 +132,27 @@ class SupplyDemandMixin:
             trading_range = {'low': df['Low'].tail(60).min(), 'high': df['High'].tail(60).max()}
 
         try:
-            phase_result = self.pattern_detector.identify_phase()
-            current_phase = phase_result.get('phase', 'Unknown') if isinstance(phase_result, dict) else str(phase_result)
+            phase_result = get_cached_phase_result(self.pattern_detector)
+            current_phase = SignalExtractor.get_effective_phase(phase_result) if isinstance(phase_result, dict) else str(phase_result)
+            events = get_events_from_phase(phase_result)
+            # 增强版供求分析同样优先读主链 TR，保证与报告展示区间一致
+            tr_from_events = SignalExtractor.get_event_dict(events, 'trading_range')
+            if tr_from_events:
+                trading_range = tr_from_events
         except Exception as e:
             logger.warning(f"获取当前阶段失败: {e}")
             current_phase = 'Unknown'
+            events = None
 
         enhanced_analysis = {'current_phase': current_phase, 'trading_range': trading_range}
         if 'Accumulation' in current_phase:
-            enhanced_analysis['accumulation_analysis'] = self._analyze_accumulation_enhanced(df, trading_range)
+            enhanced_analysis['accumulation_analysis'] = self._analyze_accumulation_enhanced(
+                df, trading_range, events=events
+            )
         elif 'Distribution' in current_phase:
-            enhanced_analysis['distribution_analysis'] = self._analyze_distribution_enhanced(df, trading_range)
+            enhanced_analysis['distribution_analysis'] = self._analyze_distribution_enhanced(
+                df, trading_range, events=events
+            )
         else:
             enhanced_analysis['trend_analysis'] = self._analyze_trend_enhanced(df)
         return enhanced_analysis
@@ -213,7 +238,7 @@ class SupplyDemandMixin:
         return {"pattern": pattern, "strength": strength,
                 "new_high": new_high, "volume_declining": vol_declining}
 
-    def _analyze_accumulation_enhanced(self, df: pd.DataFrame, trading_range: dict) -> dict:
+    def _analyze_accumulation_enhanced(self, df: pd.DataFrame, trading_range: dict, events: Any = None) -> dict:
         try:
             tr_low = trading_range.get('low', df['Low'].min())
             tr_high = trading_range.get('high', df['High'].max())
@@ -236,11 +261,17 @@ class SupplyDemandMixin:
                 quality_description = '劣质吸筹：VWAP偏离TR中心'
             in_tr['price_range'] = pd.cut(in_tr['Close'], bins=5, labels=['底部', '中下部', '中部', '中上部', '顶部'])
             volume_by_price = in_tr.groupby('price_range', observed=True)['Volume'].sum()
-            spring = self.pattern_detector.detect_spring()
-            sos = self.pattern_detector.detect_sos()
-            if spring.get('detected') and sos.get('detected'):
+            if events is None:
+                events = get_events_from_phase(get_cached_phase_result(self.pattern_detector))
+            spring = SignalExtractor.get_event_dict(events, 'spring')
+            sos = SignalExtractor.get_event_dict(events, 'sos')
+            joc = SignalExtractor.get_event_dict(events, 'joc')
+            if spring.get('detected') and sos.get('detected') and joc.get('detected'):
                 stage = 'Phase D-E (准备突破)'
-                stage_description = '吸筹接近尾声，准备进入上涨期'
+                stage_description = 'JOC 确认，吸筹接近尾声，准备进入上涨期'
+            elif spring.get('detected') and sos.get('detected'):
+                stage = 'Phase C+ (SOS出现待JOC确认)'
+                stage_description = 'SOS 出现，等待 JOC 突破小溪确认'
             elif spring.get('detected'):
                 stage = 'Phase C (震仓确认)'
                 stage_description = '震仓完成，主力控盘'
@@ -264,7 +295,7 @@ class SupplyDemandMixin:
             logger.error(f"吸筹期分析失败: {e}")
             return {'error': str(e)}
 
-    def _analyze_distribution_enhanced(self, df: pd.DataFrame, trading_range: dict) -> dict:
+    def _analyze_distribution_enhanced(self, df: pd.DataFrame, trading_range: dict, events: Any = None) -> dict:
         try:
             tr_low = trading_range.get('low', df['Low'].min())
             tr_high = trading_range.get('high', df['High'].max())
@@ -284,11 +315,17 @@ class SupplyDemandMixin:
             else:
                 quality = 'LOW'
                 quality_description = '劣质派发：VWAP位于TR下部'
-            upthrust = self.pattern_detector.detect_upthrust()
-            sow = self.pattern_detector.detect_sow()
-            if upthrust.get('detected') and sow.get('detected'):
+            if events is None:
+                events = get_events_from_phase(get_cached_phase_result(self.pattern_detector))
+            upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
+            sow = SignalExtractor.get_event_dict(events, 'sow')
+            fti = SignalExtractor.get_event_dict(events, 'fti')
+            if upthrust.get('detected') and sow.get('detected') and fti.get('detected'):
                 stage = 'Phase D-E (准备下跌)'
-                stage_description = '派发接近尾声，准备进入下跌期'
+                stage_description = 'FTI 确认，派发接近尾声，准备进入下跌期'
+            elif upthrust.get('detected') and sow.get('detected'):
+                stage = 'Phase C+ (SOW出现待FTI确认)'
+                stage_description = 'SOW 出现，等待 FTI 跌破冰层确认'
             elif upthrust.get('detected'):
                 stage = 'Phase C (假突破确认)'
                 stage_description = '假突破完成，主力出货'

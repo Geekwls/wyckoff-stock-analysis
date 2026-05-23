@@ -895,7 +895,7 @@ class ReversalDetector(BaseDetector):
 
         # UTAD 必须发生在 Phase C/D (P1 #3)
         current_phase = self._current_phase
-        is_dist_context = PhaseAdapter.is_distribution(current_phase) if current_phase else True
+        is_dist_context = PhaseAdapter.is_distribution(current_phase) if current_phase else False
             
         if not is_dist_context:
             return {'detected': False, 'reason': 'not_in_distribution_phase'}

@@ -29,6 +29,29 @@ class BreakoutAnalyzer:
         """
         self.data = data
 
+    def _get_tr_scoped_data(self, tr: Dict) -> pd.DataFrame:
+        """仅在当前 TR 窗口形成之后搜索突破，避免全历史同价位误匹配。"""
+        if self.data is None or self.data.empty:
+            return self.data
+
+        start_idx = tr.get('range_start_idx')
+        if start_idx is not None:
+            return self.data.iloc[int(start_idx):]
+
+        start_date = tr.get('range_start_date')
+        if start_date is not None:
+            try:
+                return self.data.loc[start_date:]
+            except (KeyError, TypeError):
+                pass
+
+        duration = tr.get('duration_days') or tr.get('consolidation_duration_days') or 60
+        try:
+            duration = int(duration)
+        except (TypeError, ValueError):
+            duration = 60
+        return self.data.tail(max(duration, 1))
+
     def analyze_breakout(self, trading_range: Dict) -> Dict:
         """
         分析突破质量
@@ -71,9 +94,10 @@ class BreakoutAnalyzer:
         tr_high = tr.get('high', 0)
         tr_low = tr.get('low', 0)
         current_price = tr.get('current_price', 0)
+        scoped = self._get_tr_scoped_data(tr)
 
-        # 找到突破点（首次收盘价高于区间上沿）
-        breakout_data = self.data[self.data['Close'] > tr_high]
+        # 找到突破点（TR 窗口内首次收盘价高于区间上沿）
+        breakout_data = scoped[scoped['Close'] > tr_high]
         if len(breakout_data) == 0:
             return {
                 'is_breakout': True,
@@ -131,9 +155,10 @@ class BreakoutAnalyzer:
         """分析向下突破"""
         tr_low = tr.get('low', 0)
         current_price = tr.get('current_price', 0)
+        scoped = self._get_tr_scoped_data(tr)
 
-        # 找到突破点（首次收盘价低于区间下沿）
-        breakout_data = self.data[self.data['Close'] < tr_low]
+        # 找到突破点（TR 窗口内首次收盘价低于区间下沿）
+        breakout_data = scoped[scoped['Close'] < tr_low]
         if len(breakout_data) == 0:
             return {
                 'is_breakout': True,
@@ -244,12 +269,15 @@ class BreakoutAnalyzer:
         pullback_zone_high = tr_high * 1.02
         pullback_zone_low = tr_high * 0.98
 
-        has_pullback = (post_data['Low'].min() <= pullback_zone_high).any() and \
-                      (post_data['Low'].min() >= pullback_zone_low).any()
+        in_pullback_zone = (
+            (post_data['Low'] <= pullback_zone_high) &
+            (post_data['Low'] >= pullback_zone_low)
+        )
+        has_pullback = bool(in_pullback_zone.any())
 
         if has_pullback:
             # 找到回测点
-            pullback_point = post_data[post_data['Low'] <= pullback_zone_high].iloc[0]
+            pullback_point = post_data[in_pullback_zone].iloc[0]
             pullback_vol = pullback_point['Volume']
 
             # 回测时的成交量应该萎缩（好迹象）
@@ -340,7 +368,8 @@ class BreakoutAnalyzer:
         post_breakout_analysis: Dict
     ) -> Dict:
         """计算向上突破的质量评分"""
-        score = 50  # 基础分
+        # P2 修复：从 0 起计分，避免旧版 50 分基底导致弱突破也被判为「中等质量」
+        score = 0
 
         # 成交量贡献（0-30分）
         if vol_analysis['strength'] == 'very_strong':
@@ -407,12 +436,15 @@ class BreakoutAnalyzer:
         rally_zone_high = tr_low * 1.02
         rally_zone_low = tr_low * 0.98
 
-        has_rally = (post_data['High'].max() >= rally_zone_low).all() and \
-                    (post_data['High'].max() <= rally_zone_high).all()
+        in_rally_zone = (
+            (post_data['High'] >= rally_zone_low) &
+            (post_data['High'] <= rally_zone_high)
+        )
+        has_rally = bool(in_rally_zone.any())
 
         if has_rally:
             # 找到反弹最高点所在的那天
-            rally_point = post_data[post_data['High'] >= rally_zone_low].iloc[0]
+            rally_point = post_data[in_rally_zone].iloc[0]
             rally_vol = rally_point['Volume']
 
             breakout_vol = self.data.loc[breakout_point, 'Volume']
@@ -443,7 +475,8 @@ class BreakoutAnalyzer:
         rally_test: Dict
     ) -> Dict:
         """计算向下突破的质量评分"""
-        score = 50
+        # P2 修复：与向上突破一致，取消 50 分起步，按实际量能/跟进逐项加分
+        score = 0
 
         # 向下突破时放量是好的（恐慌抛售）
         if vol_analysis['signal'] == 'bearish':
@@ -593,12 +626,12 @@ class BreakoutAnalyzer:
 
         direction = trading_range.get('breakout_direction')
 
-        # 向上突破 + 派发判断 → 强制否决
+        # 向上突破 + 派发判断 → 不自动改再积累，须 JOC/结构确认（孟氏 checklist）
         if direction == 'up' and 'Distribution' in current_phase:
             return (
-                "Trending / Reaccumulation",
-                f"TR向上突破至{trading_range['current_price']:.2f}元，否决了'派发'假设",
-                0.6  # 降低置信度
+                current_phase,
+                f"TR向上突破至{trading_range['current_price']:.2f}元，待JOC/再积累结构确认后再修正阶段",
+                0.85
             )
 
         # 向下突破 + 吸筹判断 → 强制否决

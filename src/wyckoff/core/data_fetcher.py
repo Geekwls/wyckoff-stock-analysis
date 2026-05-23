@@ -90,6 +90,8 @@ class WyckoffDataFetcher:
         try:
             # 1. 解析代码
             info = self.resolver.resolve(symbol)
+            if info.market == MarketType.UNKNOWN or info.source == 'none':
+                raise DataFetchError(symbol, f"无法识别的股票代码: {symbol}")
 
             # 2. 特殊处理：中文名称（使用改进的处理器）
             if info.market == MarketType.US_STOCK and ChineseSymbolHandler.is_chinese_name(symbol):
@@ -134,7 +136,8 @@ class WyckoffDataFetcher:
                     logger.info("尝试自动清理数据...")
                     data = DataValidator.clean_dataframe(data)
 
-            is_daily = frequency and "d" in str(frequency).lower()
+            freq_norm = str(frequency).lower()
+            is_daily = freq_norm in ("d", "1d", "daily")
             if data is None or (is_daily and len(data) < self.config.min_data_length):
                 raise InsufficientDataError(
                     info.normalized, 

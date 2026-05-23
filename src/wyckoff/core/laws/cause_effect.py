@@ -4,12 +4,30 @@ from typing import Dict, Optional, Tuple
 from ...exceptions import InsufficientDataError, LawAnalysisError
 from ..point_and_figure import calculate_cause_effect_from_pnf
 from ..weis_wave import WeisWaveGenerator
+from ..signal_extractor import SignalExtractor, get_events_from_phase, get_cached_phase_result
 
 logger = logging.getLogger(__name__)
 
 
 class CauseEffectMixin:
     """第三定律：因果定律"""
+
+    def _pnf_tr_col_start_idx(self) -> int:
+        """P&F 水平计数时限制为当前 TR 窗口内的列。"""
+        try:
+            if not self.pattern_detector:
+                return 0
+            phase_result = get_cached_phase_result(self.pattern_detector)
+            events = get_events_from_phase(phase_result)
+            tr = SignalExtractor.get_event_dict(events, 'trading_range')
+            if tr.get('range_start_idx') is not None:
+                return int(tr['range_start_idx'])
+            tr = self.pattern_detector.detect_trading_range()
+            if tr.get('range_start_idx') is not None:
+                return int(tr['range_start_idx'])
+        except Exception:
+            pass
+        return 0
 
     def analyze_cause_effect_law_enhanced(self) -> dict:
         if self.data is None or len(self.data) < 60:
@@ -64,7 +82,10 @@ class CauseEffectMixin:
             return {"basic_analysis": basic_cause_effect, "enhanced_analysis": enhanced}
 
         phase_result = self.pattern_detector.identify_phase() if self.pattern_detector else {}
-        phase = phase_result.get("phase", "") if isinstance(phase_result, dict) else ""
+        from ..signal_extractor import SignalExtractor
+        phase = SignalExtractor.get_effective_phase(phase_result) if isinstance(phase_result, dict) else ""
+        if not phase or phase == 'Unknown':
+            phase = phase_result.get("phase", "") if isinstance(phase_result, dict) else ""
         if not phase:
             ma60 = self.data['Close'].rolling(60).mean().iloc[-1] if len(self.data) >= 60 else current_close
             if trading_range.get("is_consolidation"):
@@ -182,6 +203,7 @@ class CauseEffectMixin:
         pnf_result = calculate_cause_effect_from_pnf(
             self.data, box_size_pct=1.0, reversal_boxes=3, phase=phase,
             known_tr_high=range_high, known_tr_low=range_low,
+            tr_col_start_idx=self._pnf_tr_col_start_idx(),
         )
         if pnf_result.get('horizontal_count', 0) >= 3:
             targets = pnf_result.get('targets', {})
@@ -317,8 +339,12 @@ class CauseEffectMixin:
         close = recent['Close'].iloc[-1]
         broke_down = close < low
         downside_target_1 = low - width if broke_down else None
-        upthrust = self.pattern_detector.detect_upthrust() if self.pattern_detector and hasattr(self.pattern_detector, 'detect_upthrust') else {}
-        spring = self.pattern_detector.detect_spring() if self.pattern_detector and hasattr(self.pattern_detector, 'detect_spring') else {}
+        # 因果监控路径：读缓存 phase，避免与 identify_phase 结论不一致
+        events = get_events_from_phase(
+            get_cached_phase_result(self.pattern_detector) if self.pattern_detector else None
+        )
+        upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
+        spring = SignalExtractor.get_event_dict(events, 'spring')
         rebound_vol = recent['Volume'].tail(10).mean()
         base_vol = recent['Volume'].head(40).mean()
         weak_rebound = rebound_vol < base_vol * 0.9
@@ -381,13 +407,21 @@ class CauseEffectMixin:
         elif ("Distribution" in phase or "派发" in phase) and direction in ("down", "downside"):
             base_prob = 0.75
             
-        # 2. 突破质量加权 (JOC/FTI 质量)
+        # 2. 突破质量加权 (JOC/FTI 质量，派发侧对称)
         quality_score = 0
-        joc = self.pattern_detector.detect_joc_menhongtao() if self.pattern_detector and hasattr(self.pattern_detector, 'detect_joc_menhongtao') else {}
+        joc = {}
+        fti = {}
+        if self.pattern_detector:
+            phase_result = get_cached_phase_result(self.pattern_detector)
+            events = get_events_from_phase(phase_result)
+            joc = SignalExtractor.get_event_dict(events, 'joc')
+            fti = SignalExtractor.get_event_dict(events, 'fti')
 
-        if joc.get('detected'):
-            #  Weis Wave 波段累加量评估（替换原单K线降级方案）
+        if direction in ("up", "upside") and joc.get('detected'):
             weis_quality = self._get_weis_wave_breakout_quality(joc.get('date'))
+            quality_score = weis_quality.get('quality_score', 0)
+        elif direction in ("down", "downside") and fti.get('detected'):
+            weis_quality = self._get_weis_wave_breakout_quality(fti.get('date'))
             quality_score = weis_quality.get('quality_score', 0)
                 
         final_prob = base_prob + quality_score
@@ -407,25 +441,57 @@ class CauseEffectMixin:
             "note": "基于突破波段质量(降级至单K线)动态评估" if quality_score != 0 else "基于阶段常态评估"
         }
 
+    def _resolve_tr_bounds(
+        self,
+        known_tr_high: float = None,
+        known_tr_low: float = None,
+    ) -> Tuple[float, float, str]:
+        """优先使用 TR 检测器边界，避免 60 日高低点误算因果。"""
+        if known_tr_high is not None and known_tr_low is not None:
+            return known_tr_high, known_tr_low, 'known'
+
+        if self.pattern_detector:
+            try:
+                phase_result = get_cached_phase_result(self.pattern_detector)
+                events = get_events_from_phase(phase_result)
+                tr = SignalExtractor.get_event_dict(events, 'trading_range')
+                tr_high = tr.get('high')
+                tr_low = tr.get('low')
+                if tr_high and tr_low and float(tr_high) > float(tr_low):
+                    return float(tr_high), float(tr_low), 'events_trading_range'
+            except Exception:
+                pass
+            try:
+                tr = self.pattern_detector.detect_trading_range()
+                if tr.get('high') and tr.get('low') and float(tr['high']) > float(tr['low']):
+                    return float(tr['high']), float(tr['low']), 'detect_trading_range'
+            except Exception:
+                pass
+
+        recent_data = self.data.tail(60)
+        return (
+            float(recent_data['High'].max()),
+            float(recent_data['Low'].min()),
+            'recent_60d_fallback',
+        )
+
     def _calculate_breakout_probability(self, phase: str, direction: str) -> str:
         res = self._calculate_breakout_probability_enhanced(phase, direction)
         return res['label']
 
     def _basic_cause_effect_analysis(self, phase: str = '', known_tr_high: float = None, known_tr_low: float = None) -> dict:
         try:
+            trading_range_high, trading_range_low, tr_source = self._resolve_tr_bounds(
+                known_tr_high, known_tr_low
+            )
             recent_data = self.data.tail(60)
-            if known_tr_high is not None and known_tr_low is not None:
-                trading_range_high = known_tr_high
-                trading_range_low = known_tr_low
-            else:
-                trading_range_high = recent_data['High'].max()
-                trading_range_low = recent_data['Low'].min()
             cause_size = trading_range_high - trading_range_low
 
             try:
                 pnf_result = calculate_cause_effect_from_pnf(
                     self.data, box_size_pct=1.0, reversal_boxes=3, phase=phase,
                     known_tr_high=trading_range_high, known_tr_low=trading_range_low,
+                    tr_col_start_idx=self._pnf_tr_col_start_idx(),
                 )
                 if pnf_result.get('horizontal_count', 0) >= 3:
                     return {
@@ -473,7 +539,7 @@ class CauseEffectMixin:
                     "target_3": round(breakout_point + potential * 1.618, 2)
                 }
                 description = f"基于波动率收缩{volatility_contraction*100:.1f}%和{duration}天积累"
-            return {
+            result = {
                 "method": "volatility_contraction",
                 "cause_size": cause_size,
                 "volatility_contraction": round(volatility_contraction * 100, 1),
@@ -484,8 +550,10 @@ class CauseEffectMixin:
                 "current_position": (self.data['Close'].iloc[-1] - trading_range_low) / cause_size if cause_size > 0 else 0,
                 "consolidation_duration_days": duration,
                 "description": description,
-                "theory": "威科夫因果法则：水平计数决定垂直目标" if not is_downside else "威科夫因果法则：派发期向下目标需破位激活"
+                "theory": "威科夫因果法则：水平计数决定垂直目标" if not is_downside else "威科夫因果法则：派发期向下目标需破位激活",
+                "tr_bounds_source": tr_source,
             }
+            return result
         except Exception as e:
             raise LawAnalysisError("因果分析", str(e)) from e
 

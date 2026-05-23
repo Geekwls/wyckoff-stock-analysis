@@ -6,6 +6,9 @@ import pandas as pd
 from typing import Dict, Any, Optional
 import logging
 
+from .signal_extractor import SignalExtractor, get_events_from_phase
+from .utils import PhaseAdapter
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,10 +72,31 @@ class TradingPlanGenerator:
         high = tr.get("high", current_price * 1.1)
         low = tr.get("low", current_price * 0.9)
         
-        # 获取阶段
+        # 获取阶段与事件（主链同源）
+        phase_res = None
         if not phase_str:
             phase_res = self.pattern_detector.identify_phase()
-            phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
+            phase_str = SignalExtractor.get_effective_phase(phase_res) if isinstance(phase_res, dict) else str(phase_res)
+        elif hasattr(self.pattern_detector, 'identify_phase'):
+            phase_res = self.pattern_detector.identify_phase()
+
+        events = get_events_from_phase(phase_res) if phase_res else None
+        joc_ev = SignalExtractor.get_event_dict(events, 'joc') if events else {}
+        spring_ev = SignalExtractor.get_event_dict(events, 'spring') if events else {}
+        fti_ev = SignalExtractor.get_event_dict(events, 'fti') if events else {}
+        sow_ev = SignalExtractor.get_event_dict(events, 'sow') if events else {}
+        upthrust_ev = SignalExtractor.get_event_dict(events, 'upthrust') if events else {}
+        lps_ev = SignalExtractor.get_event_dict(events, 'lps') if events else {}
+        lpsy_ev = SignalExtractor.get_event_dict(events, 'lpsy') if events else {}
+        has_lps = SignalExtractor.is_formal_lps(lps_ev)
+        has_lpsy = SignalExtractor.is_formal_lpsy(lpsy_ev)
+        has_joc = joc_ev.get('detected', False)
+        has_fti = fti_ev.get('detected', False)
+        has_sow = sow_ev.get('detected', False)
+        has_spring = spring_ev.get('detected', False)
+        has_upthrust = upthrust_ev.get('detected', False)
+        spring_failed = SignalExtractor._spring_lifecycle_failed(spring_ev) if has_spring else False
+        upthrust_failed = SignalExtractor._upthrust_lifecycle_failed(upthrust_ev) if has_upthrust else False
         
         is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
         is_distribution = "Distribution" in phase_str or "Markdown" in phase_str
@@ -82,26 +106,86 @@ class TradingPlanGenerator:
             current_price, atr, high, low, is_bullish
         )
 
-        # 威科夫方向锁：积累期只多不空，派发期只空不多
+        # 威科夫方向锁：积累期默认谨慎；Phase D/JOC+LPS 才可积极做多
         if is_accumulation:
-            direction = "做多"
+            if 'Phase E' in phase_str and has_joc and has_lps:
+                direction = "做多"
+                dynamic_warning = "Markup/Phase E 推进期，JOC+LPS 结构确认，可按 LPS 或趋势回撤分批参与。"
+                entry_zone = f"Creek/JOC 回测区附近 (JOC: {joc_ev.get('creek_level', round(low, 2))})"
+            elif 'Phase E' in phase_str:
+                direction = "观望"
+                dynamic_warning = "Phase E 推进期但缺少 JOC+LPS 第五步确认，建议观望。"
+                entry_zone = "等待 JOC+LPS 确认"
+            elif has_joc and has_lps:
+                direction = "做多"
+                dynamic_warning = "JOC+LPS 威科夫标准入场，可按 LPS 分批建仓。"
+                lps_price = lps_ev.get('price') or lps_ev.get('support_level') or round(low, 2)
+                entry_zone = f"{lps_price} 附近 (JOC+LPS 回测)"
+            elif has_joc or 'Phase D' in phase_str:
+                direction = "观望"
+                dynamic_warning = "JOC/Phase D 已现，等待 LPS 缩量回测确认（威科夫第五步）。"
+                entry_zone = "等待 LPS 确认"
+            elif has_spring and not spring_failed:
+                direction = "观望"
+                dynamic_warning = "Spring 震仓已现，等待 JOC 突破小溪或 LPS 缩量回测确认（孟氏 checklist）。"
+                entry_zone = "等待 JOC/LPS 确认"
+            elif spring_failed:
+                direction = "观望"
+                dynamic_warning = "Spring 生命周期已失效，等待新结构确认。"
+                entry_zone = "结构失效，暂不入场"
+            else:
+                direction = "观望"
+                dynamic_warning = "吸筹早期/中期，等待 Spring→JOC 完整序列。"
+                entry_zone = f"观察支撑区: {round(low, 2)} 附近"
             pos_sizing, _ = self._adjust_position_with_sentiment(
-                sentiment_data, phase_str, True
+                sentiment_data, phase_str, direction == "做多"
             )
             scale_in_triggers = self._calculate_scale_in_triggers(
-                current_price, high, low, atr, True
+                current_price, high, low, atr, direction == "做多"
             )
-            dynamic_warning = "当前处于吸筹阶段。威科夫原则：吸筹区只买不卖，利用 Spring/LPS 信号分仓低吸。"
-            entry_zone = f"支撑区: {round(low, 2)} 附近 (利用回调分批建仓)"
         elif is_distribution:
-            direction = "减仓/对冲" if self.is_a_stock else "做空"
-            pos_sizing = {"status": "空仓/减持"}
+            is_phase_d = 'Phase D' in phase_str
+            is_phase_e = 'Phase E' in phase_str or 'Markdown' in phase_str
+            if has_fti and has_lpsy:
+                direction = "减仓/对冲" if self.is_a_stock else "做空"
+                dynamic_warning = "FTI+LPSY 威科夫标准入场，可按 LPSY 分批减仓或做空。"
+                lpsy_price = lpsy_ev.get('price') or lpsy_ev.get('resistance_level') or round(high, 2)
+                entry_zone = f"{lpsy_price} 附近 (FTI+LPSY 反抽)"
+            elif is_phase_e and has_fti and has_lpsy:
+                direction = "减仓/对冲" if self.is_a_stock else "做空"
+                dynamic_warning = "派发/markdown 推进期，FTI+LPSY 结构确认，可按反弹阻力减仓或做空。"
+                entry_zone = f"阻力位: {round(high, 2)} 附近"
+            elif is_phase_e:
+                direction = "观望"
+                dynamic_warning = "派发/markdown 推进期但缺少 FTI+LPSY 第五步确认，建议观望。"
+                entry_zone = "等待 FTI+LPSY 确认"
+            elif has_fti or (is_phase_d and has_sow):
+                direction = "观望"
+                dynamic_warning = "FTI/Phase D 已现，等待 LPSY 缩量回测确认（威科夫第五步）。"
+                entry_zone = "等待 LPSY 确认"
+            elif has_upthrust and not upthrust_failed and (has_sow or has_fti):
+                direction = "减仓/对冲" if self.is_a_stock else "做空"
+                dynamic_warning = "Upthrust 诱多后 SOW/FTI 结构确认，可按阻力区减仓。"
+                entry_zone = f"阻力位: {round(high, 2)} 附近"
+            else:
+                direction = "观望"
+                dynamic_warning = (
+                    "派发阶段，等待 FTI 跌破冰层或 Upthrust/SOW 结构确认后再做空"
+                    "（孟氏 checklist）。"
+                )
+                entry_zone = "等待 FTI/LPSY 确认"
+            pos_sizing = {"status": "空仓/减持"} if direction != "观望" else {"status": "绝对观望"}
             scale_in_triggers = {
                 "exit_1": {"condition": "跌破区间下沿 (确认派发)", "price": round(low, 2)},
                 "exit_2": {"condition": "反抽阻力位无力", "price": round(high, 2)}
+            } if direction != "观望" else {
+                "observation": {"condition": "等待 FTI 或 SOW/Upthrust 结构确认", "price": 0.0}
             }
-            dynamic_warning = "当前处于派发阶段。威科夫第一原则：出货区只卖不买。任何回调均视为离场机会，严禁接刀。"
-            entry_zone = f"阻力位: {round(high, 2)} (当前不建议任何买入)"
+            if direction != "观望":
+                dynamic_warning = (
+                    dynamic_warning or
+                    "当前处于派发阶段。威科夫第一原则：出货区只卖不买。"
+                )
         else:
             direction = "做多" if is_bullish else "观望"
             pos_sizing, dynamic_warning = self._adjust_position_with_sentiment(
@@ -112,10 +196,7 @@ class TradingPlanGenerator:
             )
 
         # 派发初期（Phase A/B）强制绝对观望拦截
-        is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
-        is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
-                         any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
-        is_dist_early = is_dist and is_early_phase
+        is_dist_early = PhaseAdapter.is_distribution_early(phase_str)
 
         if is_dist_early:
             direction = "观望"
@@ -153,46 +234,57 @@ class TradingPlanGenerator:
                 }
             }
 
-        # ── 再派发 (Re-distribution) 熊市中继强力拦截 ──
+        # ── 再派发 (Re-distribution) 熊市中继：与 RecommendationEngine 一致，强制观望 ──
         is_redist = 'Re-distribution' in phase_str or '再派发' in phase_str
         if is_redist:
-            direction = "减仓/对冲" if self.is_a_stock else "做空"
-            entry_zone = f"阻力位: {round(high, 2)} 附近 (寻找做空反弹阻力点)"
-            pos_sizing = {"conservative": "0%", "moderate": "0%", "aggressive": "0%", "status": "空仓观望，建议寻找做空阻力点或对冲"}
+            direction = "观望"
+            entry_zone = "等待再派发区间破位或反弹至上沿阻力"
+            pos_sizing = {"conservative": "0%", "moderate": "0%", "aggressive": "0%", "status": "空仓观望"}
             scale_in_triggers = {
-                "short_entry": {"condition": "反弹至上沿无力", "price": round(high, 2)},
-                "breakdown": {"condition": "跌破区间下沿", "price": round(low, 2)}
+                "observation": {"condition": "等待再派发区间破位确认", "price": 0.0}
             }
-            dynamic_warning = "当前处于熊市中继的‘再派发’阶段。威科夫原则：严禁在此处做多，任何反弹都是寻找做空/对冲或减仓的机会。等待再次破位确认。"
+            dynamic_warning = (
+                "当前处于熊市中继的‘再派发’阶段。"
+                "威科夫原则：严禁在此处做多，等待结构破位或反弹至上沿后再评估。"
+            )
             stop_loss = {
-                "conservative": {
-                    "value": round(high * 1.01, 2),
-                    "derivation": "区间上沿上方 1%",
-                    "note": "站稳区间上沿则结构失效"
-                },
-                "aggressive": {
-                    "value": round(high * 1.005, 2),
-                    "derivation": "区间上沿上方 0.5%",
-                    "note": "站稳区间上沿则结构失效"
-                },
-                "atr_dynamic_stop": {
-                    "value": round(high + atr * 0.5, 2),
-                    "derivation": "区间上沿 + 0.5 * ATR",
-                    "note": "站稳区间上沿则结构失效"
-                }
+                "conservative": {"value": 0.0, "derivation": "无", "note": "再派发阶段不提供方向性建议"},
+                "aggressive": {"value": 0.0, "derivation": "无", "note": "再派发阶段不提供方向性建议"},
+                "atr_dynamic_stop": {"value": 0.0, "derivation": "无", "note": "再派发阶段不提供方向性建议"},
             }
             targets = {
-                "target_1": {
-                    "value": round(low, 2),
-                    "derivation": "区间下沿",
-                    "note": "区间下沿支撑位"
-                },
-                "target_2": {
-                    "value": round(low - (high - low), 2),
-                    "derivation": "一倍箱体跨度下量",
-                    "note": "破位后的垂直量化目标"
-                }
+                "target_1": {"value": 0.0, "derivation": "无", "note": "再派发阶段不提供目标"},
+                "target_2": {"value": 0.0, "derivation": "无", "note": "再派发阶段不提供目标"},
             }
+
+        # Phase 26：RS / MTF 方向硬门控（与 RecommendationEngine 同步）
+        if isinstance(phase_res, dict) and direction != "观望":
+            rs = phase_res.get('relative_strength') or {}
+            rs_trend = rs.get('rs_trend') if isinstance(rs, dict) else None
+            if (
+                direction == "做多"
+                and PhaseAdapter.is_accumulation(phase_str)
+                and rs_trend == 'falling'
+            ):
+                direction = "观望"
+                entry_zone = "吸筹阶段但相对强度走弱，不符合威科夫第二步"
+                dynamic_warning = "相对强度走弱，建议观望"
+                pos_sizing = {"conservative": "0%", "moderate": "0%", "aggressive": "0%", "status": "绝对观望"}
+            elif (
+                direction in ("做空", "减仓/对冲")
+                and PhaseAdapter.is_distribution(phase_str)
+                and rs_trend == 'rising'
+            ):
+                direction = "观望"
+                entry_zone = "派发阶段但相对强度仍走强，做空缺乏第二步支撑"
+                dynamic_warning = "相对强度仍走强，建议观望"
+                pos_sizing = {"conservative": "0%", "moderate": "0%", "aggressive": "0%", "status": "绝对观望"}
+            elif phase_res.get('mtf_has_conflict'):
+                direction = "观望"
+                entry_zone = "跨周期冲突，建议观望"
+                conflict_details = phase_res.get('mtf_conflict_details') or "多周期趋势不一致"
+                dynamic_warning = f"跨周期冲突：{conflict_details}，与主链交易计划一致暂不给出方向"
+                pos_sizing = {"conservative": "0%", "moderate": "0%", "aggressive": "0%", "status": "绝对观望"}
 
         # 退出规则
         exit_rules = self._calculate_exit_rules(atr)

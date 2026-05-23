@@ -4,15 +4,8 @@
 import pytest
 import pandas as pd
 import numpy as np
-import sys
-import os
 
-# 确保项目根目录在 sys.path 中
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
-
-from src.wyckoff.config.settings import WyckoffConfig
+from wyckoff.config.settings import WyckoffConfig
 
 
 def _make_ohlcv(n: int = 300, trend: str = "flat", seed: int = 42) -> pd.DataFrame:

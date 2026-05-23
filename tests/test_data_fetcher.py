@@ -4,8 +4,8 @@ tests/test_data_fetcher.py - WyckoffDataFetcher 数据处理测试
 import pytest
 import pandas as pd
 import numpy as np
-from src.wyckoff.core.data_fetcher import prepare_data, calculate_atr
-from src.wyckoff.config.settings import WyckoffConfig
+from wyckoff.core.data_fetcher import prepare_data, calculate_atr
+from wyckoff.config.settings import WyckoffConfig
 
 
 class TestCalculateATR:

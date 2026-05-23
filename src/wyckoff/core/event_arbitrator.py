@@ -72,6 +72,11 @@ class EventArbitrator:
                 arbitration_reason="无有效信号需要仲裁"
             )
 
+        # Phase 20：同向多头信号优先级（JOC 后 LPS 优于 Spring）
+        bullish_triage = self._triage_bullish_signals(all_signals, events)
+        if bullish_triage is not None:
+            return bullish_triage
+
         # 检测冲突信号
         conflicts = self._detect_conflicts(all_signals)
 
@@ -113,6 +118,24 @@ class EventArbitrator:
             sow_signals = self._extract_sow_signals(sow)
             signals.extend(sow_signals)
 
+        # B6: Upthrust / JOC / FTI
+        upthrust = events.get('upthrust')
+        if upthrust and self._is_signal_detected(upthrust):
+            signals.extend(self._extract_upthrust_signals(upthrust))
+
+        joc = events.get('joc')
+        if joc and self._is_signal_detected(joc):
+            signals.extend(self._extract_joc_signals(joc))
+
+        fti = events.get('fti')
+        if fti and self._is_signal_detected(fti):
+            signals.extend(self._extract_fti_signals(fti))
+
+        # Phase 20: LPS 入场锚点
+        lps = events.get('lps')
+        if lps and self._is_signal_detected(lps):
+            signals.extend(self._extract_lps_signals(lps))
+
         # 按日期排序（最新的在前）
         signals.sort(key=lambda x: self._parse_date(x.date), reverse=True)
 
@@ -152,33 +175,54 @@ class EventArbitrator:
             signals.append(latest)
         return signals
 
-    def _extract_spring_signals(self, spring: SpringModel) -> List[ArbitrationSignal]:
-        """提取Spring信号"""
+    def _extract_spring_signals(self, spring: Any) -> List[ArbitrationSignal]:
+        """提取Spring信号（B13: 去重 latest_spring 与 signals）"""
         signals = []
+        seen_dates = set()
 
-        # 如果有多个Spring信号，处理所有信号
+        if isinstance(spring, dict):
+            for sig in self._iter_signal_details(spring, latest_key='latest_spring'):
+                date_key = str(self._get_signal_field(sig, 'date'))
+                if date_key in seen_dates:
+                    continue
+                seen_dates.add(date_key)
+                signals.append(ArbitrationSignal(
+                    signal_type='spring',
+                    date=self._get_signal_field(sig, 'date'),
+                    direction='bullish',
+                    confidence=self._signal_confidence(sig, 0.7),
+                    strength=self._get_signal_field(sig, 'volume_ratio'),
+                    raw_data={'spring': self._dump_signal(sig)}
+                ))
+            return signals
+
         if hasattr(spring, 'signals') and spring.signals:
             for sig in spring.signals:
+                date_key = str(getattr(sig, 'date', None))
+                if date_key in seen_dates:
+                    continue
+                seen_dates.add(date_key)
                 signals.append(ArbitrationSignal(
                     signal_type='spring',
                     date=sig.date,
                     direction='bullish',
                     confidence=self._calculate_spring_confidence(sig),
-                    strength=sig.total_score,
+                    strength=getattr(sig, 'total_score', None) or getattr(sig, 'confidence', 0),
                     raw_data={'spring': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
                 ))
 
-        # 处理最新Spring
         if hasattr(spring, 'latest_spring') and spring.latest_spring:
             sig = spring.latest_spring
-            signals.append(ArbitrationSignal(
-                signal_type='spring',
-                date=sig.date,
-                direction='bullish',
-                confidence=self._calculate_spring_confidence(sig),
-                strength=sig.total_score,
-                raw_data={'spring': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
-            ))
+            date_key = str(getattr(sig, 'date', None))
+            if date_key not in seen_dates:
+                signals.append(ArbitrationSignal(
+                    signal_type='spring',
+                    date=sig.date,
+                    direction='bullish',
+                    confidence=self._calculate_spring_confidence(sig),
+                    strength=getattr(sig, 'total_score', None) or getattr(sig, 'confidence', 0),
+                    raw_data={'spring': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
+                ))
 
         return signals
 
@@ -212,6 +256,21 @@ class EventArbitrator:
 
         return signals
 
+    def _signal_confidence(self, sig: Any, default: float = 0.7) -> float:
+        """统一 SOS/SOW 置信度量纲：检测器可能返回 0–100 分或仅给 volume_ratio。"""
+        from .signal_extractor import SignalExtractor
+        raw = self._get_signal_field(sig, 'confidence')
+        if raw is not None:
+            return SignalExtractor.normalize_confidence(raw, default)
+        vol = self._get_signal_field(sig, 'volume_ratio')
+        if vol is not None:
+            # 孟氏 SOS 阈值 1.5x；无量化 confidence 时用 1.5x 作为满分参考
+            return min(float(vol) / 1.5, 1.0)
+        score = self._get_signal_field(sig, 'total_score')
+        if score is not None:
+            return SignalExtractor.normalize_confidence(score, default)
+        return default
+
     def _extract_sos_signals(self, sos: SosModel) -> List[ArbitrationSignal]:
         """提取SOS信号"""
         signals = []
@@ -221,7 +280,7 @@ class EventArbitrator:
                 signal_type='sos',
                 date=self._get_signal_field(sig, 'date'),
                 direction='bullish',
-                confidence=self._get_signal_field(sig, 'confidence', 0.7),
+                confidence=self._signal_confidence(sig, 0.7),
                 strength=self._get_signal_field(sig, 'volume_ratio'),
                 raw_data={'sos': self._dump_signal(sig)}
             ))
@@ -237,12 +296,114 @@ class EventArbitrator:
                 signal_type='sow',
                 date=self._get_signal_field(sig, 'date'),
                 direction='bearish',
-                confidence=self._get_signal_field(sig, 'confidence', 0.7),
+                confidence=self._signal_confidence(sig, 0.7),
                 strength=self._get_signal_field(sig, 'volume_ratio'),
                 raw_data={'sow': self._dump_signal(sig)}
             ))
 
         return signals
+
+    def _extract_upthrust_signals(self, upthrust: Any) -> List[ArbitrationSignal]:
+        """提取 Upthrust 信号"""
+        signals = []
+        seen_dates = set()
+        for sig in self._iter_signal_details(upthrust, latest_key='latest_upthrust'):
+            date_key = str(self._get_signal_field(sig, 'date'))
+            if date_key in seen_dates:
+                continue
+            seen_dates.add(date_key)
+            conf_raw = self._get_signal_field(sig, 'confidence', 50)
+            conf = conf_raw / 100.0 if conf_raw and conf_raw > 1 else (conf_raw or 0.5)
+            signals.append(ArbitrationSignal(
+                signal_type='upthrust',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bearish',
+                confidence=min(float(conf), 1.0),
+                strength=self._get_signal_field(sig, 'vol_ratio'),
+                raw_data={'upthrust': self._dump_signal(sig)}
+            ))
+        return signals
+
+    def _extract_joc_signals(self, joc: Any) -> List[ArbitrationSignal]:
+        """提取 JOC 信号"""
+        signals = []
+        for sig in self._iter_signal_details(joc, latest_key='latest'):
+            signals.append(ArbitrationSignal(
+                signal_type='joc',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bullish',
+                confidence=self._signal_confidence(sig, 0.75),
+                strength=self._get_signal_field(sig, 'volume_ratio'),
+                raw_data={'joc': self._dump_signal(sig)}
+            ))
+        return signals
+
+    def _extract_fti_signals(self, fti: Any) -> List[ArbitrationSignal]:
+        """提取 FTI 信号"""
+        signals = []
+        for sig in self._iter_signal_details(fti, latest_key='latest'):
+            signals.append(ArbitrationSignal(
+                signal_type='fti',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bearish',
+                confidence=self._signal_confidence(sig, 0.75),
+                strength=self._get_signal_field(sig, 'volume_ratio'),
+                raw_data={'fti': self._dump_signal(sig)}
+            ))
+        return signals
+
+    def _extract_lps_signals(self, lps: Any) -> List[ArbitrationSignal]:
+        """提取 LPS 信号"""
+        signals = []
+        for sig in self._iter_signal_details(lps, latest_key='latest'):
+            signals.append(ArbitrationSignal(
+                signal_type='lps',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bullish',
+                confidence=self._signal_confidence(sig, 0.72),
+                strength=self._get_signal_field(sig, 'volume_ratio'),
+                raw_data={'lps': self._dump_signal(sig)}
+            ))
+        return signals
+
+    def _triage_bullish_signals(
+        self,
+        all_signals: List[ArbitrationSignal],
+        events: Dict[str, Any],
+    ) -> Optional[ArbitrationResult]:
+        """
+        同向多头信号优先级：JOC 确认后 LPS 优于 Spring/SOS 作为入场锚。
+        """
+        spring = [s for s in all_signals if s.signal_type == 'spring']
+        lps = [s for s in all_signals if s.signal_type == 'lps']
+        joc = [s for s in all_signals if s.signal_type == 'joc']
+        if not (spring and lps):
+            return None
+        if joc and self._is_accumulation_context(events):
+            dominant = lps[0]
+            rejected = spring
+            return ArbitrationResult(
+                has_conflict=True,
+                conflicting_signals=[dominant] + rejected,
+                dominant_signal=dominant,
+                rejected_signals=rejected,
+                arbitration_reason="JOC 已确认，LPS 优于 Spring 作为入场锚点",
+                suggested_phase="Accumulation Phase D",
+                confidence_adjustment=0.9,
+            )
+        if not joc:
+            dominant = spring[0]
+            rejected = lps
+            return ArbitrationResult(
+                has_conflict=True,
+                conflicting_signals=[dominant] + rejected,
+                dominant_signal=dominant,
+                rejected_signals=rejected,
+                arbitration_reason="无 JOC 确认，Spring 结构优于 LPS 缩量回踩",
+                suggested_phase="Accumulation Phase C",
+                confidence_adjustment=0.9,
+            )
+        return None
 
     def _calculate_spring_confidence(self, spring_signal: Any) -> float:
         """计算Spring信号的置信度"""
@@ -378,7 +539,62 @@ class EventArbitrator:
         lpsy_signals = [s for s in signals if s.signal_type == 'lpsy']
 
         if spring_signals and lpsy_signals:
-            return self._arbitrate_spring_lpsy(spring_signals[0], lpsy_signals[0], time_diff)
+            s_sig = spring_signals[0]
+            l_sig = lpsy_signals[0]
+            s_date = self._parse_date(s_sig.date)
+            l_date = self._parse_date(l_sig.date)
+            pair_diff = abs((l_date - s_date).days) if s_date and l_date else 0
+            return self._arbitrate_spring_lpsy(s_sig, l_sig, pair_diff)
+
+        # === 规则1b: Spring vs Upthrust 特殊处理 ===
+        upthrust_signals = [s for s in signals if s.signal_type == 'upthrust']
+        if spring_signals and upthrust_signals:
+            s_sig = spring_signals[0]
+            u_sig = upthrust_signals[0]
+            s_date = self._parse_date(s_sig.date)
+            u_date = self._parse_date(u_sig.date)
+            pair_diff = abs((u_date - s_date).days) if s_date and u_date else 0
+            return self._arbitrate_spring_upthrust(s_sig, u_sig, pair_diff)
+
+        # === 规则1c: JOC vs SOW（派发语境 SOW 优先）===
+        joc_signals = [s for s in signals if s.signal_type == 'joc']
+        sow_signals = [s for s in signals if s.signal_type == 'sow']
+        if joc_signals and sow_signals:
+            j_sig = joc_signals[0]
+            s_sig = sow_signals[0]
+            j_date = self._parse_date(j_sig.date)
+            s_date = self._parse_date(s_sig.date)
+            pair_diff = abs((s_date - j_date).days) if j_date and s_date else 0
+            return self._arbitrate_joc_sow(j_sig, s_sig, pair_diff, events)
+
+        # === 规则1d: JOC vs FTI（突破方向互斥）===
+        fti_signals = [s for s in signals if s.signal_type == 'fti']
+        if joc_signals and fti_signals:
+            j_sig = joc_signals[0]
+            f_sig = fti_signals[0]
+            j_date = self._parse_date(j_sig.date)
+            f_date = self._parse_date(f_sig.date)
+            pair_diff = abs((f_date - j_date).days) if j_date and f_date else 0
+            return self._arbitrate_joc_fti(j_sig, f_sig, pair_diff, events)
+
+        # === 规则1e: SOW vs FTI（派发 C→D：FTI 优先）===
+        if sow_signals and fti_signals:
+            s_sig = sow_signals[0]
+            f_sig = fti_signals[0]
+            s_date = self._parse_date(s_sig.date)
+            f_date = self._parse_date(f_sig.date)
+            pair_diff = abs((f_date - s_date).days) if s_date and f_date else 0
+            return self._arbitrate_sow_fti(s_sig, f_sig, pair_diff, events)
+
+        # === 规则1f: SOS vs JOC（吸筹 C→D：JOC 优先）===
+        sos_signals = [s for s in signals if s.signal_type == 'sos']
+        if sos_signals and joc_signals:
+            o_sig = sos_signals[0]
+            j_sig = joc_signals[0]
+            o_date = self._parse_date(o_sig.date)
+            j_date = self._parse_date(j_sig.date)
+            pair_diff = abs((j_date - o_date).days) if o_date and j_date else 0
+            return self._arbitrate_sos_joc(o_sig, j_sig, pair_diff, events)
 
         # === 规则2: 时间优先规则 ===
         # 如果时间差超过30天，最新信号优先
@@ -492,6 +708,202 @@ class EventArbitrator:
                 return spring, rejected, \
                     f"Spring出现在LPSY后{time_diff}天，市场可能重新进入吸筹", \
                     "Accumulation Phase C"
+
+    def _phase_context(self, events: Dict[str, Any]) -> str:
+        ctx = events.get('_phase_context') or events.get('phase_context') or ''
+        return str(ctx)
+
+    def _is_distribution_context(self, events: Dict[str, Any]) -> bool:
+        ctx = self._phase_context(events)
+        if 'Distribution' in ctx:
+            return True
+        climax = events.get('_climax_type')
+        return climax in ('buying_climax', 'bc')
+
+    def _is_accumulation_context(self, events: Dict[str, Any]) -> bool:
+        ctx = self._phase_context(events)
+        if 'Accumulation' in ctx:
+            return True
+        climax = events.get('_climax_type')
+        return climax in ('selling_climax', 'sc')
+
+    def _arbitrate_joc_sow(
+        self,
+        joc: ArbitrationSignal,
+        sow: ArbitrationSignal,
+        time_diff: int,
+        events: Dict[str, Any],
+    ) -> Tuple[ArbitrationSignal, List[ArbitrationSignal], str, Optional[str]]:
+        """
+        JOC vs SOW：派发语境下 SOW 优先（JOC 可能是 BC 过载或假突破）。
+        """
+        if self._is_distribution_context(events):
+            return sow, [joc], \
+                "派发语境：SOW 优先于 JOC（JOC 可能是 BC 过载或假突破）", \
+                "Distribution Phase C/D"
+        if self._is_accumulation_context(events):
+            return joc, [sow], \
+                "吸筹语境：JOC 优先于 SOW（SOW 可能是 TR 内正常回调）", \
+                "Accumulation Phase D"
+
+        joc_date = self._parse_date(joc.date)
+        sow_date = self._parse_date(sow.date)
+        if joc_date and sow_date:
+            if sow_date > joc_date and time_diff <= 14:
+                return sow, [joc], \
+                    f"SOW 在 JOC 后 {time_diff} 天内出现，突破可能失败", \
+                    "Distribution Phase C"
+            if joc_date > sow_date and time_diff <= 14:
+                return joc, [sow], \
+                    f"JOC 在 SOW 后 {time_diff} 天内出现，需求可能重新主导", \
+                    "Accumulation Phase D"
+
+        if sow.confidence > joc.confidence * 1.1:
+            return sow, [joc], \
+                f"SOW 置信度更高（{sow.confidence:.2f} vs {joc.confidence:.2f}）", \
+                "Distribution Phase C"
+        return joc, [sow], \
+            f"JOC 置信度更高（{joc.confidence:.2f} vs {sow.confidence:.2f}）", \
+            "Accumulation Phase D"
+
+    def _arbitrate_joc_fti(
+        self,
+        joc: ArbitrationSignal,
+        fti: ArbitrationSignal,
+        time_diff: int,
+        events: Dict[str, Any],
+    ) -> Tuple[ArbitrationSignal, List[ArbitrationSignal], str, Optional[str]]:
+        """
+        JOC vs FTI：突破方向互斥，按阶段语境裁决。
+        """
+        if self._is_distribution_context(events):
+            return fti, [joc], \
+                "派发语境：FTI 优先于 JOC（方向性突破应看冰层）", \
+                "Distribution Phase D"
+        if self._is_accumulation_context(events):
+            return joc, [fti], \
+                "吸筹语境：JOC 优先于 FTI（方向性突破应看小溪）", \
+                "Accumulation Phase D"
+
+        joc_date = self._parse_date(joc.date)
+        fti_date = self._parse_date(fti.date)
+        if joc_date and fti_date:
+            if fti_date > joc_date:
+                return fti, [joc], \
+                    f"FTI 在 JOC 后 {time_diff} 天出现，派发突破可能更可靠", \
+                    "Distribution Phase D"
+            return joc, [fti], \
+                f"JOC 在 FTI 后 {time_diff} 天出现，吸筹突破可能更可靠", \
+                "Accumulation Phase D"
+
+        if fti.confidence > joc.confidence:
+            return fti, [joc], "FTI 置信度更高", "Distribution Phase D"
+        return joc, [fti], "JOC 置信度更高", "Accumulation Phase D"
+
+    def _arbitrate_sow_fti(
+        self,
+        sow: ArbitrationSignal,
+        fti: ArbitrationSignal,
+        time_diff: int,
+        events: Dict[str, Any],
+    ) -> Tuple[ArbitrationSignal, List[ArbitrationSignal], str, Optional[str]]:
+        """
+        SOW vs FTI：派发侧 C→D 硬约束，FTI 优先于 SOW（对称 JOC > SOS）。
+        """
+        if self._is_distribution_context(events):
+            sow_date = self._parse_date(sow.date)
+            fti_date = self._parse_date(fti.date)
+            if sow_date and fti_date and sow_date > fti_date and time_diff <= 14:
+                return sow, [fti], \
+                    f"SOW 在 FTI 后 {time_diff} 天内再现，冰层突破可能失败", \
+                    "Distribution Phase C"
+            return fti, [sow], \
+                "派发语境：FTI 为 Phase D 确认，优先于 SOW", \
+                "Distribution Phase D"
+
+        sow_date = self._parse_date(sow.date)
+        fti_date = self._parse_date(fti.date)
+        if sow_date and fti_date and fti_date > sow_date:
+            return fti, [sow], \
+                f"FTI 在 SOW 后 {time_diff} 天出现，派发突破确认", \
+                "Distribution Phase D"
+        if sow_date and fti_date and sow_date > fti_date and time_diff <= 7:
+            return sow, [fti], \
+                f"SOW 更新（{time_diff} 天），弱势可能重新主导", \
+                "Distribution Phase C"
+
+        if fti.confidence >= sow.confidence:
+            return fti, [sow], \
+                f"FTI 优先级更高（{fti.confidence:.2f} vs {sow.confidence:.2f}）", \
+                "Distribution Phase D"
+        return sow, [fti], \
+            f"SOW 置信度更高（{sow.confidence:.2f} vs {fti.confidence:.2f}）", \
+            "Distribution Phase C"
+
+    def _arbitrate_sos_joc(
+        self,
+        sos: ArbitrationSignal,
+        joc: ArbitrationSignal,
+        time_diff: int,
+        events: Dict[str, Any],
+    ) -> Tuple[ArbitrationSignal, List[ArbitrationSignal], str, Optional[str]]:
+        """
+        SOS vs JOC：吸筹侧 C→D 硬约束，JOC 优先于 SOS（对称 FTI > SOW）。
+        """
+        if self._is_accumulation_context(events):
+            sos_date = self._parse_date(sos.date)
+            joc_date = self._parse_date(joc.date)
+            if sos_date and joc_date and sos_date > joc_date and time_diff <= 14:
+                return sos, [joc], \
+                    f"SOS 在 JOC 后 {time_diff} 天内再现，小溪突破可能失败", \
+                    "Accumulation Phase C"
+            return joc, [sos], \
+                "吸筹语境：JOC 为 Phase D 确认，优先于 SOS", \
+                "Accumulation Phase D"
+
+        sos_date = self._parse_date(sos.date)
+        joc_date = self._parse_date(joc.date)
+        if sos_date and joc_date and joc_date > sos_date:
+            return joc, [sos], \
+                f"JOC 在 SOS 后 {time_diff} 天出现，吸筹突破确认", \
+                "Accumulation Phase D"
+        if sos_date and joc_date and sos_date > joc_date and time_diff <= 7:
+            return sos, [joc], \
+                f"SOS 更新（{time_diff} 天），强势可能重新主导", \
+                "Accumulation Phase C"
+
+        if joc.confidence >= sos.confidence:
+            return joc, [sos], \
+                f"JOC 优先级更高（{joc.confidence:.2f} vs {sos.confidence:.2f}）", \
+                "Accumulation Phase D"
+        return sos, [joc], \
+            f"SOS 置信度更高（{sos.confidence:.2f} vs {joc.confidence:.2f}）", \
+            "Accumulation Phase C"
+
+    def _arbitrate_spring_upthrust(
+        self,
+        spring: ArbitrationSignal,
+        upthrust: ArbitrationSignal,
+        time_diff: int
+    ) -> Tuple[ArbitrationSignal, List[ArbitrationSignal], str, Optional[str]]:
+        """
+        Spring vs Upthrust 仲裁：同区间内的方向性测试冲突。
+        """
+        spring_date = self._parse_date(spring.date)
+        upthrust_date = self._parse_date(upthrust.date)
+
+        if not spring_date or not upthrust_date:
+            if upthrust.confidence > spring.confidence:
+                return upthrust, [spring], "Upthrust 置信度更高", "Distribution Phase C"
+            return spring, [upthrust], "Spring 置信度更高", "Accumulation Phase C"
+
+        if upthrust_date > spring_date:
+            if time_diff <= 7:
+                return spring, [upthrust], f"间隔{time_diff}天，Upthrust 可能是假信号，维持 Spring", "Accumulation Phase C（需观察）"
+            return upthrust, [spring], f"Upthrust 在 Spring 后 {time_diff} 天，供应可能主控", "Distribution Phase C"
+        if time_diff <= 7:
+            return upthrust, [spring], f"间隔{time_diff}天，Spring 可能是假信号，维持 Upthrust", "Distribution Phase C（需观察）"
+        return spring, [upthrust], f"Spring 在 Upthrust 后 {time_diff} 天，需求可能重新主导", "Accumulation Phase C"
 
     def _calculate_confidence_adjustment(
         self,

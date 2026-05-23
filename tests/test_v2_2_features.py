@@ -1,10 +1,10 @@
 import pytest
 import pandas as pd
 import json
-from src.wyckoff.schemas import DerivedValueModel, SowSignalModel
-from src.wyckoff.core.symbol_resolver import SymbolResolver, MarketType
-from src.wyckoff.facade import WyckoffAnalyzer
-from src.wyckoff.core.pattern_detector import WyckoffPatternDetector
+from wyckoff.schemas import DerivedValueModel, SowSignalModel
+from wyckoff.core.symbol_resolver import SymbolResolver, MarketType
+from wyckoff.facade import WyckoffAnalyzer
+from wyckoff.core.pattern_detector import WyckoffPatternDetector
 
 
 def test_derived_value_backward_compatibility():
@@ -80,6 +80,3 @@ def test_atomic_methods_structure(mock_analyzer_data, monkeypatch):
         res = json.loads(conflict_json)
         assert 'has_conflict' in res
         assert 'interpretation' in res
-
-if __name__ == "__main__":
-    pytest.main([__file__])

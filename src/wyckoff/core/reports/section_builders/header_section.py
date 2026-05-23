@@ -1,10 +1,12 @@
 from datetime import datetime
 from .base_builder import BaseSectionBuilder
 
+from ...signal_extractor import SignalExtractor
+
 class HeaderSection(BaseSectionBuilder):
     """构建报告头部及基础数据区块"""
     def build(self, phase_result: dict, trading_range: dict) -> str:
-        phase_str = phase_result.get('phase', 'Unknown')
+        phase_str = SignalExtractor.get_effective_phase(phase_result)
         phase_conf = phase_result.get('confidence', 0.0)
         ma_conf = phase_result.get('ma_confidence', 0)
         vol_conf = phase_result.get('vol_confidence', 0)

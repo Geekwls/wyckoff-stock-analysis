@@ -64,16 +64,17 @@ class PhaseIdentifier(BaseDetector):
         if self.data is None:
             return {'phase': 'Unknown', 'confidence': 0.0, 'phase_enum': WyckoffPhase.UNKNOWN}
 
-        # 若传入 EventsModel，直接使用；否则保持历史兼容路径
+        # 若传入 EventsModel，先转 dict 再过滤（修复 EventsModel 路径 120 日过滤缺失）
         from ...schemas import EventsModel as _EM
         if isinstance(raw_events, _EM):
-            events = raw_events
+            events_payload = raw_events.model_dump() if hasattr(raw_events, 'model_dump') else raw_events.dict()
+            events = self.filter_relevant_events(events_payload)
         else:
             events = self.filter_relevant_events(raw_events)
 
-        phase_str, phase_enum, confidence = self._determine_phase_from_events(events)
+        phase_str, phase_enum, confidence, phase_description = self._determine_phase_from_events(events)
         if phase_enum == WyckoffPhase.UNKNOWN:
-            phase_str, phase_enum, confidence = self._fallback_logic(events)
+            phase_str, phase_enum, confidence, phase_description = self._fallback_logic(events)
         
         #  评分修正：如果 Phase A 结构不完整，大幅扣减置信度
         if phase_enum != WyckoffPhase.UNKNOWN:
@@ -131,6 +132,8 @@ class PhaseIdentifier(BaseDetector):
             'sequence_score': seq_score,
             'quality_factor': round(quality_factor, 2)
         }
+        if phase_description:
+            result['phase_description'] = phase_description
 
         # 添加Phase A结构状态信息
         if phase_a_structure_info:
@@ -180,13 +183,21 @@ class PhaseIdentifier(BaseDetector):
         has_ar = self._safe_check_detected(ar)
         has_st = self._safe_check_detected(st)
         has_ps = self._safe_check_detected(ps)
+        psy = self._get_event(events, 'preliminary_supply')
+        has_psy = self._safe_check_detected(psy)
+        climax_type = getattr(climax, 'type', None) if climax and has_climax else (
+            climax.get('type') if isinstance(climax, dict) and has_climax else None
+        )
 
-        # 威科夫理论：Phase A 至少需要 Climax + (AR 或 ST)
-        has_complete_structure = has_climax and (has_ar or has_st)
+        has_complete_structure = PhaseAdapter.is_phase_a_structure_complete(events)
 
         # 记录详细的缺失警告
         if has_climax and not has_complete_structure:
             missing = []
+            if climax_type == 'selling_climax' and not has_ps:
+                missing.append("PS(初次支撑)")
+            if climax_type == 'buying_climax' and not has_psy:
+                missing.append("PSY(初次供应)")
             if not has_ar:
                 missing.append("AR(自动反弹/回落)")
             if not has_st:
@@ -196,6 +207,10 @@ class PhaseIdentifier(BaseDetector):
                 f"[Phase A结构不完整] 检测到Climax但缺少 {', '.join(missing)}。"
                 f"根据威科夫理论，这可能只是趋势中的暂时停顿，而非真正的Phase A开始。"
                 f"等待 {', '.join(missing)} 出现后再确认Phase A。"
+            )
+        elif has_climax and has_ar and not has_st:
+            logger.warning(
+                "[Phase A结构不完整] 已有 Climax+AR 但缺少 ST，仅可标为待确认 Phase A。"
             )
 
         return has_complete_structure
@@ -211,18 +226,21 @@ class PhaseIdentifier(BaseDetector):
         ar = self._get_event(events, 'automatic_reaction')
         st = self._get_event(events, 'secondary_test')
         ps = self._get_event(events, 'preliminary_support')
+        psy = self._get_event(events, 'preliminary_supply')
 
         has_climax = self._safe_check_detected(climax)
         has_ar = self._safe_check_detected(ar)
         has_st = self._safe_check_detected(st)
         has_ps = self._safe_check_detected(ps)
+        has_psy = self._safe_check_detected(psy)
 
         status = {
             "has_preliminary_support": has_ps,
+            "has_preliminary_supply": has_psy,
             "has_climax": has_climax,
             "has_automatic_reaction": has_ar,
             "has_secondary_test": has_st,
-            "is_complete": has_climax and (has_ar or has_st),
+            "is_complete": PhaseAdapter.is_phase_a_structure_complete(events),
             "completeness_score": 0,
             "missing_elements": [],
             "warnings": []
@@ -231,6 +249,7 @@ class PhaseIdentifier(BaseDetector):
         # 计算完整性得分（满分4分）
         score = sum([
             has_ps,
+            has_psy,
             has_climax,
             has_ar,
             has_st
@@ -239,10 +258,11 @@ class PhaseIdentifier(BaseDetector):
 
         # 记录缺失元素
         required_elements = {
-            'has_ps': 'PS',
+            'has_preliminary_support': 'PS',
+            'has_preliminary_supply': 'PSY',
             'has_climax': 'Climax',
-            'has_ar': 'AR',
-            'has_st': 'ST'
+            'has_automatic_reaction': 'AR',
+            'has_secondary_test': 'ST'
         }
 
         for key, element_name in required_elements.items():
@@ -250,10 +270,15 @@ class PhaseIdentifier(BaseDetector):
                 status["missing_elements"].append(element_name)
 
         # 生成警告信息
-        if has_climax and not (has_ar or has_st):
-            status["warnings"].append(
-                "⚠️ 威科夫理论警告：仅有Climax无AR/ST，可能只是趋势中暂时停顿"
-            )
+        if has_climax and not (has_ar and has_st):
+            if not has_ar:
+                status["warnings"].append(
+                    "⚠️ 威科夫理论警告：仅有Climax无AR/ST，可能只是趋势中暂时停顿"
+                )
+            elif not has_st:
+                status["warnings"].append(
+                    "⚠️ 威科夫理论警告：Climax+AR 缺 ST，Phase A 尚未正式确认"
+                )
         if score == 1 and has_climax:
             status["warnings"].append(
                 "⚠️ 威科夫理论警告：Phase A结构极不完整（1/4），不建议作为交易依据"
@@ -261,59 +286,217 @@ class PhaseIdentifier(BaseDetector):
 
         return status
 
-    def _determine_phase_from_events(self, events: Dict) -> Tuple[str, WyckoffPhase, float]:
+    def _determine_phase_from_events(self, events: Dict) -> Tuple[str, WyckoffPhase, float, Optional[str]]:
         """从事件序列中判定阶段 - 优化版（方案B）"""
 
         #  方案B优化：首先检查是否为"BC强但AR/ST缺失"的模糊结构
         ambiguous_phase = self._check_ambiguous_phase_structure(events)
         if ambiguous_phase:
-            return ambiguous_phase  # 返回更精确的阶段标签
+            return self._phase_tuple(ambiguous_phase)
 
-        #  新增：Phase B 主动检测逻辑
+        flags = self._extract_phase_signal_flags(events)
+
+        # Phase 9 (B1/B3)：JOC/FTI 突破期判定优先于 Phase B 主动检测
+        breakout_phase = self._detect_breakout_phase_d(events, flags)
+        if breakout_phase:
+            return self._phase_tuple(breakout_phase)
+
+        # Phase C+ 决断信号须在 Phase B 之前（B3：Upthrust+SOW 无 FTI 不应被 Phase B 覆盖）
+        phase_c_plus = self._detect_phase_c_plus_signals(events, flags)
+        if phase_c_plus:
+            return self._phase_tuple(phase_c_plus)
+
+        is_spring = flags['is_spring']
+        is_upthrust = flags['is_upthrust']
+        phase_a_complete = self._check_phase_a_completeness(events)
+
+        # Phase 19：Spring/Upthrust → Phase C 须在 Phase B 主动检测之前
+        if is_spring:
+            if phase_a_complete:
+                return self._phase_tuple(('Accumulation Phase C (积累期震仓)', WyckoffPhase.PHASE_C, 0.70))
+            return self._phase_tuple(('Spring待Phase A确认 (结构不完整)', WyckoffPhase.UNKNOWN, 0.45))
+        if is_upthrust:
+            if phase_a_complete:
+                return self._phase_tuple(('Distribution Phase C (派发期诱多)', WyckoffPhase.PHASE_C, 0.70))
+            return self._phase_tuple(('Upthrust待Phase A确认 (结构不完整)', WyckoffPhase.UNKNOWN, 0.45))
+
+        #  Phase B 主动检测逻辑（须在 JOC/FTI 之后，避免覆盖 Phase D）
         phase_b_result = self._detect_phase_b_active(events)
         if phase_b_result:
-            return phase_b_result
+            return self._phase_tuple(phase_b_result)
 
-        # 标准阶段识别逻辑
+        climax = self._get_event(events, 'climax')
+        ar = self._get_event(events, 'automatic_reaction')
+        st = self._get_event(events, 'secondary_test')
+
+        if (
+            self._safe_check_detected(climax)
+            and self._safe_check_detected(ar)
+        ):
+            has_st = self._safe_check_detected(st)
+            climax_type = getattr(climax, 'type', None) if climax else None
+            if isinstance(climax, dict):
+                climax_type = climax.get('type', climax_type)
+
+            if has_st:
+                # SC/BC + AR + ST → Phase B（修复原 Phase A 分支覆盖导致的死代码）
+                if climax_type == 'selling_climax':
+                    return self._phase_tuple(('Accumulation Phase B (积累期测试)', WyckoffPhase.PHASE_B, 0.60))
+                return self._phase_tuple(('Distribution Phase B (派发期测试)', WyckoffPhase.PHASE_B, 0.60))
+
+            # SC/BC + AR，待 ST：Phase A 待确认；缺 PS/PSY 时不标高置信 Phase A
+            ps = self._get_event(events, 'preliminary_support')
+            psy = self._get_event(events, 'preliminary_supply')
+            has_ps = self._safe_check_detected(ps)
+            has_psy = self._safe_check_detected(psy)
+            if climax_type == 'selling_climax':
+                if not has_ps:
+                    return self._phase_tuple((
+                        'Accumulation Phase A (SC+AR待PS/ST确认)',
+                        WyckoffPhase.UNKNOWN, 0.40,
+                    ))
+                return self._phase_tuple(('Accumulation Phase A (SC+AR待ST确认)', WyckoffPhase.PHASE_A, 0.55))
+            if not has_psy:
+                return self._phase_tuple((
+                    'Distribution Phase A (BC+AR待PSY/ST确认)',
+                    WyckoffPhase.UNKNOWN, 0.40,
+                ))
+            return self._phase_tuple(('Distribution Phase A (BC+AR待ST确认)', WyckoffPhase.PHASE_A, 0.55))
+
+        return self._phase_tuple(('Unknown', WyckoffPhase.UNKNOWN, 0.30))
+
+    @staticmethod
+    def _phase_tuple(result: Tuple[str, WyckoffPhase, float, Optional[str]] | Tuple[str, WyckoffPhase, float]) -> Tuple[str, WyckoffPhase, float, Optional[str]]:
+        if len(result) == 4:
+            return result
+        phase, enum, conf = result
+        return phase, enum, conf, None
+
+    def _extract_phase_signal_flags(self, events: Dict) -> Dict[str, bool]:
+        """从 EventsModel 提取 Spring/Upthrust/SOS/SOW/JOC/FTI 检测标志。"""
         from ...schemas import DualEventModel as _DEM
-        su_info = getattr(events, 'spring_upthrust', None)
-        ss_info = getattr(events, 'sos_sow', None)
+        su_info = self._get_event(events, 'spring_upthrust')
+        ss_info = self._get_event(events, 'sos_sow')
+        joc = self._get_event(events, 'joc')
+        fti = self._get_event(events, 'fti')
+        return {
+            'is_spring': (
+                isinstance(su_info, _DEM) and su_info.type_ == 'spring'
+                and getattr(su_info.data, 'detected', False)
+            ),
+            'is_upthrust': (
+                isinstance(su_info, _DEM) and su_info.type_ == 'upthrust'
+                and getattr(su_info.data, 'detected', False)
+            ),
+            'is_sos': (
+                isinstance(ss_info, _DEM) and ss_info.type_ == 'sos'
+                and getattr(ss_info.data, 'detected', False)
+            ),
+            'is_sow': (
+                isinstance(ss_info, _DEM) and ss_info.type_ == 'sow'
+                and getattr(ss_info.data, 'detected', False)
+            ),
+            'is_joc': bool(joc and getattr(joc, 'detected', False)),
+            'is_fti': bool(fti and getattr(fti, 'detected', False)),
+        }
 
-        climax = getattr(events, 'climax', None)
-        ar = getattr(events, 'automatic_reaction', None)
-        st = getattr(events, 'secondary_test', None)
+    def _is_accumulation_joc_context(self, events: Dict, flags: Dict[str, bool]) -> bool:
+        """派发/BC/SOW 语境下向上突破不应归类为吸筹 JOC → Phase D。"""
+        climax = self._get_event(events, 'climax')
+        if climax and getattr(climax, 'detected', False):
+            if getattr(climax, 'type', None) == 'buying_climax':
+                return False
+        if flags.get('is_sow'):
+            return False
+        joc = self._get_event(events, 'joc')
+        if joc is not None:
+            if getattr(joc, 'joc_overload_warning', False):
+                return False
+            reason = getattr(joc, 'reason', None)
+            if reason in ('joc_volume_overload_buying_climax', 'suppressed_by_overbought_climax'):
+                return False
+        return True
 
-        is_spring = (isinstance(su_info, _DEM) and su_info.type_ == 'spring'
-                     and getattr(su_info.data, 'detected', False))
-        is_upthrust = (isinstance(su_info, _DEM) and su_info.type_ == 'upthrust'
-                       and getattr(su_info.data, 'detected', False))
-        is_sos = (isinstance(ss_info, _DEM) and ss_info.type_ == 'sos'
-                  and getattr(ss_info.data, 'detected', False))
-        is_sow = (isinstance(ss_info, _DEM) and ss_info.type_ == 'sow'
-                  and getattr(ss_info.data, 'detected', False))
+    def _detect_breakout_phase_d(
+        self, events: Dict, flags: Dict[str, bool]
+    ) -> Optional[Tuple[str, WyckoffPhase, float]]:
+        """
+        孟氏突破期（Phase D）判定：吸筹须 JOC，派发须 FTI。
+        须在 Phase B 主动检测之前调用（Phase 9 / B1、B3）。
+        """
+        if flags.get('is_joc'):
+            if not self._is_accumulation_joc_context(events, flags):
+                return None
+            joc = self._get_event(events, 'joc')
+            conf = 0.85
+            if getattr(joc, 'test_detected', False) and getattr(joc, 'test_score', 0) >= 60:
+                conf = 0.90
+            return self._maybe_upgrade_to_phase_e(
+                'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, conf, events=events
+            )
 
-        if is_spring and is_sos:
-            return 'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, 0.85
-        if is_spring:
-            return 'Accumulation Phase C (积累期震仓)', WyckoffPhase.PHASE_C, 0.70
-        if is_upthrust and is_sow:
-            return 'Distribution Phase D (派发期跌破)', WyckoffPhase.PHASE_D, 0.85
-        if is_upthrust:
-            return 'Distribution Phase C (派发期诱多)', WyckoffPhase.PHASE_C, 0.70
+        if flags.get('is_fti'):
+            fti = self._get_event(events, 'fti')
+            conf = 0.85
+            if getattr(fti, 'test_detected', False):
+                conf = 0.90
+            return self._maybe_upgrade_to_phase_e(
+                'Distribution Phase D (派发期跌破)', WyckoffPhase.PHASE_D, conf, events=events
+            )
 
-        if climax and climax.detected and ar and ar.detected:
-            if climax.type == 'selling_climax':
-                return 'Accumulation Phase A (恐慌抛售停止)', WyckoffPhase.PHASE_A, 0.75
-            return 'Distribution Phase A (买入高潮停止)', WyckoffPhase.PHASE_A, 0.75
+        return None
 
-        if climax and climax.detected and st and st.detected:
-            if climax.type == 'selling_climax':
-                return 'Accumulation Phase B (积累期测试)', WyckoffPhase.PHASE_B, 0.60
-            return 'Distribution Phase B (派发期测试)', WyckoffPhase.PHASE_B, 0.60
+    def _maybe_upgrade_to_phase_e(
+        self,
+        phase_d_label: str,
+        phase_enum: WyckoffPhase,
+        confidence: float,
+        events: Optional[Dict] = None,
+    ) -> Tuple[str, WyckoffPhase, float]:
+        """Phase 11/19: JOC/FTI Phase D 在连续同向确认 + LPS/LPSY 推进后升级 Phase E。"""
+        from ..utils import continuous_price_confirmation
+        if self.data is None:
+            return phase_d_label, phase_enum, confidence
+        if events is not None:
+            from ..signal_extractor import SignalExtractor
+            lps = self._get_event(events, 'lps')
+            lpsy = self._get_event(events, 'lpsy')
+            has_lps = SignalExtractor.is_formal_lps(lps)
+            has_lpsy = SignalExtractor.is_formal_lpsy(lpsy)
+            if 'Accumulation' in phase_d_label and not has_lps:
+                return phase_d_label, phase_enum, confidence
+            if 'Distribution' in phase_d_label and not has_lpsy:
+                return phase_d_label, phase_enum, confidence
+        if not continuous_price_confirmation(self.data, 3, phase_d_label, require_volume=True):
+            return phase_d_label, phase_enum, confidence
+        if 'Accumulation' in phase_d_label:
+            return 'Accumulation Phase E (Markup推进)', WyckoffPhase.PHASE_E, min(confidence + 0.05, 0.95)
+        if 'Distribution' in phase_d_label:
+            return 'Distribution Phase E (Markdown推进)', WyckoffPhase.PHASE_E, min(confidence + 0.05, 0.95)
+        return phase_d_label.replace('Phase D', 'Phase E'), WyckoffPhase.PHASE_E, min(confidence + 0.05, 0.95)
 
-        return 'Unknown', WyckoffPhase.UNKNOWN, 0.30
+    def _detect_phase_c_plus_signals(
+        self, events: Dict, flags: Dict[str, bool]
+    ) -> Optional[Tuple[str, WyckoffPhase, float]]:
+        """Spring+SOS / Upthrust+SOW / 孤立 SOW(SOS) 决断性组合，突破确认前最高 Phase C+。"""
+        climax = self._get_event(events, 'climax')
+        climax_type = getattr(climax, 'type', None) if climax and getattr(climax, 'detected', False) else None
+        phase_a_complete = self._check_phase_a_completeness(events)
 
-    def _detect_phase_b_active(self, events: Dict) -> Optional[Tuple[str, WyckoffPhase, float]]:
+        if flags.get('is_spring') and flags.get('is_sos') and phase_a_complete:
+            return 'Accumulation Phase C+ (SOS出现待JOC确认)', WyckoffPhase.PHASE_C, 0.75
+        if flags.get('is_upthrust') and flags.get('is_sow') and phase_a_complete:
+            return 'Distribution Phase C+ (SOW出现待FTI确认)', WyckoffPhase.PHASE_C, 0.75
+
+        # Phase 14: 孤立 SOW/SOS 对称升级 C+（须匹配派发/吸筹 climax 语境）
+        if flags.get('is_sow') and not flags.get('is_fti') and climax_type == 'buying_climax':
+            return 'Distribution Phase C+ (SOW出现待FTI确认)', WyckoffPhase.PHASE_C, 0.72
+        if flags.get('is_sos') and not flags.get('is_joc') and climax_type == 'selling_climax':
+            return 'Accumulation Phase C+ (SOS出现待JOC确认)', WyckoffPhase.PHASE_C, 0.72
+
+        return None
+
+    def _detect_phase_b_active(self, events: Dict) -> Optional[Tuple[str, WyckoffPhase, float, Optional[str]]]:
         """
         Phase B 主动检测逻辑 — 量化吸收校验重构版 (Wave 3)
 
@@ -323,7 +506,7 @@ class PhaseIdentifier(BaseDetector):
         4. 综合吸收得分 (Accumulation Score / Distribution Score) 对置信度进行额外奖励或惩罚调降。
         """
         # 1. 提取 TR 切片数据并计算吸收得分
-        tr_info = getattr(events, 'trading_range', None)
+        tr_info = self._get_event(events, 'trading_range')
         L = 60
         if tr_info is not None:
             if hasattr(tr_info, 'duration_days'):
@@ -394,13 +577,13 @@ class PhaseIdentifier(BaseDetector):
                 dist_score += 0.4
 
         # 获取关键事件
-        lps_events = getattr(events, 'lps_list', []) or []
-        ut_events = getattr(events, 'ut_list', []) or []
-        climax = getattr(events, 'climax', None)
-        ar = getattr(events, 'automatic_reaction', None)
-        st = getattr(events, 'secondary_test', None)
+        lps_events = self._get_event(events, 'lps_list') or []
+        ut_events = self._get_event(events, 'ut_list') or []
+        climax = self._get_event(events, 'climax')
+        ar = self._get_event(events, 'automatic_reaction')
+        st = self._get_event(events, 'secondary_test')
 
-        # 检查是否有基础结构（至少有 Climax + AR）
+        # 检查是否有基础结构（Climax + AR；Phase B 还须 ST 或 ≥2 次区间测试）
         has_climax = self._safe_check_detected(climax)
         has_ar = self._safe_check_detected(ar)
 
@@ -415,8 +598,11 @@ class PhaseIdentifier(BaseDetector):
         total_tests = lps_count + ut_count
         has_st = self._safe_check_detected(st)
 
+        if not has_st and total_tests < 2:
+            return None
+
         # 新增：检查 VSA 枯竭信号
-        vsa_signals = getattr(events, 'vsa_signals', None) or {}
+        vsa_signals = self._get_event(events, 'vsa_signals') or {}
         has_no_supply = (vsa_signals.get('is_no_supply', False) if isinstance(vsa_signals, dict)
                          else getattr(vsa_signals, 'is_no_supply', False))
         has_no_demand = (vsa_signals.get('is_no_demand', False) if isinstance(vsa_signals, dict)
@@ -441,7 +627,7 @@ class PhaseIdentifier(BaseDetector):
 
         elif total_tests >= 2 or has_st:
             # 检查是否在 TR 中震荡
-            tr_info = getattr(events, 'trading_range', None)
+            tr_info = self._get_event(events, 'trading_range')
             in_tr = (tr_info.is_consolidation if hasattr(tr_info, 'is_consolidation')
                      else (tr_info.get('is_consolidation', False) if isinstance(tr_info, dict) else False))
 
@@ -464,40 +650,41 @@ class PhaseIdentifier(BaseDetector):
         if ret_val is None:
             return None
 
-        desc, phase_enum, conf = ret_val
+        phase_label, phase_enum, conf = ret_val
+        phase_note: Optional[str] = None
         climax_type = getattr(climax, 'type', 'selling_climax') if has_climax else 'selling_climax'
 
-        # 应用量化吸收得分的置信度奖励与惩罚调降
+        # 应用量化吸收得分的置信度奖励与惩罚调降（文案写入 phase_description，不覆盖 phase 标签）
         if climax_type == 'selling_climax':
             score = acc_score
             if score >= 0.6:
                 conf = min(0.90, conf + 0.15)
-                desc = f"[经典威科夫吸筹特征确认] 筹码吸收极度强劲：波幅在整理期间显著收敛了 {max(0, int((1 - spread_ratio) * 100))}%"
+                phase_note = f"[经典威科夫吸筹特征确认] 筹码吸收极度强劲：波幅在整理期间显著收敛了 {max(0, int((1 - spread_ratio) * 100))}%"
                 if waves_generated:
                     if v_down > 0:
-                        desc += f"，且上涨波段的累积努力压倒下跌波段达 {max(0, int((v_up / v_down - 1) * 100))}%"
+                        phase_note += f"，且上涨波段的累积努力压倒下跌波段达 {max(0, int((v_up / v_down - 1) * 100))}%"
                     else:
-                        desc += "，且上涨波段的累积努力完全压倒下跌波段"
-                desc += "。"
+                        phase_note += "，且上涨波段的累积努力完全压倒下跌波段"
+                phase_note += "。"
             elif score < 0.3:
                 conf = 0.50
-                desc = f"[警告] 非吸收性无方向宽幅震荡整理 (波幅收敛比: {spread_ratio:.2f})，置信度降至 0.50。"
+                phase_note = f"[警告] 非吸收性无方向宽幅震荡整理 (波幅收敛比: {spread_ratio:.2f})，置信度降至 0.50。"
         else:  # buying_climax
             score = dist_score
             if score >= 0.6:
                 conf = min(0.90, conf + 0.15)
-                desc = f"[经典威科夫派发特征确认] 筹码派发特征明显：波幅在整理期间显著收敛了 {max(0, int((1 - spread_ratio) * 100))}%"
+                phase_note = f"[经典威科夫派发特征确认] 筹码派发特征明显：波幅在整理期间显著收敛了 {max(0, int((1 - spread_ratio) * 100))}%"
                 if waves_generated:
                     if v_up > 0:
-                        desc += f"，且下跌波段的累积派发努力压倒上涨波段达 {max(0, int((v_down / v_up - 1) * 100))}%"
+                        phase_note += f"，且下跌波段的累积派发努力压倒上涨波段达 {max(0, int((v_down / v_up - 1) * 100))}%"
                     else:
-                        desc += "，且下跌波段的累积派发努力完全压倒上涨波段"
-                desc += "。"
+                        phase_note += "，且下跌波段的累积派发努力完全压倒上涨波段"
+                phase_note += "。"
             elif score < 0.3:
                 conf = 0.50
-                desc = f"[警告] 非筹码派发性宽幅震荡整理 (波幅收敛比: {spread_ratio:.2f})，置信度降至 0.50。"
+                phase_note = f"[警告] 非筹码派发性宽幅震荡整理 (波幅收敛比: {spread_ratio:.2f})，置信度降至 0.50。"
 
-        return (desc, phase_enum, conf)
+        return (phase_label, phase_enum, conf, phase_note)
 
     def _check_ambiguous_phase_structure(self, events: Dict) -> Optional[Tuple[str, WyckoffPhase, float]]:
         """
@@ -505,7 +692,7 @@ class PhaseIdentifier(BaseDetector):
 
         处理"BC强但AR/ST缺失"的情况，给出更精确的阶段标签
         """
-        climax = getattr(events, 'climax', None)
+        climax = self._get_event(events, 'climax')
         has_strong_climax, climax_type, climax_confidence = self._get_climax_info(climax)
 
         # 方案B增强：设置BC强度阈值（只处理高置信度BC）
@@ -513,8 +700,8 @@ class PhaseIdentifier(BaseDetector):
             return None  # BC不够强或不存在，不是模糊结构
 
         # 安全地检查AR/ST
-        ar = getattr(events, 'automatic_reaction', None)
-        st = getattr(events, 'secondary_test', None)
+        ar = self._get_event(events, 'automatic_reaction')
+        st = self._get_event(events, 'secondary_test')
 
         has_ar = self._safe_check_detected(ar)
         has_st = self._safe_check_detected(st)
@@ -638,20 +825,18 @@ class PhaseIdentifier(BaseDetector):
             return self._handle_neutral_trend_ambiguous_phase(climax_type)
 
     def _handle_bullish_trend_ambiguous_phase(self, climax_type: str, weak_ar: bool, weak_st: bool) -> Tuple[str, WyckoffPhase, float]:
-        """处理多头趋势下的模糊阶段"""
+        """处理多头趋势下的模糊阶段 — Phase 27：BC 是派发起点，不可直标 Markup E"""
         if climax_type == 'buying_climax':
             if weak_ar or weak_st:
-                logger.info("[方案B] 判定为: Markup Phase E (上涨末期，潜在派发初期)")
-                return ('Markup Phase E (上涨末期，潜在派发初期)', WyckoffPhase.PHASE_E,
+                logger.info("[方案B] 判定为: Distribution Phase A (BC警示，潜在派发初期)")
+                return ('Distribution Phase A (BC警示，潜在派发初期)', WyckoffPhase.PHASE_A,
                        CONFIDENCE_ADJUSTMENT['strong_markup_with_warning'])
-            else:
-                logger.info("[方案B] 判定为: Markup Phase E (强势上涨，伴有买入高潮警示)")
-                return ('Markup Phase E (强势上涨，伴有买入高潮警示)', WyckoffPhase.PHASE_E,
-                       CONFIDENCE_ADJUSTMENT['strong_markup_bc_warning'])
-        else:  # selling_climax
-            logger.info("[方案B] 判定为: Markup Phase E (强势上涨，但出现恐慌性抛售)")
-            return ('Markup Phase E (强势上涨，但出现恐慌性抛售)', WyckoffPhase.PHASE_E,
-                   CONFIDENCE_ADJUSTMENT['strong_markup_sc_warning'])
+            logger.info("[方案B] 判定为: Distribution Phase A (BC警示，等待AR/ST确认)")
+            return ('Distribution Phase A (BC警示，等待AR/ST确认)', WyckoffPhase.PHASE_A,
+                   CONFIDENCE_ADJUSTMENT['strong_markup_bc_warning'])
+        logger.info("[方案B] 判定为: Trending Bullish with SC Warning (趋势中恐慌抛售警示)")
+        return ('Trending Bullish with SC Warning (趋势中恐慌抛售警示)', WyckoffPhase.UNKNOWN,
+               CONFIDENCE_ADJUSTMENT['strong_markup_sc_warning'])
 
     def _handle_bearish_trend_ambiguous_phase(self, climax_type: str) -> Tuple[str, WyckoffPhase, float]:
         """处理空头趋势下的模糊阶段"""
@@ -779,7 +964,7 @@ class PhaseIdentifier(BaseDetector):
         else:
             return df['Volume'].mean()
 
-    def _fallback_logic(self, events: Dict = None) -> Tuple[str, WyckoffPhase, float]:
+    def _fallback_logic(self, events: Dict = None) -> Tuple[str, WyckoffPhase, float, Optional[str]]:
         """基于均线排布的降级判定逻辑"""
         current = self.data['Close'].iloc[-1]
         
@@ -805,14 +990,29 @@ class PhaseIdentifier(BaseDetector):
                           else (tr.get('absorption_detected', False) if isinstance(tr, dict) else False))
             if absorption:
                 if current > ma200:
-                    return "Reaccumulation Phase C/D (再积累确认，供应已被吸收)", WyckoffPhase.PHASE_D, 0.75
+                    flags = self._extract_phase_signal_flags(events)
+                    if flags.get('is_joc'):
+                        return self._phase_tuple((
+                            "Reaccumulation Phase C/D (再积累确认，供应已被吸收)",
+                            WyckoffPhase.PHASE_D, 0.75,
+                        ))
+                    return self._phase_tuple((
+                        "Reaccumulation Phase C+ (吸收特征待JOC确认)",
+                        WyckoffPhase.PHASE_C, 0.65,
+                    ))
         
-        if current > ma20 > ma50 > ma200: 
-            return "Markup Phase E (强势上涨)", WyckoffPhase.PHASE_E, 0.6
-        if current < ma20 < ma50 < ma200: 
-            return "Markdown Phase E (强势下跌)", WyckoffPhase.PHASE_E, 0.6
+        if current > ma20 > ma50 > ma200:
+            return self._phase_tuple((
+                "Trending Bullish (均线多头排列，待威科夫事件序列确认)",
+                WyckoffPhase.UNKNOWN, 0.45,
+            ))
+        if current < ma20 < ma50 < ma200:
+            return self._phase_tuple((
+                "Trending Bearish (均线空头排列，待威科夫事件序列确认)",
+                WyckoffPhase.UNKNOWN, 0.45,
+            ))
             
-        return "Trending (趋势中)", WyckoffPhase.UNKNOWN, 0.4
+        return self._phase_tuple(("Trending (趋势中)", WyckoffPhase.UNKNOWN, 0.4))
 
     def _check_ma_confirmation(self, phase: Union[str, WyckoffPhase]) -> float:
         """检查均线确认"""
@@ -903,9 +1103,12 @@ class PhaseIdentifier(BaseDetector):
         ar = self._get_event(events, 'automatic_reaction')
         st = self._get_event(events, 'secondary_test')
         ps_event = self._get_event(events, 'preliminary_support')
-        ps_detected = False
-        if ps_event:
-            ps_detected = self._safe_check_detected(ps_event)
+        psy_event = self._get_event(events, 'preliminary_supply')
+        ps_detected = self._safe_check_detected(ps_event) if ps_event else False
+        psy_detected = self._safe_check_detected(psy_event) if psy_event else False
+        climax_type = None
+        if climax:
+            climax_type = getattr(climax, 'type', None) if not isinstance(climax, dict) else climax.get('type')
 
         count = 0
         if climax and (isinstance(climax, dict) and climax.get('detected') or getattr(climax, 'detected', False)):
@@ -914,7 +1117,11 @@ class PhaseIdentifier(BaseDetector):
             count += 1
         if st and (isinstance(st, dict) and st.get('detected') or getattr(st, 'detected', False)):
             count += 1
-        if ps_detected:
+        if climax_type == 'selling_climax' and ps_detected:
+            count += 1
+        elif climax_type == 'buying_climax' and psy_detected:
+            count += 1
+        elif ps_detected or psy_detected:
             count += 1
 
         # 如果 4 个支柱只剩 1-2 个，置信度打折
@@ -927,25 +1134,48 @@ class PhaseIdentifier(BaseDetector):
         return 1.0
 
     def calculate_sequence_score(self, events: Dict, phase: Union[str, WyckoffPhase]) -> Dict:
-        """计算事件序列完整性得分"""
-        count = 0
+        """计算事件序列完整性得分（含 PS/PSY → 第五步 LPS/LPSY）"""
         from ...schemas import DualEventModel as _DEMC
-        checks = ['climax', 'automatic_reaction', 'secondary_test', 'spring_upthrust', 'sos_sow']
-        for c in checks:
-            event = self._get_event(events, c)
-            if event:
-                if isinstance(event, _DEMC):
-                    if getattr(event.data, 'detected', False):
-                        count += 1
-                elif hasattr(event, 'detected') and event.detected:
-                    count += 1
-            
+        from ..signal_extractor import SignalExtractor
+
+        def _event_detected(key: str) -> bool:
+            event = self._get_event(events, key)
+            if not event:
+                return False
+            if key == 'lps':
+                return SignalExtractor.is_formal_lps(event)
+            if key == 'lpsy':
+                return SignalExtractor.is_formal_lpsy(event)
+            if isinstance(event, _DEMC):
+                data = getattr(event, 'data', None)
+                return bool(getattr(data, 'detected', False)) if data is not None else False
+            if isinstance(event, dict):
+                return bool(event.get('detected', False))
+            return bool(getattr(event, 'detected', False))
+
+        checks = [
+            'preliminary_support',
+            'preliminary_supply',
+            'climax',
+            'automatic_reaction',
+            'secondary_test',
+            'spring_upthrust',
+            'sos_sow',
+            'joc',
+            'fti',
+            'lps',
+            'lpsy',
+        ]
+        count = sum(1 for key in checks if _event_detected(key))
+
         completeness = (count / len(checks)) * 100
         factor = 1.0 if completeness >= 80 else 0.8 if completeness >= 60 else 0.6
         return {
-            'completeness': completeness, 
-            'adjustment_factor': factor, 
-            'rating': 'S' if completeness >= 80 else 'B' if completeness >= 60 else 'C'
+            'completeness': completeness,
+            'adjustment_factor': factor,
+            'rating': 'S' if completeness >= 80 else 'B' if completeness >= 60 else 'C',
+            'detected_events': count,
+            'total_events': len(checks),
         }
 
     def _check_logical_consistency(self, events: Dict, phase_str: str, phase_enum: WyckoffPhase, confidence: float) -> Tuple[str, WyckoffPhase, float]:
@@ -957,29 +1187,34 @@ class PhaseIdentifier(BaseDetector):
            即使日线有 SOW 或 FTI 信号，也不能判定为 Distribution (派发)。
         2. 如果价格创出新高且出现 LPS，强制修正相位为 Markup 或 Accumulation Phase D/E。
         """
+        from ..signal_extractor import SignalExtractor
+
         # 获取具体的检测标志
-        is_lps = False
         lps_event = self._get_event(events, 'lps')
-        if lps_event:
-            is_lps = lps_event.get('detected') if isinstance(lps_event, dict) else getattr(lps_event, 'detected', False)
+        is_lps = SignalExtractor.is_formal_lps(lps_event) if lps_event else False
 
         is_joc = False
         joc_event = self._get_event(events, 'joc')
         if joc_event:
             is_joc = joc_event.get('detected') if isinstance(joc_event, dict) else getattr(joc_event, 'detected', False)
             
-        is_distribution = PhaseAdapter.is_distribution(phase_enum) or PhaseAdapter.is_markdown(phase_enum)
+        is_distribution = (
+            PhaseAdapter.is_distribution(phase_enum)
+            or PhaseAdapter.is_markdown(phase_enum)
+            or PhaseAdapter.is_distribution(phase_str)
+            or PhaseAdapter.is_markdown(phase_str)
+        )
         
         current_price = self.data['Close'].iloc[-1]
         ma200 = self.data['MA200'].iloc[-1] if 'MA200' in self.data.columns else current_price
         
-        # 规则 1：LPS 与 Distribution 互斥
+        # 规则 1：LPS 与 Distribution 互斥 — Phase D 须 JOC 确认
         if is_lps and is_distribution:
-            # 修正：既然有 LPS 支撑，就不应该是派发，更可能是再积累或上涨中继
-            if current_price > ma200:
-                return 'Markup (趋势上涨中继)', WyckoffPhase.PHASE_E, 0.75
-            else:
+            if is_joc:
+                if current_price > ma200:
+                    return 'Markup (趋势上涨中继)', WyckoffPhase.PHASE_E, 0.75
                 return 'Accumulation Phase D (积累期突破中)', WyckoffPhase.PHASE_D, 0.70
+            return 'Accumulation Phase C+ (LPS出现待JOC确认)', WyckoffPhase.PHASE_C, 0.65
                 
         # 规则 2：JOC 证伪派发 A
         if is_joc and 'Phase A' in phase_str and 'Distribution' in phase_str:

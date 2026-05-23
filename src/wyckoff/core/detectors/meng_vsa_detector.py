@@ -29,11 +29,14 @@ class MengVsaDetector(BaseDetector):
         if self.data is None or len(self.data) < 20:
             return {"no_supply": {"detected": False}, "no_demand": {"detected": False}, "stopping_vol": {"detected": False}}
         df = cast(Any, self.data).copy()
-        vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
+        if 'Volume_MA20' in df.columns:
+            vol_ma_series = df['Volume_MA20']
+        else:
+            vol_ma_series = df['Volume'].rolling(20, min_periods=1).mean()
         ns, nd, sv = [], [], []
         t = self.thresholds
         
-        # 🔧 优化：在循环外部一次性计算移动平均线，彻底解决每次循环内全量重算的严重性能漏洞
+        # 预计算均线序列，避免循环内重复 rolling
         ma5 = df['Close'].rolling(5).mean()
         ma20 = df['MA20'] if 'MA20' in df.columns else df['Close'].rolling(20).mean()
         ma50 = df['MA50'] if 'MA50' in df.columns else df['Close'].rolling(50).mean()
@@ -42,7 +45,11 @@ class MengVsaDetector(BaseDetector):
             pr = df['High'].iloc[i] - df['Low'].iloc[i]
             if pr <= 0:
                 continue
-            body_pct, vol_r = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / pr, df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
+            vol_ma20 = vol_ma_series.iloc[i]
+            if pd.isna(vol_ma20) or vol_ma20 <= 0:
+                vol_ma20 = float(df['Volume'].iloc[max(0, i - 19):i + 1].mean())
+            body_pct = abs(df['Close'].iloc[i] - df['Open'].iloc[i]) / pr
+            vol_r = df['Volume'].iloc[i] / vol_ma20 if vol_ma20 > 0 else 1
             
             # 计算 5 日均线价格重心波段方向 (Swing Direction)
             swing_dir = 1 if (i > 0 and ma5.iloc[i] > ma5.iloc[i-1]) else -1

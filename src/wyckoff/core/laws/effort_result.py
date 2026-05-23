@@ -1,5 +1,7 @@
 import logging
 from ...exceptions import InsufficientDataError
+import pandas as pd
+from ..signal_extractor import SignalExtractor, get_events_from_phase, get_cached_phase_result
 
 logger = logging.getLogger(__name__)
 
@@ -131,13 +133,31 @@ class EffortResultMixin:
             }
 
         # 跨周期共振检查 (P1 #4)
+        try:
+            phase_result = get_cached_phase_result(self.pattern_detector)
+            ev_events = get_events_from_phase(phase_result)
+            effort_result_analysis['_evr_events'] = {
+                'spring_detected': SignalExtractor._detected(
+                    SignalExtractor.get_event_dict(ev_events, 'spring')
+                ),
+                'upthrust_detected': SignalExtractor._detected(
+                    SignalExtractor.get_event_dict(ev_events, 'upthrust')
+                ),
+            }
+        except Exception:
+            pass
         self._add_weekly_resonance_to_evr(effort_result_analysis)
 
         interpretations = [tf['interpretation'] for tf in effort_result_analysis.values()]
         if all(interp == "CONFIRMATION" for interp in interpretations):
             overall_assessment = "STRONG_CONFIRMATION"
             wyckoff_guidance = "多时间框架一致确认，趋势可靠性高"
-        elif any(interp in ["DIVERGENCE", "EFFORT_WITHOUT_RESULT"] for interp in interpretations):
+        elif any(
+            interp in ["DIVERGENCE", "EFFORT_WITHOUT_RESULT"]
+            # 检测器会返回 EFFORT_WITHOUT_RESULT_AT_HIGH 等带后缀变体，需前缀匹配
+            or (isinstance(interp, str) and interp.startswith("EFFORT_WITHOUT_RESULT"))
+            for interp in interpretations
+        ):
             overall_assessment = "WARNING_SIGNAL"
             wyckoff_guidance = "检测到努力vs结果背离，建议谨慎或等待确认"
         elif any(interp == "RESULT_WITHOUT_EFFORT" for interp in interpretations):
@@ -294,42 +314,92 @@ class EffortResultMixin:
         if len(self.data) < 5:
             return {"status": "insufficient_data"}
         df = self.data
-        spring = self.pattern_detector.detect_spring() if self.pattern_detector else {}
-        upthrust = self.pattern_detector.detect_upthrust() if self.pattern_detector else {}
+        # 第二定律跟进分析：Spring/Upthrust 结论与主链 events_detected 一致
+        events = get_events_from_phase(
+            get_cached_phase_result(self.pattern_detector) if self.pattern_detector else None
+        )
+        spring = SignalExtractor.get_event_dict(events, 'spring')
+        upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
         out = {"status": "ok", "spring_follow_through": {"tracked": False}, "upthrust_follow_through": {"tracked": False}}
         if spring.get('detected'):
-            c0, c1 = df.iloc[-2], df.iloc[-1]
-            three_h = c1['High'] > c0['High']
-            three_l = c1['Low'] > c0['Low']
-            three_c = c1['Close'] > c0['Close']
-            vol_shrink_hard = c1['Volume'] < c0['Volume'] * 0.6
-            failed = (not (three_h and three_l and three_c)) or vol_shrink_hard
-            out['spring_follow_through'] = {
-                "tracked": True,
-                "three_highs_confirmed": bool(three_h and three_l and three_c),
-                "low_quality": bool(failed),
-                "priority_adjustment": "decrease" if failed else "keep",
-            }
+            latest = SignalExtractor._latest(spring)
+            lifecycle = (
+                SignalExtractor._get(latest, 'lifecycle_status')
+                if latest else SignalExtractor._get(spring, 'lifecycle_status')
+            )
+            if lifecycle == 'failed':
+                out['spring_follow_through'] = {
+                    "tracked": True,
+                    "three_highs_confirmed": False,
+                    "low_quality": True,
+                    "priority_adjustment": "decrease",
+                    "lifecycle_status": "failed",
+                }
+            elif lifecycle == 'confirmed':
+                out['spring_follow_through'] = {
+                    "tracked": True,
+                    "three_highs_confirmed": True,
+                    "low_quality": False,
+                    "priority_adjustment": "keep",
+                    "lifecycle_status": "confirmed",
+                }
+            else:
+                c0, c1 = df.iloc[-2], df.iloc[-1]
+                three_h = c1['High'] > c0['High']
+                three_l = c1['Low'] > c0['Low']
+                three_c = c1['Close'] > c0['Close']
+                vol_shrink_hard = c1['Volume'] < c0['Volume'] * 0.6
+                failed = (not (three_h and three_l and three_c)) or vol_shrink_hard
+                out['spring_follow_through'] = {
+                    "tracked": True,
+                    "three_highs_confirmed": bool(three_h and three_l and three_c),
+                    "low_quality": bool(failed),
+                    "priority_adjustment": "decrease" if failed else "keep",
+                    "lifecycle_status": lifecycle or "active",
+                }
         if upthrust.get('detected'):
-            c0, c1 = df.iloc[-2], df.iloc[-1]
-            engulf_bull = c1['Close'] > c0['High'] and c1['Open'] <= c0['Close']
-            vol_up = c1['Volume'] > c0['Volume'] * 1.05
-            ut_invalid = engulf_bull and vol_up
-            out['upthrust_follow_through'] = {
-                "tracked": True,
-                "bear_follow_through_confirmed": bool((c1['Close'] < c1['Open']) and vol_up),
-                "trap_invalidated": bool(ut_invalid),
-                "short_alert": "解除" if ut_invalid else "维持观察",
-            }
+            latest = SignalExtractor._latest(upthrust)
+            lifecycle = (
+                SignalExtractor._get(latest, 'lifecycle_status')
+                if latest else SignalExtractor._get(upthrust, 'lifecycle_status')
+            )
+            if lifecycle == 'failed':
+                out['upthrust_follow_through'] = {
+                    "tracked": True,
+                    "bear_follow_through_confirmed": False,
+                    "trap_invalidated": True,
+                    "short_alert": "解除",
+                    "lifecycle_status": "failed",
+                }
+            elif lifecycle == 'confirmed':
+                out['upthrust_follow_through'] = {
+                    "tracked": True,
+                    "bear_follow_through_confirmed": True,
+                    "trap_invalidated": False,
+                    "short_alert": "维持观察",
+                    "lifecycle_status": "confirmed",
+                }
+            else:
+                c0, c1 = df.iloc[-2], df.iloc[-1]
+                engulf_bull = c1['Close'] > c0['High'] and c1['Open'] <= c0['Close']
+                vol_up = c1['Volume'] > c0['Volume'] * 1.05
+                ut_invalid = engulf_bull and vol_up
+                out['upthrust_follow_through'] = {
+                    "tracked": True,
+                    "bear_follow_through_confirmed": bool((c1['Close'] < c1['Open']) and vol_up),
+                    "trap_invalidated": bool(ut_invalid),
+                    "short_alert": "解除" if ut_invalid else "维持观察",
+                    "lifecycle_status": lifecycle or "active",
+                }
         return out
 
     def _get_current_phase_context(self) -> str:
         """获取当前Phase上下文用于增强努力vs结果分析"""
         try:
             if self.pattern_detector:
-                phase_result = self.pattern_detector.identify_phase()
+                phase_result = get_cached_phase_result(self.pattern_detector)
                 if isinstance(phase_result, dict):
-                    return phase_result.get('phase', 'Unknown')
+                    return SignalExtractor.get_effective_phase(phase_result)
                 return str(phase_result) if phase_result else 'Unknown'
         except Exception:
             pass
@@ -553,10 +623,18 @@ class EffortResultMixin:
             w_evr_detected = w_vol_ratio > 1.5 and w_spread_ratio < 0.8
             
             if w_evr_detected:
-                # 检查日线短期(short)是否也存在 EVR
                 short_tf = daily_analysis.get('short', {})
-                if 'EFFORT_WITHOUT_RESULT' in short_tf.get('interpretation', ''):
-                    # 触发共振
+                events = daily_analysis.get('_evr_events') or {}
+                has_spring = events.get('spring_detected', False)
+                has_upthrust = events.get('upthrust_detected', False)
+                daily_evr = 'EFFORT_WITHOUT_RESULT' in short_tf.get('interpretation', '')
+                if daily_evr and (has_spring or has_upthrust):
+                    short_tf['resonance_boost'] = True
+                    tag = 'Spring' if has_spring else 'Upthrust'
+                    short_tf['meaning'] += (
+                        f" | 🌟 [跨周期共振] 周线 EVR + 日线{tag} 共现，信号可靠性大幅提升 (Weight +50%)"
+                    )
+                elif daily_evr:
                     short_tf['resonance_boost'] = True
                     short_tf['meaning'] += " | 🌟 [跨周期共振] 周线同步触发 EVR，信号可靠性大幅提升 (Weight +50%)"
                     

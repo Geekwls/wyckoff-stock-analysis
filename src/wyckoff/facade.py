@@ -27,9 +27,11 @@ from .core.law_analyzer import WyckoffLawAnalyzer
 from .core.multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from .core.relative_strength_analyzer import RelativeStrengthAnalyzer
 from .core.report_generator import WyckoffReportGenerator
+from .core.signal_extractor import SignalExtractor, get_events_from_phase
 from .core.point_and_figure import PointAndFigureCalculator, calculate_cause_effect_from_pnf
 from .core.sos_sow_analyzer import SOSSOWAnalyzer
 from .core.market_context_analyzer import MarketContextAnalyzer
+from .core.wie3_market_state_service import WIE3MarketStateService
 from .exceptions import (
     WyckoffError, DataError, CalculationError, PatternNotFoundError,
     DataFetchError, InsufficientDataError
@@ -87,8 +89,11 @@ class WyckoffAnalyzer:
             ttl_seconds=3600,
         )
 
-        # 核心编排器
-        self.orchestrator = WyckoffOrchestrator(self.config)
+        # 核心编排器（共享 WIE3 服务实例以复用 memoized 结果）
+        self._wie3_service = WIE3MarketStateService(self.thresholds)
+        self.orchestrator = WyckoffOrchestrator(self.config, wie3_service=self._wie3_service)
+        self.wie3_last_result = None
+        self.wie3_market_state = None  # 存储最新的市场状态
 
         # 运行时数据与探测器 (fetch_data 后初始化)
         self.data = None
@@ -96,15 +101,6 @@ class WyckoffAnalyzer:
         self.law_analyzer = None
         self.mtf_analyzer = None
         self.rs_analyzer = None
-
-        # WIE 3.0 MVP 微观结构引擎 (fetch_data 后初始化)
-        self.wie3_vsa_analyzer = None
-        self.wie3_efficiency_analyzer = None
-        self.wie3_aps_analyzer = None
-        self.wie3_regime_tracker = None
-        self.wie3_rs_engine = None
-        self.wie3_state_engine = None
-        self.wie3_market_state = None  # 存储最新的市场状态
 
         self._index_analyzer_cache: Optional[Union['WyckoffAnalyzer', '_IndexDataWrapper']] = None
 
@@ -121,6 +117,9 @@ class WyckoffAnalyzer:
 
     def fetch_data(self, frequency: str = "1d") -> pd.DataFrame:
         """获取数据并初始化所有探测器"""
+        self._wie3_service.clear_cache()
+        self.wie3_last_result = None
+        self.wie3_market_state = None
         self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)
         if self.data is not None:
             self.pattern_detector = WyckoffPatternDetector(self.data, self.config, self._analysis_cache)
@@ -130,45 +129,16 @@ class WyckoffAnalyzer:
 
         return self.data
 
-    def _init_wie3_mvp_engines(self):
-        """初始化 WIE 3.0 MVP 微观结构分析引擎"""
-        try:
-            from .core.vsa_analyzer import VSAAnalyzer
-            from .core.expansion_efficiency import ExpansionEfficiencyEngine
-            from .core.aps_engine import APSEngine
-            from .core.regime_tracker import RegimeTracker
-            from .core.relative_strength import RelativeStrengthEngine
-            from .core.state_engine import EventDrivenStateEngine
+    @property
+    def wie3_vsa_analyzer(self):
+        """Backward-compatible accessor for report VSA summary extraction."""
+        return self._wie3_service.vsa_analyzer
 
-            # 1. VSA 微观量价解构
-            self.wie3_vsa_analyzer = VSAAnalyzer()
-
-            # 2. 推动效率引擎 (修补奇点)
-            self.wie3_efficiency_analyzer = ExpansionEfficiencyEngine()
-
-            # 3. APS 吸收动力学引擎
-            self.wie3_aps_analyzer = APSEngine()
-
-            # 4. Regime 追踪与 VPOC 引擎
-            self.wie3_regime_tracker = RegimeTracker()
-
-            # 5. 相对强度引擎 (需要大盘数据)
-            self.wie3_rs_engine = RelativeStrengthEngine()
-
-            # 6. 事件驱动状态引擎
-            self.wie3_state_engine = EventDrivenStateEngine()
-
-            logger.info("[WIE 3.0 MVP] 微观结构引擎初始化完成")
-
-        except Exception as e:
-            logger.error(f"[WIE 3.0 MVP] 引擎初始化失败: {e}")
-            # 不影响主流程,继续运行
-            self.wie3_vsa_analyzer = None
-            self.wie3_efficiency_analyzer = None
-            self.wie3_aps_analyzer = None
-            self.wie3_regime_tracker = None
-            self.wie3_rs_engine = None
-            self.wie3_state_engine = None
+    def _resolve_wie3_index_df(self) -> Optional[pd.DataFrame]:
+        auto_idx = self._get_cached_index_analyzer()
+        if auto_idx is not None and hasattr(auto_idx, 'data') and auto_idx.data is not None:
+            return auto_idx.data
+        return None
 
     def analyze_wie3_mvp(self, index_df: pd.DataFrame = None) -> Optional['MarketState']:
         """
@@ -184,134 +154,15 @@ class WyckoffAnalyzer:
             logger.warning("[WIE 3.0 MVP] 数据未就绪,跳过微观结构分析")
             return None
 
-        # 惰性加载 (Lazy Initialization): 仅在实际调用时初始化引擎，节约基础扫描时的资源
-        if not self.wie3_vsa_analyzer:
-            self._init_wie3_mvp_engines()
-
-        if not self.wie3_vsa_analyzer:
-            logger.warning("[WIE 3.0 MVP] 引擎初始化失败,跳过微观结构分析")
-            return None
-
         try:
-            # 1. VSA 微观量价解构
-            df_vsa = self.wie3_vsa_analyzer.analyze(self.data)
-            logger.debug("[WIE 3.0 MVP] VSA 分析完成")
-
-            # 2. 推动效率分析
-            df_eff = self.wie3_efficiency_analyzer.analyze(df_vsa)
-            logger.debug("[WIE 3.0 MVP] 推动效率分析完成")
-
-            # 3. APS 吸收动力学分析
-            df_aps = self.wie3_aps_analyzer.analyze(df_eff)
-            logger.debug("[WIE 3.0 MVP] APS 吸收动力学分析完成")
-
-            # 4. Regime 追踪与 VPOC 计算
-            df_regime = self.wie3_regime_tracker.track(df_vsa, df_eff, df_aps)
-            logger.debug("[WIE 3.0 MVP] Regime 追踪与 VPOC 计算完成")
-
-            # 5. 相对强度分析 (如果提供了大盘数据)
-            has_index_data = index_df is not None and not index_df.empty
-            if has_index_data:
-                df_rs = self.wie3_rs_engine.analyze(df_regime, index_df)
-                logger.debug("[WIE 3.0 MVP] 相对强度分析完成")
-            else:
-                # ─────────────────────────────────────────────────────────────
-                # Wave 4 偏差三修正：RS 静默旁路 → 主动警告 + 后台自适应拉取
-                # 原来：无大盘数据时静默将 RS 置为 1.0，等于"雷达关闭但显示无敌机"
-                # 修正：先尝试自适应拉取对应市场的默认指数，再明确警告用户
-                # ─────────────────────────────────────────────────────────────
-                logger.warning(
-                    "[WIE 3.0 MVP] [Wave4-偏差三] 大盘基准数据缺失！"
-                    "RS 引擎正在尝试后台自适应拉取对应市场默认指数..."
-                )
-                # 尝试通过 _get_cached_index_analyzer 自适应拉取
-                auto_index_df = None
-                try:
-                    auto_idx = self._get_cached_index_analyzer()
-                    if auto_idx is not None and hasattr(auto_idx, 'data') and auto_idx.data is not None:
-                        auto_index_df = auto_idx.data
-                        logger.info(
-                            f"[WIE 3.0 MVP] [Wave4] RS 引擎：已自适应拉取大盘数据，"
-                            f"行数={len(auto_index_df)}，RS 分析正常激活。"
-                        )
-                except Exception as _auto_e:
-                    logger.warning(f"[WIE 3.0 MVP] [Wave4] RS 自适应拉取失败: {_auto_e}")
-
-                if auto_index_df is not None and not auto_index_df.empty:
-                    df_rs = self.wie3_rs_engine.analyze(df_regime, auto_index_df)
-                    df_rs['rs_bypass_warning'] = False
-                    logger.debug("[WIE 3.0 MVP] RS 分析（自适应大盘数据）完成")
-                else:
-                    # 自适应拉取仍然失败，进入旁路并设置显式警告标志
-                    logger.warning(
-                        "[WIE 3.0 MVP] [Wave4-偏差三] RS 引擎：大盘数据自适应拉取失败！"
-                        "相对强度分析已强制旁路，liquidity_retention 将置为中性 1.0。"
-                        "请检查网络连接或手动传入 index_df。"
-                    )
-                    df_rs = df_regime.copy()  # 修复 SettingWithCopyWarning 隐患
-                    # 添加默认的相对强度字段（中性兜底）
-                    if 'liquidity_retention' not in df_rs.columns:
-                        df_rs['liquidity_retention'] = 1.0
-                    if 'hidden_strength' not in df_rs.columns:
-                        df_rs['hidden_strength'] = False
-                    if 'hidden_weakness' not in df_rs.columns:
-                        df_rs['hidden_weakness'] = False
-                    # 添加默认字段以供 extract_summary 使用
-                    df_rs['idx_log_return'] = 0.0
-                    df_rs['asset_log_return'] = 0.0
-                    # 设置旁路警告标志，供 report_generator 渲染 [!WARNING]
-                    df_rs['rs_bypass_warning'] = True
-
-
-            # 6. 状态机推演 (P1.2: 向量化批量更新)
-            # 必须重置状态机，确保每次 analyze 都是从先验开始，而不是从上次的脏状态开始
-            from .core.state_engine import EventDrivenStateEngine
-            self.wie3_state_engine = EventDrivenStateEngine()
-
-            n_rows = len(df_rs)
-            
-            # 准备向量化输入数组
-            closes = self.data['Close'].values if 'Close' in self.data.columns else df_rs['close'].values
-            aps_vals = df_aps['aps'].values if 'aps' in df_aps.columns else np.zeros(n_rows)
-            cds_vals = df_regime['cds'].values if 'cds' in df_regime.columns else np.zeros(n_rows)
-            lcs_vals = df_regime['lcs'].values if 'lcs' in df_regime.columns else np.zeros(n_rows)
-            vpocs = df_regime['vpoc_price'].values if 'vpoc_price' in df_regime.columns else np.zeros(n_rows)
-            exp_effs = df_vsa['expansion_efficiency'].values if 'expansion_efficiency' in df_vsa.columns else np.zeros(n_rows)
-            clvs = df_vsa['clv'].values if 'clv' in df_vsa.columns else np.zeros(n_rows)
-            retentions = df_rs['liquidity_retention'].values if 'liquidity_retention' in df_rs.columns else np.ones(n_rows)
-            hs = df_rs['hidden_strength'].values if 'hidden_strength' in df_rs.columns else np.zeros(n_rows, dtype=bool)
-            hw = df_rs['hidden_weakness'].values if 'hidden_weakness' in df_rs.columns else np.zeros(n_rows, dtype=bool)
-            
-            # 处理 event_flag
-            if 'event_flag' in df_regime.columns:
-                event_flags = df_regime['event_flag'].astype(str).tolist()
-            else:
-                event_flags = ['NORMAL'] * n_rows
-            
-            # 处理 timestamps
-            if hasattr(df_rs.index, 'strftime'):
-                timestamps = [str(idx) for idx in df_rs.index]
-            else:
-                timestamps = [str(i) for i in range(n_rows)]
-            
-            # 执行向量化批量更新
-            all_states = self.wie3_state_engine.batch_update(
-                closes, aps_vals, cds_vals, lcs_vals, vpocs,
-                exp_effs, clvs, retentions, hs, hw, event_flags, timestamps
+            result = self._wie3_service.analyze(
+                self.data,
+                index_df=index_df,
+                resolve_index_df=self._resolve_wie3_index_df,
             )
-            
-            # 取最后一个状态作为最终结果
-            if all_states:
-                self.wie3_market_state = all_states[-1]
-
-            logger.info(
-                f"[WIE 3.0 MVP] 状态机序列推演完成: {self.wie3_market_state.regime} "
-                f"(APS={self.wie3_market_state.aps:.2f}, CDS={self.wie3_market_state.cds}, "
-                f"VPOC={self.wie3_market_state.vpoc_price:.2f}, Entropy={self.wie3_market_state.state_entropy:.4f})"
-            )
-
+            self.wie3_last_result = result
+            self.wie3_market_state = result.market_state if result else None
             return self.wie3_market_state
-
         except (DataError, CalculationError) as e:
             logger.error(f"[WIE 3.0 MVP] 微观结构分析失败: {e}", exc_info=True)
             if not self.config.silent_fail:
@@ -369,40 +220,54 @@ class WyckoffAnalyzer:
 
         try:
             phase_res = self.identify_phase()
-            phase_str   = phase_res.get('phase', 'Unknown')
+            phase_str = SignalExtractor.get_effective_phase(phase_res)
             confidence  = phase_res.get('confidence', 0.0)
 
             # 序列评分
             seq = phase_res.get('sequence_score', {})
             seq_completeness = seq.get('completeness', 0.0) if isinstance(seq, dict) else 0.0
 
-            # 关键事件摘要（轻量版）
+            # 关键事件摘要（轻量版）— 与主链 events_detected 同源
             events_summary = {}
             try:
-                tr = self.pattern_detector.detect_trading_range()
+                events = get_events_from_phase(phase_res)
+                tr = SignalExtractor.get_event_dict(events, 'trading_range')
                 events_summary['trading_range'] = {
-                    'high': tr.get('high'), 'low': tr.get('low'),
-                    'duration_days': tr.get('duration_days')
+                    'high': tr.get('high'),
+                    'low': tr.get('low'),
+                    'duration_days': tr.get('duration_days') or tr.get('consolidation_duration_days'),
                 }
-                sos = self.pattern_detector.sw_detector.detect_sos()
-                events_summary['sos_detected'] = sos.get('detected', False)
-                sow = self.pattern_detector.sw_detector.detect_sow()
-                events_summary['sow_detected'] = sow.get('detected', False)
-                spring = self.pattern_detector.reversal_detector.detect_spring()
-                events_summary['spring_detected'] = spring.get('detected', False)
+                events_summary['sos_detected'] = SignalExtractor._detected(
+                    SignalExtractor.get_event(events, 'sos')
+                )
+                events_summary['sow_detected'] = SignalExtractor._detected(
+                    SignalExtractor.get_event(events, 'sow')
+                )
+                events_summary['spring_detected'] = SignalExtractor._detected(
+                    SignalExtractor.get_event(events, 'spring')
+                )
+                events_summary['joc_detected'] = SignalExtractor._detected(
+                    SignalExtractor.get_event(events, 'joc')
+                )
             except Exception:
                 pass
 
-            # 阶段挂钩建议（按 SKILL.md 规则）
+            # 阶段挂钩建议（孟氏 checklist 对齐）
             phase_upper = phase_str.upper()
+            joc_det = events_summary.get('joc_detected', False)
+            spring_det = events_summary.get('spring_detected', False)
             if 'PHASE_A' in phase_upper or 'PHASE_B' in phase_upper or \
                'PHASE A' in phase_upper or 'PHASE B' in phase_upper:
                 phase_advice = "Observation / Very light position try-out only (Phase A/B)"
             elif 'PHASE_C' in phase_upper or 'PHASE C' in phase_upper:
-                phase_advice = "Batch entry / Position building (Phase C)"
+                if spring_det and not joc_det:
+                    phase_advice = "Wait for JOC breakout or LPS retest (Phase C — Spring only)"
+                else:
+                    phase_advice = "Observation — await Spring/JOC checklist (Phase C)"
             elif 'PHASE_D' in phase_upper or 'PHASE_E' in phase_upper or \
                  'PHASE D' in phase_upper or 'PHASE E' in phase_upper:
-                phase_advice = "Hold / Add to position (Phase D/E)"
+                phase_advice = "Hold / Add on LPS after JOC (Phase D/E)" if joc_det else \
+                    "Hold / Add to position (Phase D/E)"
             else:
                 phase_advice = "Assess full analysis for specific advice"
 
@@ -470,14 +335,13 @@ class WyckoffAnalyzer:
             atr = float(self.data['ATR'].iloc[-1]) if 'ATR' in self.data.columns else \
                   float((self.data['High'] - self.data['Low']).rolling(14).mean().iloc[-1])
 
-            # 1. 获取交易区间
-            tr = self.pattern_detector.detect_trading_range()
-            tr_high = tr.get('high', current_price * 1.1)
-            tr_low  = tr.get('low',  current_price * 0.9)
-
-            # 2. 复用 TradingPlanGenerator 的计算逻辑
+            # 1. 主链事件（TR / SOS 与 identify_phase 同源）
             phase_res = self.identify_phase()
-            phase_str = phase_res.get('phase', 'Unknown')
+            phase_str = SignalExtractor.get_effective_phase(phase_res)
+            events = get_events_from_phase(phase_res)
+            tr = SignalExtractor.get_event_dict(events, 'trading_range')
+            tr_high = tr.get('high', current_price * 1.1)
+            tr_low = tr.get('low', current_price * 0.9)
             is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
             
             plan_gen = TradingPlanGenerator(self.data, self.pattern_detector)
@@ -526,17 +390,17 @@ class WyckoffAnalyzer:
                     }
                 }
 
-            # 3. SOS-SOW 关键确认位
+            # 3. SOS 关键确认位（主链 events_detected）
             key_level = None
             try:
-                sos = self.pattern_detector.sw_detector.detect_sos()
+                sos = SignalExtractor.get_event_dict(events, 'sos')
                 if sos.get('detected'):
-                    bt_raw = sos.get('latest', sos).get('breakthrough_level') or \
-                             sos.get('breakthrough_level')
+                    bt_raw = sos.get('breakthrough_level') or \
+                             SignalExtractor._get(SignalExtractor._latest(sos), 'breakthrough_level')
                     if bt_raw:
                         key_level = bt_raw if isinstance(bt_raw, dict) else {
                             'value': float(bt_raw),
-                            'derivation': 'max_high_in_60d_range',
+                            'derivation': 'events_detected.sos',
                             'note': '前期交易区间上沿阻力位'
                         }
             except (DataError, CalculationError):
@@ -583,11 +447,13 @@ class WyckoffAnalyzer:
             
         try:
             import json as _json
-            
-            sos = self.pattern_detector.sw_detector.detect_sos()
-            sow = self.pattern_detector.sw_detector.detect_sow()
+
+            phase_res = self.identify_phase()
+            events = get_events_from_phase(phase_res)
+            sos = SignalExtractor.get_event_dict(events, 'sos')
+            sow = SignalExtractor.get_event_dict(events, 'sow')
+            tr = SignalExtractor.get_event_dict(events, 'trading_range')
             current_price = float(self.data['Close'].iloc[-1])
-            tr = self.pattern_detector.detect_trading_range()
             
             # 执行矛盾分析
             conflict_res = SOSSOWAnalyzer.analyze_sos_sow_conflict(
@@ -624,65 +490,9 @@ class WyckoffAnalyzer:
         return self.pattern_detector.detect_trading_range()
 
     def _get_baseline_index_symbol(self) -> Optional[str]:
-        """
-        获取基准指数代码
-        
-        A股市场分类：
-        - 上证主板：600/601/603/605开头 → sh.000001 (上证综指)
-        - 科创板：688开头 → sh.000688 (科创50) 或 sh.000001
-        - 深证主板：000/001/002/003开头 → sz.399001 (深证成指)
-        - 创业板：300/301开头 → sz.399006 (创业板指)
-        - 北交所：8/4开头 → bj.899050 (北证50)
-        
-        返回 None 如果当前标的本身就是指数（避免递归分析）
-        """
-        from .core.symbol_resolver import SymbolResolver, MarketType
-        info = SymbolResolver().resolve(self.symbol)
-        
-        # 指数代码白名单 (避免递归分析)
-        INDEX_SYMBOLS = {
-            'sh.000001', 'sh.000300', 'sh.000688', 'sh.000016',
-            'sz.399001', 'sz.399006', 'sz.399005', 'sz.399673',
-            'bj.899050',
-            '^HSI', '^GSPC', '^DJI', '^IXIC',  # 港股/美股指数
-            'BTC-USD', 'ETH-USD',  # 加密货币基准
-        }
-        
-        normalized = info.normalized if hasattr(info, 'normalized') else self.symbol
-        if normalized in INDEX_SYMBOLS or self.symbol in INDEX_SYMBOLS:
-            return None
-        
-        if info.market == MarketType.A_SHARE:
-            code = info.normalized.split('.')[-1]
-            prefix = info.normalized.split('.')[0]
-            
-            # 北交所：8或4开头（430/830/870等）
-            if code.startswith(('8', '4')) and prefix == 'BJ':
-                return "bj.899050"  # 北证50
-            
-            # 科创板：688/689开头
-            if code.startswith(('688', '689')):
-                return "sh.000688"  # 科创50
-            
-            # 创业板：300/301开头
-            if code.startswith(('300', '301')):
-                return "sz.399006"  # 创业板指
-            
-            # 上证主板：600/601/603/605开头
-            if code.startswith('6'):
-                return "sh.000001"  # 上证综指
-            
-            # 深证主板：000/001/002/003开头
-            return "sz.399001"  # 深证成指
-        
-        if info.market == MarketType.CRYPTO:
-            return "BTC-USD"
-            
-        if info.market == MarketType.HK_STOCK:
-            return "^HSI"  # 恒生指数
-            
-        # 美股及其他默认
-        return "SPY"
+        """获取基准指数代码；当前标的为指数时返回 None。"""
+        from .core.symbol_resolver import SymbolResolver
+        return SymbolResolver().resolve_benchmark_index(self.symbol)
 
     def _analyze_market_environment(self) -> Dict:
         """
