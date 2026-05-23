@@ -147,6 +147,9 @@ class MultiTimeframeCoordinator:
         weekly_analysis = self._analyze_weekly_trend()
         daily_analysis = self._analyze_daily_signal(signal_type, direction, pattern_results)
         hourly_analysis = self._analyze_hourly_entry(direction, pattern_results)
+        evr_context = self._build_evr_context(pattern_results)
+        weekly_evr = self._detect_weekly_evr()
+        evr_resonance = self._evaluate_evr_resonance(evr_context, weekly_evr, daily_analysis)
 
         # 验证共振
         resonance_checks = {
@@ -164,10 +167,17 @@ class MultiTimeframeCoordinator:
 
         # 计算共振强度
         resonance_level = self._calculate_resonance_level(resonance_checks)
+        if evr_resonance.get('boost'):
+            if resonance_level == 'medium':
+                resonance_level = 'strong'
+            elif resonance_level == 'none' and evr_resonance.get('has_co_detection'):
+                resonance_level = 'medium'
 
         # 生成建议
         recommendation = self._generate_resonance_recommendation(
-            resonance_level, weekly_analysis, daily_analysis, hourly_analysis, direction=direction
+            resonance_level, weekly_analysis, daily_analysis, hourly_analysis,
+            direction=direction, pattern_results=pattern_results,
+            evr_resonance=evr_resonance,
         )
 
         return {
@@ -176,6 +186,7 @@ class MultiTimeframeCoordinator:
             'weekly_trend': weekly_analysis,
             'daily_signal': daily_analysis,
             'hourly_entry': hourly_analysis,
+            'evr_resonance': evr_resonance,
             'resonance_checks': resonance_checks,
             'recommendation': recommendation,
             'signal_type': signal_type,
@@ -470,6 +481,78 @@ class MultiTimeframeCoordinator:
         else:
             return 'none'
 
+    def _build_evr_context(self, pattern_results: Optional[Dict] = None) -> Dict[str, bool]:
+        """从主链 events_detected 提取 EVR 共现事件（与 effort_result 同源）。"""
+        from .signal_extractor import SignalExtractor
+
+        if not pattern_results:
+            return {
+                'spring_detected': False,
+                'upthrust_detected': False,
+                'joc_detected': False,
+                'fti_detected': False,
+                'sow_detected': False,
+            }
+
+        events = pattern_results.get('events_detected') if isinstance(pattern_results, dict) else {}
+        spring = SignalExtractor.get_event_dict(events, 'spring')
+        upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
+        return {
+            'spring_detected': SignalExtractor._detected(spring)
+                and not SignalExtractor._spring_lifecycle_failed(spring),
+            'upthrust_detected': SignalExtractor._detected(upthrust)
+                and not SignalExtractor._upthrust_lifecycle_failed(upthrust),
+            'joc_detected': SignalExtractor._detected(SignalExtractor.get_event_dict(events, 'joc')),
+            'fti_detected': SignalExtractor._detected(SignalExtractor.get_event_dict(events, 'fti')),
+            'sow_detected': SignalExtractor._detected(SignalExtractor.get_event_dict(events, 'sow')),
+        }
+
+    def _detect_weekly_evr(self) -> bool:
+        """周线 EVR：巨量但窄幅（停止行为）。"""
+        weekly = self.timeframes.get('weekly')
+        if weekly is None or len(weekly) < 2:
+            return False
+        try:
+            recent = weekly.tail(2)
+            if len(recent) < 2:
+                return False
+            curr, prev = recent.iloc[-1], recent.iloc[-2]
+            vol_ratio = curr['Volume'] / max(prev['Volume'], 1e-9)
+            spread = curr['High'] - curr['Low']
+            prev_spread = prev['High'] - prev['Low']
+            spread_ratio = spread / max(prev_spread, 1e-9)
+            return vol_ratio > 1.5 and spread_ratio < 0.8
+        except Exception as exc:
+            logger.debug(f"周线 EVR 检测失败: {exc}")
+            return False
+
+    def _evaluate_evr_resonance(
+        self,
+        evr_context: Dict[str, bool],
+        weekly_evr: bool,
+        daily_analysis: Dict,
+    ) -> Dict[str, Any]:
+        """跨周期 EVR + Spring/Upthrust 共现共振（对齐 effort_result._add_weekly_resonance_to_evr）。"""
+        has_spring = evr_context.get('spring_detected', False)
+        has_upthrust = evr_context.get('upthrust_detected', False)
+        co_detected = weekly_evr and (has_spring or has_upthrust)
+        tag = None
+        if co_detected:
+            tag = 'Spring' if has_spring else 'Upthrust'
+        return {
+            'weekly_evr': weekly_evr,
+            'spring_detected': has_spring,
+            'upthrust_detected': has_upthrust,
+            'has_co_detection': co_detected,
+            'boost': co_detected,
+            'note': (
+                f"周线 EVR + 日线{tag} 共现，信号可靠性提升"
+                if co_detected else
+                ("周线 EVR 触发" if weekly_evr else "无 EVR 跨周期共振")
+            ),
+            'daily_signal_type': daily_analysis.get('signal_type'),
+        }
+
     def _generate_resonance_recommendation(
         self,
         level: str,
@@ -477,13 +560,41 @@ class MultiTimeframeCoordinator:
         daily: Dict,
         hourly: Dict,
         direction: Optional[str] = None,
+        pattern_results: Optional[Dict] = None,
+        evr_resonance: Optional[Dict] = None,
     ) -> str:
         """生成基于共振的交易建议"""
-        if level == 'strong':
+        evr_context = self._build_evr_context(pattern_results)
+        evr_note = ''
+        if evr_resonance and evr_resonance.get('boost'):
+            evr_note = f" {evr_resonance.get('note', '')}。"
+
+        # 孟氏 checklist 门控
+        if direction == 'long' and evr_context.get('spring_detected') and not evr_context.get('joc_detected'):
             return (
+                "日线 Spring 无 JOC 确认，三级共振暂缓。"
+                "孟氏 checklist：等待 JOC 突破小溪后再积极入场。"
+                + evr_note
+            )
+        if direction == 'short' and evr_context.get('upthrust_detected'):
+            if not evr_context.get('fti_detected') and not evr_context.get('sow_detected'):
+                return (
+                    "日线 Upthrust 无 FTI/SOW 确认，三级共振暂缓。"
+                    "建议等待冰层跌破或 SOW 结构确认。"
+                    + evr_note
+                )
+
+        if level == 'strong':
+            base = (
                 f"三级共振确立！周线{weekly['trend']}，日线{daily['signal_type']}，"
                 f"小时线入场质量{hourly['entry_quality']}。建议积极入场。"
             )
+            if direction == 'long' and not evr_context.get('joc_detected'):
+                base = (
+                    f"三级结构对齐但缺 JOC 确认。周线{weekly['trend']}，"
+                    f"日线{daily['signal_type']}，建议等待 JOC 或 LPS 回测后再入场。"
+                )
+            return base + evr_note
         elif level == 'medium':
             missing = []
             if not self._check_weekly_daily_alignment(weekly, daily, direction=direction):
@@ -491,8 +602,10 @@ class MultiTimeframeCoordinator:
             if not self._check_daily_hourly_alignment(daily, hourly):
                 missing.append("日线小时线对齐")
 
-            return f"部分共振（{' + '.join(missing)}缺失）。建议等待更好的时机。"
+            return f"部分共振（{' + '.join(missing)}缺失）。建议等待更好的时机。" + evr_note
         else:
+            if evr_resonance and evr_resonance.get('boost'):
+                return f"EVR 跨周期共振出现，但三级结构未完全对齐。建议谨慎观察。" + evr_note
             return "无共振信号。建议观望等待。"
 
     def get_best_entry_point(self, direction: str) -> Dict:

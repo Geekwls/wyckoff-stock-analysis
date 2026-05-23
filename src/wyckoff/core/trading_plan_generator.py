@@ -6,6 +6,8 @@ import pandas as pd
 from typing import Dict, Any, Optional
 import logging
 
+from .signal_extractor import SignalExtractor, get_events_from_phase
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,10 +71,20 @@ class TradingPlanGenerator:
         high = tr.get("high", current_price * 1.1)
         low = tr.get("low", current_price * 0.9)
         
-        # 获取阶段
+        # 获取阶段与事件（主链同源）
+        phase_res = None
         if not phase_str:
             phase_res = self.pattern_detector.identify_phase()
             phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
+        elif hasattr(self.pattern_detector, 'identify_phase'):
+            phase_res = self.pattern_detector.identify_phase()
+
+        events = get_events_from_phase(phase_res) if phase_res else None
+        joc_ev = SignalExtractor.get_event_dict(events, 'joc') if events else {}
+        spring_ev = SignalExtractor.get_event_dict(events, 'spring') if events else {}
+        has_joc = joc_ev.get('detected', False)
+        has_spring = spring_ev.get('detected', False)
+        spring_failed = SignalExtractor._spring_lifecycle_failed(spring_ev) if has_spring else False
         
         is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
         is_distribution = "Distribution" in phase_str or "Markdown" in phase_str
@@ -82,17 +94,30 @@ class TradingPlanGenerator:
             current_price, atr, high, low, is_bullish
         )
 
-        # 威科夫方向锁：积累期只多不空，派发期只空不多
+        # 威科夫方向锁：积累期默认谨慎；Phase D/JOC 才可积极做多
         if is_accumulation:
-            direction = "做多"
+            if has_joc or 'Phase D' in phase_str or 'Phase E' in phase_str:
+                direction = "做多"
+                dynamic_warning = "JOC/Phase D 突破确认，可按 LPS 分批建仓。"
+                entry_zone = f"Creek/JOC 回测区附近 (JOC: {joc_ev.get('creek_level', round(low, 2))})"
+            elif has_spring and not spring_failed:
+                direction = "观望"
+                dynamic_warning = "Spring 震仓已现，等待 JOC 突破小溪或 LPS 缩量回测确认（孟氏 checklist）。"
+                entry_zone = "等待 JOC/LPS 确认"
+            elif spring_failed:
+                direction = "观望"
+                dynamic_warning = "Spring 生命周期已失效，等待新结构确认。"
+                entry_zone = "结构失效，暂不入场"
+            else:
+                direction = "观望"
+                dynamic_warning = "吸筹早期/中期，等待 Spring→JOC 完整序列。"
+                entry_zone = f"观察支撑区: {round(low, 2)} 附近"
             pos_sizing, _ = self._adjust_position_with_sentiment(
-                sentiment_data, phase_str, True
+                sentiment_data, phase_str, direction == "做多"
             )
             scale_in_triggers = self._calculate_scale_in_triggers(
-                current_price, high, low, atr, True
+                current_price, high, low, atr, direction == "做多"
             )
-            dynamic_warning = "当前处于吸筹阶段。威科夫原则：吸筹区只买不卖，利用 Spring/LPS 信号分仓低吸。"
-            entry_zone = f"支撑区: {round(low, 2)} 附近 (利用回调分批建仓)"
         elif is_distribution:
             direction = "减仓/对冲" if self.is_a_stock else "做空"
             pos_sizing = {"status": "空仓/减持"}

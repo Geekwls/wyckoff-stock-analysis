@@ -183,8 +183,8 @@ class PhaseIdentifier(BaseDetector):
         has_st = self._safe_check_detected(st)
         has_ps = self._safe_check_detected(ps)
 
-        # 威科夫理论：Phase A 至少需要 Climax + (AR 或 ST)
-        has_complete_structure = has_climax and (has_ar or has_st)
+        # 威科夫理论：正式 Phase A 须 Climax + AR + ST（孟氏 PS→SC→AR→ST）
+        has_complete_structure = has_climax and has_ar and has_st
 
         # 记录详细的缺失警告
         if has_climax and not has_complete_structure:
@@ -198,6 +198,10 @@ class PhaseIdentifier(BaseDetector):
                 f"[Phase A结构不完整] 检测到Climax但缺少 {', '.join(missing)}。"
                 f"根据威科夫理论，这可能只是趋势中的暂时停顿，而非真正的Phase A开始。"
                 f"等待 {', '.join(missing)} 出现后再确认Phase A。"
+            )
+        elif has_climax and has_ar and not has_st:
+            logger.warning(
+                "[Phase A结构不完整] 已有 Climax+AR 但缺少 ST，仅可标为待确认 Phase A。"
             )
 
         return has_complete_structure
@@ -224,7 +228,7 @@ class PhaseIdentifier(BaseDetector):
             "has_climax": has_climax,
             "has_automatic_reaction": has_ar,
             "has_secondary_test": has_st,
-            "is_complete": has_climax and (has_ar or has_st),
+            "is_complete": has_climax and has_ar and has_st,
             "completeness_score": 0,
             "missing_elements": [],
             "warnings": []
@@ -252,10 +256,15 @@ class PhaseIdentifier(BaseDetector):
                 status["missing_elements"].append(element_name)
 
         # 生成警告信息
-        if has_climax and not (has_ar or has_st):
-            status["warnings"].append(
-                "⚠️ 威科夫理论警告：仅有Climax无AR/ST，可能只是趋势中暂时停顿"
-            )
+        if has_climax and not (has_ar and has_st):
+            if not has_ar:
+                status["warnings"].append(
+                    "⚠️ 威科夫理论警告：仅有Climax无AR/ST，可能只是趋势中暂时停顿"
+                )
+            elif not has_st:
+                status["warnings"].append(
+                    "⚠️ 威科夫理论警告：Climax+AR 缺 ST，Phase A 尚未正式确认"
+                )
         if score == 1 and has_climax:
             status["warnings"].append(
                 "⚠️ 威科夫理论警告：Phase A结构极不完整（1/4），不建议作为交易依据"
@@ -301,9 +310,14 @@ class PhaseIdentifier(BaseDetector):
             return self._phase_tuple(('Distribution Phase C (派发期诱多)', WyckoffPhase.PHASE_C, 0.70))
 
         if climax and climax.detected and ar and ar.detected:
+            has_st = st and st.detected
             if climax.type == 'selling_climax':
-                return self._phase_tuple(('Accumulation Phase A (恐慌抛售停止)', WyckoffPhase.PHASE_A, 0.75))
-            return self._phase_tuple(('Distribution Phase A (买入高潮停止)', WyckoffPhase.PHASE_A, 0.75))
+                if has_st:
+                    return self._phase_tuple(('Accumulation Phase A (恐慌抛售停止)', WyckoffPhase.PHASE_A, 0.75))
+                return self._phase_tuple(('Accumulation Phase A (SC+AR待ST确认)', WyckoffPhase.PHASE_A, 0.55))
+            if has_st:
+                return self._phase_tuple(('Distribution Phase A (买入高潮停止)', WyckoffPhase.PHASE_A, 0.75))
+            return self._phase_tuple(('Distribution Phase A (BC+AR待ST确认)', WyckoffPhase.PHASE_A, 0.55))
 
         if climax and climax.detected and st and st.detected:
             if climax.type == 'selling_climax':

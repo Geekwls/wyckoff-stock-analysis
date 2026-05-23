@@ -406,16 +406,22 @@ class WyckoffAnalyzer:
             except Exception:
                 pass
 
-            # 阶段挂钩建议（按 SKILL.md 规则）
+            # 阶段挂钩建议（孟氏 checklist 对齐）
             phase_upper = phase_str.upper()
+            joc_det = events_summary.get('joc_detected', False)
+            spring_det = events_summary.get('spring_detected', False)
             if 'PHASE_A' in phase_upper or 'PHASE_B' in phase_upper or \
                'PHASE A' in phase_upper or 'PHASE B' in phase_upper:
                 phase_advice = "Observation / Very light position try-out only (Phase A/B)"
             elif 'PHASE_C' in phase_upper or 'PHASE C' in phase_upper:
-                phase_advice = "Batch entry / Position building (Phase C)"
+                if spring_det and not joc_det:
+                    phase_advice = "Wait for JOC breakout or LPS retest (Phase C — Spring only)"
+                else:
+                    phase_advice = "Observation — await Spring/JOC checklist (Phase C)"
             elif 'PHASE_D' in phase_upper or 'PHASE_E' in phase_upper or \
                  'PHASE D' in phase_upper or 'PHASE E' in phase_upper:
-                phase_advice = "Hold / Add to position (Phase D/E)"
+                phase_advice = "Hold / Add on LPS after JOC (Phase D/E)" if joc_det else \
+                    "Hold / Add to position (Phase D/E)"
             else:
                 phase_advice = "Assess full analysis for specific advice"
 
@@ -478,19 +484,19 @@ class WyckoffAnalyzer:
             if self.data is None or self.data.empty or self.pattern_detector is None:
                 return _json.dumps({'error': 'No data or detector available', 'symbol': self.symbol})
             from .core.trading_plan_generator import TradingPlanGenerator
+            from .core.signal_extractor import SignalExtractor, get_events_from_phase
             
             current_price = float(self.data['Close'].iloc[-1])
             atr = float(self.data['ATR'].iloc[-1]) if 'ATR' in self.data.columns else \
                   float((self.data['High'] - self.data['Low']).rolling(14).mean().iloc[-1])
 
-            # 1. 获取交易区间
-            tr = self.pattern_detector.detect_trading_range()
-            tr_high = tr.get('high', current_price * 1.1)
-            tr_low  = tr.get('low',  current_price * 0.9)
-
-            # 2. 复用 TradingPlanGenerator 的计算逻辑
+            # 1. 主链事件（TR / SOS 与 identify_phase 同源）
             phase_res = self.identify_phase()
             phase_str = phase_res.get('phase', 'Unknown')
+            events = get_events_from_phase(phase_res)
+            tr = SignalExtractor.get_event_dict(events, 'trading_range')
+            tr_high = tr.get('high', current_price * 1.1)
+            tr_low = tr.get('low', current_price * 0.9)
             is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
             
             plan_gen = TradingPlanGenerator(self.data, self.pattern_detector)
@@ -539,17 +545,17 @@ class WyckoffAnalyzer:
                     }
                 }
 
-            # 3. SOS-SOW 关键确认位
+            # 3. SOS 关键确认位（主链 events_detected）
             key_level = None
             try:
-                sos = self.pattern_detector.sw_detector.detect_sos()
+                sos = SignalExtractor.get_event_dict(events, 'sos')
                 if sos.get('detected'):
-                    bt_raw = sos.get('latest', sos).get('breakthrough_level') or \
-                             sos.get('breakthrough_level')
+                    bt_raw = sos.get('breakthrough_level') or \
+                             SignalExtractor._get(SignalExtractor._latest(sos), 'breakthrough_level')
                     if bt_raw:
                         key_level = bt_raw if isinstance(bt_raw, dict) else {
                             'value': float(bt_raw),
-                            'derivation': 'max_high_in_60d_range',
+                            'derivation': 'events_detected.sos',
                             'note': '前期交易区间上沿阻力位'
                         }
             except (DataError, CalculationError):
@@ -596,11 +602,14 @@ class WyckoffAnalyzer:
             
         try:
             import json as _json
-            
-            sos = self.pattern_detector.sw_detector.detect_sos()
-            sow = self.pattern_detector.sw_detector.detect_sow()
+            from .core.signal_extractor import SignalExtractor, get_events_from_phase
+
+            phase_res = self.identify_phase()
+            events = get_events_from_phase(phase_res)
+            sos = SignalExtractor.get_event_dict(events, 'sos')
+            sow = SignalExtractor.get_event_dict(events, 'sow')
+            tr = SignalExtractor.get_event_dict(events, 'trading_range')
             current_price = float(self.data['Close'].iloc[-1])
-            tr = self.pattern_detector.detect_trading_range()
             
             # 执行矛盾分析
             conflict_res = SOSSOWAnalyzer.analyze_sos_sow_conflict(

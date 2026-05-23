@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Phase 9–14 真实股票数据验证脚本"""
+"""Phase 9–18 真实股票数据验证脚本"""
+import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -24,6 +26,8 @@ SYMBOLS = [
     ("0700.HK", "港股腾讯"),
 ]
 
+YFINANCE_MARKETS = {"美股", "港股腾讯"}
+
 
 def _flag(events, name: str) -> str:
     if events is None:
@@ -35,6 +39,24 @@ def _flag(events, name: str) -> str:
     if detected is None and isinstance(obj, dict):
         detected = obj.get("detected")
     return "Y" if detected else "-"
+
+
+def _arbitration_summary(events, phase_res: dict | None = None) -> dict | None:
+    if events is not None:
+        arb = getattr(events, "arbitration_result", None)
+        if arb is not None:
+            dominant = getattr(arb, "dominant_signal", None)
+            return {
+                "has_conflict": getattr(arb, "has_conflict", False),
+                "reason": getattr(arb, "arbitration_reason", None),
+                "dominant": getattr(dominant, "signal_type", None) if dominant else None,
+                "suggested_phase": getattr(arb, "suggested_phase", None),
+            }
+    if phase_res:
+        for log in phase_res.get("phase_revisions") or []:
+            if "[事件仲裁]" in log:
+                return {"has_conflict": True, "reason": log, "dominant": None, "suggested_phase": None}
+    return None
 
 
 def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
@@ -59,6 +81,7 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
         "sow": "-",
         "vsa": "-",
         "dead_corner": "-",
+        "arbitration": None,
         "revisions": 0,
     }
     try:
@@ -79,6 +102,7 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
             row["phase_source"] = phase_res.get("phase_source")
             row["coordinator_phase"] = getattr(events, "coordinator_final_phase", None) if events else None
             row["revisions"] = len(getattr(events, "phase_revision_log", []) or []) if events else 0
+            row["arbitration"] = _arbitration_summary(events, phase_res)
 
             row["spring"] = _flag(events, "spring")
             row["joc"] = _flag(events, "joc")
@@ -98,7 +122,6 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
             if isinstance(dc, dict):
                 row["dead_corner"] = "Y" if dc.get("detected") else "-"
 
-            # 交易计划（复用已带 cache 的 detector，避免 orchestrator 二次建 detector 崩溃）
             try:
                 patterns = SignalExtractor.build_scoring_payload(phase_res)
                 patterns["symbol"] = symbol
@@ -120,24 +143,66 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
     return row
 
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="威科夫真实股票验证")
+    parser.add_argument(
+        "--symbols",
+        nargs="*",
+        help="仅验证指定代码（默认全量 SYMBOLS）",
+    )
+    parser.add_argument(
+        "--ashare-only",
+        action="store_true",
+        help="仅 A 股（跳过 Yahoo 限流标的）",
+    )
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=None,
+        help="标的间休眠秒数（Yahoo 默认 12s，A 股 2s）",
+    )
+    parser.add_argument(
+        "--cache-only",
+        action="store_true",
+        help="Yahoo 仅使用本地过期缓存（设 WYCKOFF_YF_CACHE_ONLY=1）",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = _parse_args()
+    if args.cache_only:
+        os.environ["WYCKOFF_YF_CACHE_ONLY"] = "1"
+
+    selected = list(SYMBOLS)
+    if args.ashare_only:
+        selected = [s for s in SYMBOLS if s[0].startswith(("sh.", "sz."))]
+    if args.symbols:
+        sym_set = set(args.symbols)
+        selected = [s for s in SYMBOLS if s[0] in sym_set]
+
     print("=" * 72)
-    print("威科夫真实股票验证 (Phase 9–14)")
+    print("威科夫真实股票验证 (Phase 9–18)")
     print("=" * 72)
 
     results = []
-    for i, (symbol, market) in enumerate(SYMBOLS):
+    for i, (symbol, market) in enumerate(selected):
         if i > 0:
-            time.sleep(6)  # 降低 yfinance 限流概率
+            default_sleep = 12.0 if market in YFINANCE_MARKETS else 2.0
+            time.sleep(args.sleep if args.sleep is not None else default_sleep)
         print(f"\n分析 {symbol} ({market}) ...", flush=True)
         row = analyze_one(symbol, market)
         results.append(row)
         if row["ok"]:
+            arb = row.get("arbitration") or {}
+            arb_note = ""
+            if arb.get("has_conflict"):
+                arb_note = f" arb={arb.get('dominant')} ({arb.get('reason', '')[:40]})"
             print(
                 f"  ✓ phase={row['phase']} conf={row['confidence']} "
                 f"dir={row['direction']} act={row.get('action')} "
                 f"[Sp/J/SOS/FTI/SOW={row['spring']}/{row['joc']}/{row['sos']}/{row['fti']}/{row['sow']}] "
-                f"bars={row['bars']} rev={row['revisions']}"
+                f"bars={row['bars']} rev={row['revisions']}{arb_note}"
             )
         else:
             print(f"  ✗ {row['error']}")
@@ -147,17 +212,17 @@ def main():
     print(f"完成: {ok_count}/{len(results)} 成功")
     print("=" * 72)
 
-    # 批量扫描 smoke test (美股)
-    print("\n批量扫描 smoke: AAPL, MSFT ...")
-    try:
-        batch = batch_scan(["AAPL", "MSFT"], period="6mo", scan_mode="quick", show_progress=False)
-        s = batch.get("summary", {})
-        print(
-            f"  batch OK: scanned={s.get('total_scanned')} signals={s.get('signal_count')} "
-            f"failed={s.get('failed_count')}"
-        )
-    except Exception as e:
-        print(f"  batch FAIL: {e}")
+    if not args.ashare_only and any(s[0] in {"AAPL", "MSFT"} for s in selected):
+        print("\n批量扫描 smoke: AAPL, MSFT ...")
+        try:
+            batch = batch_scan(["AAPL", "MSFT"], period="6mo", scan_mode="quick", show_progress=False)
+            s = batch.get("summary", {})
+            print(
+                f"  batch OK: scanned={s.get('total_scanned')} signals={s.get('signal_count')} "
+                f"failed={s.get('failed_count')}"
+            )
+        except Exception as e:
+            print(f"  batch FAIL: {e}")
 
     out_path = ROOT / "code-review" / "REAL_STOCK_VALIDATION.json"
     out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

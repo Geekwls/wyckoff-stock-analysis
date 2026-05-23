@@ -242,11 +242,11 @@ class MengReversalDetector(BaseDetector):
                 signal['failure_reason'] = f"价格跌破 Spring 低位 3% ({min_low:.2f} < {failure_threshold:.2f})"
                 return
 
-            # 判定失败 2: 10 天内未突破收回日高点 (需求跟进不足)
+            # 判定失败 2: 5 个交易日内未突破收回日高点 (孟氏 §3.1)
             max_high = window_df['High'].max()
-            if len(window_df) >= 10 and max_high < recovery_high:
+            if len(window_df) >= 5 and max_high < recovery_high:
                 signal['lifecycle_status'] = 'failed'
-                signal['failure_reason'] = f"10日内未能突破收回日高点 ({recovery_high:.2f})"
+                signal['failure_reason'] = f"5日内未能突破收回日高点 ({recovery_high:.2f})"
                 return
 
             # 判定成功：价格突破收回日高点

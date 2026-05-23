@@ -294,6 +294,8 @@ class PhaseCoordinator:
             'lpsy': lpsy_res,
             'joc': joc_res,
             'fti': fti_res,
+            '_phase_context': preliminary_phase,
+            '_climax_type': climax_res.get('type') if isinstance(climax_res, dict) else None,
         }
         arbitration_result = self._arbitrate_events(arbitration_raw)
 
@@ -330,7 +332,13 @@ class PhaseCoordinator:
             'fti': _safe_model(FtiModel, fti_res) if fti_res.get('detected') else None,
             'boring_zone': _safe_model(BoringZoneModel, boring_zone_res) if boring_zone_res and isinstance(boring_zone_res, dict) else None,
             'phase_revision_log': [],
-            'arbitration_result': _safe_model(ArbitrationResult, arbitration_result) if arbitration_result and isinstance(arbitration_result, dict) else None,
+            'arbitration_result': (
+                arbitration_result
+                if isinstance(arbitration_result, ArbitrationResult)
+                else _safe_model(ArbitrationResult, arbitration_result)
+                if arbitration_result and isinstance(arbitration_result, dict)
+                else None
+            ),
             'breakout_analysis': _safe_model(BreakoutAnalysisModel, breakout_analysis) if breakout_analysis and isinstance(breakout_analysis, dict) else None,
             'preliminary_support': _safe_model(WyckoffEventModel, ps_res) if ps_res.get('detected') else WyckoffEventModel(detected=False),
             'preliminary_supply': _safe_model(WyckoffEventModel, psy_res) if psy_res.get('detected') else WyckoffEventModel(detected=False),
@@ -695,7 +703,7 @@ class PhaseCoordinator:
             if is_sc and is_ar and is_st:
                 phase = 'Accumulation Phase A'  # 置信度高：完整结构 SC+AR+ST
             elif is_sc and is_ar:
-                phase = 'Accumulation Phase A'  # 置信度中：SC+AR，ST 待确认
+                phase = 'Accumulation Phase A (SC+AR待ST确认)'
             elif is_sc:
                 phase = 'Accumulation Phase A (SC待AR确认)'
             elif is_ar and is_st:
@@ -708,7 +716,7 @@ class PhaseCoordinator:
             if is_bc and is_ar and is_st:
                 phase = 'Distribution Phase A'  # 置信度高：完整结构 BC+AR+ST
             elif is_bc and is_ar:
-                phase = 'Distribution Phase A'  # 置信度中：BC+AR，ST 待确认
+                phase = 'Distribution Phase A (BC+AR待ST确认)'
             elif is_bc:
                 phase = 'Distribution Phase A (BC待AR确认)'
             elif is_ar and is_st:
@@ -722,11 +730,11 @@ class PhaseCoordinator:
             if is_bc and is_ar and is_st:
                 phase = 'Distribution Phase A'
             elif is_bc and is_ar:
-                phase = 'Distribution Phase A'
+                phase = 'Distribution Phase A (BC+AR待ST确认)'
             elif is_sc and is_ar and is_st:
                 phase = 'Accumulation Phase A'
             elif is_sc and is_ar:
-                phase = 'Accumulation Phase A'
+                phase = 'Accumulation Phase A (SC+AR待ST确认)'
             elif is_sc:
                 phase = 'Accumulation Phase A (SC待AR确认)'
             elif is_bc:

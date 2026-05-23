@@ -752,17 +752,31 @@ class RecommendationEngine:
                 atr_dynamic_stop=round(cons_stop + atr_val * 0.5, 2),
             )
         elif _event_detected(upthrust):
-            direction = "做空"
-            ut_high = _get_upthrust_high(upthrust)
-            if ut_high <= 0:
-                ut_high = current_price * 1.05
-            zone = f"{current_price:.2f} 附近 (Upthrust诱多)"
-            # 刚性止损：突破 Upthrust 极值点则结构失效
-            stop = StopLossModel(
-                conservative=round(ut_high * 1.01, 2),
-                aggressive=round(ut_high * 1.005, 2),
-                atr_dynamic_stop=round(ut_high + atr_val * 0.5, 2),
+            ut_detail = _event_latest(upthrust)
+            ut_failed = (
+                ut_detail
+                and RecommendationEngine._get_attr(ut_detail, 'lifecycle_status') == 'failed'
             )
+            if ut_failed:
+                direction = "观望"
+                zone = "Upthrust 生命周期已失效，等待新结构确认"
+                stop = StopLossModel(conservative=0.0, aggressive=0.0)
+            elif not _event_detected(fti) and not _event_detected(sow):
+                direction = "观望"
+                ut_price = _event_price(upthrust, current_price)
+                zone = f"Upthrust ({ut_price:.2f}) 待 SOW/FTI 结构确认，暂不建议追空"
+                stop = StopLossModel(conservative=0.0, aggressive=0.0)
+            else:
+                direction = "做空"
+                ut_high = _get_upthrust_high(upthrust)
+                if ut_high <= 0:
+                    ut_high = current_price * 1.05
+                zone = f"{current_price:.2f} 附近 (Upthrust诱多)"
+                stop = StopLossModel(
+                    conservative=round(ut_high * 1.01, 2),
+                    aggressive=round(ut_high * 1.005, 2),
+                    atr_dynamic_stop=round(ut_high + atr_val * 0.5, 2),
+                )
         elif _event_detected(sow) and not _event_detected(fti) and not _event_detected(upthrust):
             # Phase 10: 孤立 SOW 对称 B14 — 待 FTI/Upthrust 结构确认
             direction = "观望"

@@ -406,7 +406,11 @@ class CauseEffectMixin:
             
         # 2. 突破质量加权 (JOC/FTI 质量)
         quality_score = 0
-        joc = self.pattern_detector.detect_joc_menhongtao() if self.pattern_detector and hasattr(self.pattern_detector, 'detect_joc_menhongtao') else {}
+        joc = {}
+        if self.pattern_detector:
+            phase_result = get_cached_phase_result(self.pattern_detector)
+            events = get_events_from_phase(phase_result)
+            joc = SignalExtractor.get_event_dict(events, 'joc')
 
         if joc.get('detected'):
             #  Weis Wave 波段累加量评估（替换原单K线降级方案）

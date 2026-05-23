@@ -311,24 +311,17 @@ class ScreenerService:
         return results
     
     def _screen_lps_entries(self) -> List[Dict]:
-        """筛选LPS入场机会"""
+        """筛选LPS入场机会（主链 events_detected 同源）"""
         results = []
         
         for symbol, analyzer in self._analyzers.items():
-            trading_range = analyzer.pattern_detector.detect_trading_range()
-            spring = analyzer.pattern_detector.detect_spring_menhongtao()
-            sos = analyzer.pattern_detector.detect_sos()
-            joc = analyzer.pattern_detector.detect_joc_menhongtao()
-            lps = analyzer.pattern_detector.detect_lps(
-                sos,
-                spring,
-                trading_range=trading_range,
-                joc_result=joc,
-            )
+            phase_res = analyzer.identify_phase_with_rs()
+            from ..core.signal_extractor import SignalExtractor, get_events_from_phase
+            events = get_events_from_phase(phase_res)
+            lps = SignalExtractor.get_event_dict(events, 'lps')
             if not lps.get('detected'):
                 continue
             
-            phase_res = analyzer.identify_phase_with_rs()
             phase_str = phase_res.get('phase', 'Unknown')
             
             results.append({
@@ -342,15 +335,17 @@ class ScreenerService:
         return results
     
     def _screen_lpsy_entries(self) -> List[Dict]:
-        """筛选LPSY入场机会"""
+        """筛选LPSY入场机会（主链 events_detected 同源）"""
         results = []
         
         for symbol, analyzer in self._analyzers.items():
-            lpsy = analyzer.pattern_detector.detect_lpsy()
+            phase_res = analyzer.identify_phase_with_rs()
+            from ..core.signal_extractor import SignalExtractor, get_events_from_phase
+            events = get_events_from_phase(phase_res)
+            lpsy = SignalExtractor.get_event_dict(events, 'lpsy')
             if not lpsy.get('detected'):
                 continue
             
-            phase_res = analyzer.identify_phase_with_rs()
             phase_str = phase_res.get('phase', 'Unknown')
             
             results.append({

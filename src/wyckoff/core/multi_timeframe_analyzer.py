@@ -157,9 +157,58 @@ class MultiTimeframeAnalyzer:
 
         # JOC 共振（与主链 events_detected 同源，不再独立 detect_joc）
         joc = SignalExtractor.get_event_dict(events, 'joc')
-        if SignalExtractor._detected(joc):
+        has_joc = SignalExtractor._detected(joc)
+        if has_joc:
             resonance_strength += 1
             resonance_signals.append('daily_joc')
+
+        # 派发侧共振（Upthrust / SOW / FTI 对称）
+        bearish_strength = 0
+        upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
+        sow = SignalExtractor.get_event_dict(events, 'sow')
+        fti = SignalExtractor.get_event_dict(events, 'fti')
+
+        if SignalExtractor._detected(upthrust) and not SignalExtractor._upthrust_lifecycle_failed(upthrust):
+            bearish_strength += 1
+            resonance_signals.append('daily_upthrust')
+        else:
+            su_info = SignalExtractor._get(events, 'spring_upthrust')
+            su_type = SignalExtractor._get(su_info, '_type') or SignalExtractor._get(su_info, 'type_')
+            if su_type == 'upthrust' and SignalExtractor._detected(SignalExtractor._get(su_info, 'data')):
+                if not SignalExtractor._upthrust_lifecycle_failed(SignalExtractor._get(su_info, 'data')):
+                    bearish_strength += 1
+                    resonance_signals.append('daily_upthrust')
+
+        if SignalExtractor._detected(sow):
+            bearish_strength += 1
+            resonance_signals.append('daily_sow')
+        else:
+            ss_info = SignalExtractor._get(events, 'sos_sow')
+            ss_type = SignalExtractor._get(ss_info, '_type') or SignalExtractor._get(ss_info, 'type_')
+            if ss_type == 'sow' and SignalExtractor._detected(SignalExtractor._get(ss_info, 'data')):
+                bearish_strength += 1
+                resonance_signals.append('daily_sow')
+
+        if SignalExtractor._detected(fti):
+            bearish_strength += 1
+            resonance_signals.append('daily_fti')
+
+        if weekly_resonance.get('has_upthrust'):
+            bearish_strength += 2
+            resonance_signals.append('weekly_upthrust')
+        if weekly_resonance.get('has_sow'):
+            bearish_strength += 2
+            resonance_signals.append('weekly_sow')
+        if monthly_resonance.get('has_upthrust'):
+            bearish_strength += 3
+            resonance_signals.append('monthly_upthrust')
+
+        has_spring = SignalExtractor._detected(spring) or 'daily_spring' in resonance_signals
+        bullish_net = resonance_strength
+        bearish_net = bearish_strength
+        if bullish_net > 0 and bearish_net > 0:
+            resonance_strength = max(bullish_net, bearish_net) * 0.6
+            resonance_signals.append('mixed_mtf_conflict')
 
         weekly_trend = self.get_weekly_trend()
         monthly_trend = self.get_monthly_trend()
@@ -203,12 +252,16 @@ class MultiTimeframeAnalyzer:
 
         #  v1.3新增：生成交易建议
         trading_implication = self._generate_mtf_trading_advice(
-            resonance_level, resonance_strength, trend_alignment_score
+            resonance_level, resonance_strength, trend_alignment_score,
+            has_joc=has_joc,
+            has_spring_only=has_spring and not has_joc,
+            bearish_strength=bearish_strength,
         )
 
         return {
             'resonance_level': resonance_level,
             'resonance_strength': round(resonance_strength, 2),
+            'bearish_resonance_strength': round(bearish_strength, 2),
             'resonance_signals': resonance_signals,
             'daily_phase': daily_analysis.get('phase', 'unknown') if isinstance(daily_analysis, dict) else 'unknown',
             'weekly_trend': weekly_trend,
@@ -310,7 +363,16 @@ class MultiTimeframeAnalyzer:
             logger.warning(f"量能共振检测失败: {e}")
             return 0.0
 
-    def _generate_mtf_trading_advice(self, resonance_level: str, strength: float, trend_score: float) -> str:
+    def _generate_mtf_trading_advice(
+        self,
+        resonance_level: str,
+        strength: float,
+        trend_score: float,
+        *,
+        has_joc: bool = False,
+        has_spring_only: bool = False,
+        bearish_strength: float = 0.0,
+    ) -> str:
         """
         🔧 v1.3新增：生成多时间框架交易建议
 
@@ -318,14 +380,29 @@ class MultiTimeframeAnalyzer:
             resonance_level: 共振等级
             strength: 共振强度
             trend_score: 趋势一致性评分
+            has_joc: 日线 JOC 已确认
+            has_spring_only: 仅有 Spring 无 JOC
+            bearish_strength: 派发侧共振强度
 
         Returns:
             交易建议文本
         """
+        if has_spring_only and not has_joc:
+            return (
+                f"⚠️ 多时间框架检测到 Spring 但无 JOC（强度{strength:.1f}）。"
+                f"孟氏 checklist：等待 JOC 突破小溪后再积极建仓。"
+            )
+        if bearish_strength > strength and bearish_strength >= 2:
+            return (
+                f"⚠️ 派发侧多周期共振更强（空{bearish_strength:.1f} vs 多{strength:.1f}）。"
+                f"建议观望或等待 FTI/SOW 结构确认后再评估做空。"
+            )
         if resonance_level == 'strong_resonance':
-            return (f"🎯 多时间框架强共振（强度{strength:.1f}），信号可信度极高。"
-                   f"趋势一致性强（{trend_score:.1%}），建议积极建仓，"
-                   f"止损可相对宽松，目标可看高一线。")
+            if has_joc:
+                return (f"🎯 多时间框架强共振且 JOC 已确认（强度{strength:.1f}），信号可信度极高。"
+                       f"趋势一致性强（{trend_score:.1%}），可按 LPS 分批建仓。")
+            return (f"🎯 多时间框架强共振（强度{strength:.1f}），但缺 JOC 确认。"
+                   f"建议等待突破小溪或 LPS 回测后再建仓。")
         elif resonance_level == 'moderate_resonance':
             return (f"✅ 多时间框架中等共振（强度{strength:.1f}），信号可信度较高。"
                    f"建议适量建仓，注意风险控制，止损设在关键支撑位。")
@@ -404,7 +481,17 @@ class MultiTimeframeAnalyzer:
             upthrust_reversal = current_close < current_open
             has_upthrust = upthrust_test and upthrust_reversal and vol_ratio > 1.3
 
-            return {'has_spring': has_spring, 'has_sos': has_sos, 'has_upthrust': has_upthrust}
+            # SOW: 放量跌破近期低点
+            below_prior_low = current_close < recent_data['Low'].iloc[-3:max(1, len(recent_data)-1)].min() * 1.02
+            bearish_bar = price_change < -0.02
+            has_sow = vol_ratio > 1.5 and bearish_bar and below_prior_low
+
+            return {
+                'has_spring': has_spring,
+                'has_sos': has_sos,
+                'has_upthrust': has_upthrust,
+                'has_sow': has_sow,
+            }
         except Exception as e:
             logger.error(f"Error in {timeframe} resonance: {e}")
             raise PatternDetectionError("多时间框架共振", str(e)) from e

@@ -25,6 +25,7 @@ class SequenceValidator:
         spring_val = self._validate_spring_context()
         upthrust_val = self._validate_upthrust_context()
         lps_val = self._validate_lps_vs_spring()
+        lpsy_val = self._validate_lpsy_vs_fti()
         sos_val = self._validate_sos_context()
         joc_val = self._validate_joc_context()
         seq_score = self._calculate_sequence_score()
@@ -34,6 +35,7 @@ class SequenceValidator:
             "spring": spring_val,
             "upthrust": upthrust_val,
             "lps": lps_val,
+            "lpsy": lpsy_val,
             "sos": sos_val,
             "joc": joc_val,
             "sequence_score": seq_score,
@@ -251,9 +253,24 @@ class SequenceValidator:
 
         spring = self.e.spring
         sos = self.e.sos
+        joc = self.e.joc
 
         notes = []
         valid = False
+
+        # 孟氏 checklist：正式 LPS 须 JOC 前置
+        has_joc = getattr(joc, 'detected', False)
+        if has_joc:
+            joc_date = self._to_ts(getattr(joc, "date", None))
+            if joc_date and lps_date and joc_date < lps_date:
+                notes.append("JOC在前→LPS在后 ✓ 正式LPS")
+                valid = True
+            elif joc_date and lps_date:
+                notes.append("⚠️ LPS在JOC之前，时序异常")
+            else:
+                notes.append("JOC已检测到（日期不可比）")
+        else:
+            notes.append("无JOC前置 — 非正式LPS（孟氏要求 JOC 后缩量回测 Creek）")
 
         # Rule 1: LPS low > Spring low
         spring_break = None
@@ -278,23 +295,56 @@ class SequenceValidator:
                 notes.append("⚠️ LPS在Spring之前，时序异常")
 
         has_sos = getattr(sos, 'detected', False)
-        if has_sos:
+        if has_sos and has_joc:
             sos_date = self._to_ts(getattr(sos, "date", None))
             if sos_date and lps_date and sos_date < lps_date:
                 notes.append("SOS在前→LPS在后 ✓ 有效回调")
-                valid = True
             elif sos_date and lps_date:
                 notes.append("⚠️ SOS在LPS之后，顺序反常")
-            else:
-                notes.append("SOS已检测到（日期不可比）")
-        else:
-            notes.append("无SOS前置 — LPS定义为趋势回调，非吸筹LPS")
+        elif has_sos and not has_joc:
+            notes.append("有SOS但无JOC — LPS尚未具备正式入场资格")
 
         return {
-            "valid": valid,
+            "valid": valid and has_joc,
+            "has_joc_precursor": has_joc,
             "has_sos_precursor": has_sos,
             "spring_low": spring_break,
             "lps_price": lps_price,
+            "notes": notes,
+        }
+
+    # ── LPSY vs FTI (distribution mirror) ─────────────────
+    def _validate_lpsy_vs_fti(self) -> Dict[str, Any]:
+        lpsy = self.e.lpsy
+        if not getattr(lpsy, 'detected', False):
+            return {"valid": False, "reason": "no_lpsy"}
+
+        latest = self._latest_detail(lpsy)
+        lpsy_date = self._to_ts(self._get_attr(latest, "date", None)) if latest else None
+        fti = self.e.fti
+        sow = self.e.sow
+        notes = []
+        valid = False
+
+        has_fti = getattr(fti, 'detected', False)
+        if has_fti:
+            fti_date = self._to_ts(getattr(fti, "date", None))
+            if fti_date and lpsy_date and fti_date < lpsy_date:
+                notes.append("FTI在前→LPSY在后 ✓ 正式LPSY")
+                valid = True
+            elif fti_date and lpsy_date:
+                notes.append("⚠️ LPSY在FTI之前，时序异常")
+            else:
+                notes.append("FTI已检测到（日期不可比）")
+        else:
+            notes.append("无FTI前置 — 非正式LPSY（孟氏要求 FTI 后缩量反弹）")
+
+        if getattr(sow, 'detected', False) and has_fti:
+            notes.append("SOW+FTI 派发突破链存在 ✓")
+
+        return {
+            "valid": valid and has_fti,
+            "has_fti_precursor": has_fti,
             "notes": notes,
         }
 
@@ -363,18 +413,30 @@ class SequenceValidator:
         ar = self.e.automatic_reaction
         st = self.e.secondary_test
         spring = self.e.spring
+        upthrust = self.e.upthrust
         sos = self.e.sos
+        sow = self.e.sow
         lps = self.e.lps
+        lpsy = self.e.lpsy
         joc = self.e.joc
+        fti = self.e.fti
 
         checks = {
             "SC/BC": 1 if getattr(climax, 'detected', False) else 0,
             "AR": 1 if getattr(ar, 'detected', False) else 0,
             "ST": 1 if getattr(st, 'detected', False) else 0,
-            "Spring/Upthrust": 1 if getattr(spring, 'detected', False) else 0,
-            "SOS/SOW": 1 if getattr(sos, 'detected', False) else 0,
-            "LPS/LPSY": 1 if getattr(lps, 'detected', False) else 0,
-            "JOC/FTI": 1 if getattr(joc, 'detected', False) else 0,
+            "Spring/Upthrust": 1 if (
+                getattr(spring, 'detected', False) or getattr(upthrust, 'detected', False)
+            ) else 0,
+            "SOS/SOW": 1 if (
+                getattr(sos, 'detected', False) or getattr(sow, 'detected', False)
+            ) else 0,
+            "LPS/LPSY": 1 if (
+                getattr(lps, 'detected', False) or getattr(lpsy, 'detected', False)
+            ) else 0,
+            "JOC/FTI": 1 if (
+                getattr(joc, 'detected', False) or getattr(fti, 'detected', False)
+            ) else 0,
         }
         total = len(checks)
         detected = sum(checks.values())
@@ -414,6 +476,16 @@ class SequenceValidator:
         sow = self.e.sow
         lps = self.e.lps
         lpsy = self.e.lpsy
+
+        if getattr(spring, 'detected', False):
+            sl = self._latest_detail(spring, 'latest_spring')
+            if sl and self._get_attr(sl, 'lifecycle_status') == 'failed':
+                conflicts.append("Spring lifecycle 已失效 (FAILED)，LPS/JOC 证据降级")
+
+        if getattr(upthrust, 'detected', False):
+            ul = self._latest_detail(upthrust, 'latest_upthrust')
+            if ul and self._get_attr(ul, 'lifecycle_status') == 'failed':
+                conflicts.append("Upthrust lifecycle 已失效 (FAILED)，LPSY/FTI 证据降级")
 
         if getattr(spring, 'detected', False) and getattr(sow, 'detected', False):
             spring_date = self._get_date(getattr(spring, 'latest_spring', None), "date", "breakdown_date")

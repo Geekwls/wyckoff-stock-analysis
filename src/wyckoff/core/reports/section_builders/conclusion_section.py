@@ -47,6 +47,7 @@ class ConclusionSection(BaseSectionBuilder):
 
         phase_str = phase_result.get('phase', 'Unknown')
         phase_conf = phase_result.get('confidence', 0.0)
+        self._phase_result = phase_result
         current_price = self.data['Close'].iloc[-1]
 
         report = ""
@@ -881,21 +882,21 @@ class ConclusionSection(BaseSectionBuilder):
 
         #  新增：BC警示下的特殊止损纪律
         try:
-            # 尝试从phase_coordinator获取climax信息
+            # 从主链 phase_result 读取 climax（避免二次 collect_all_events）
             bc_detected = False
             bc_type = None
 
-            # 方法1：检查phase_coordinator的events
-            if hasattr(self, 'pattern_detector') and hasattr(self.pattern_detector, 'phase_coordinator'):
+            phase_result = getattr(self, '_phase_result', None)
+            if phase_result:
                 try:
-                    events = self.pattern_detector.phase_coordinator.collect_all_events()
-                    climax = self._get(events, 'climax')
+                    from ....signal_extractor import get_events_from_phase
+                    events = get_events_from_phase(phase_result)
+                    climax = self._get(events, 'climax') if events else None
                     if climax:
                         bc_detected = self._detected(climax)
                         bc_type = self._get(climax, 'type')
-                        logger.info(f"BC check: detected={bc_detected}, type={bc_type}")
                 except Exception as e:
-                    logger.debug(f"Failed to get climax from phase_coordinator: {e}")
+                    logger.debug(f"Failed to get climax from phase_result: {e}")
 
             # 方法2：检查阶段字符串（备用）
             if not bc_detected:

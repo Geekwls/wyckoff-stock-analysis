@@ -492,6 +492,13 @@ class SignalExtractor:
         return status == 'failed'
 
     @classmethod
+    def _upthrust_lifecycle_failed(cls, upthrust_event: Any) -> bool:
+        latest = cls._latest(upthrust_event)
+        target = latest if latest else upthrust_event
+        status = cls._get(target, 'lifecycle_status')
+        return status == 'failed'
+
+    @classmethod
     def build_patterns_payload(cls, ctx: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         构建与报告展示一致的 patterns_payload。
@@ -553,6 +560,13 @@ class SignalExtractor:
             if cls._detected(event):
                 if key == 'spring' and cls._spring_lifecycle_failed(event):
                     continue
+                if key == 'spring':
+                    joc_ev = cls.get_event_dict(events, 'joc') if events else {}
+                    if not cls._detected(joc_ev):
+                        if isinstance(pattern_results, dict):
+                            joc_ev = pattern_results.get('joc') or {}
+                        if not cls._detected(joc_ev):
+                            continue
                 return key, 'long'
 
         for key in short_chain:
@@ -560,6 +574,17 @@ class SignalExtractor:
             if not event and isinstance(pattern_results, dict):
                 event = pattern_results.get(key) or {}
             if cls._detected(event):
+                if key == 'upthrust' and cls._upthrust_lifecycle_failed(event):
+                    continue
+                if key == 'upthrust':
+                    fti_ev = cls.get_event_dict(events, 'fti') if events else {}
+                    sow_ev = cls.get_event_dict(events, 'sow') if events else {}
+                    if not cls._detected(fti_ev):
+                        if isinstance(pattern_results, dict):
+                            fti_ev = pattern_results.get('fti') or {}
+                            sow_ev = pattern_results.get('sow') or sow_ev
+                        if not cls._detected(fti_ev) and not cls._detected(sow_ev):
+                            continue
                 return key, 'short'
 
         return 'none', 'neutral'

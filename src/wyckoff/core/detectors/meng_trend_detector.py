@@ -151,9 +151,19 @@ class MengTrendDetector(BaseDetector):
 
     def _is_reaccumulation_context(self) -> bool:
         """B12: 再吸筹/突破后语境允许 JOC 脱离严格 consolidation 门控。"""
+        from ..utils import PhaseAdapter
         phase = self._current_phase or ''
-        keywords = ('Re-accumulation', 'Markup', 'Phase C/D', 'Phase D', 'Phase E')
-        return any(k in phase for k in keywords)
+        if PhaseAdapter.is_distribution(phase):
+            return False
+        if any(k in phase for k in ('Re-accumulation', '再积累', 'Reaccumulation')):
+            return True
+        if PhaseAdapter.is_markup(phase):
+            return True
+        if PhaseAdapter.is_accumulation(phase) and PhaseAdapter.is_phase_d(phase):
+            return True
+        if PhaseAdapter.is_accumulation(phase) and 'Phase E' in phase:
+            return True
+        return 'Phase C/D' in phase and PhaseAdapter.is_accumulation(phase)
 
     def detect_joc_enhanced(self) -> Dict:
         """孟洪涛增强版 JOC 检测"""

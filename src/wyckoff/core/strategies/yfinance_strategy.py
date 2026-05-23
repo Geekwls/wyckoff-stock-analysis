@@ -88,11 +88,21 @@ class YFinanceStrategy(DataSourceStrategy):
     def fetch(self, symbol: str, period: str, frequency: str = "1d") -> pd.DataFrame:
         yf_interval = self.normalize_interval(frequency)
         max_retries = getattr(self.config, 'max_retries', 3) if self.config else 3
+        cache_only = os.environ.get('WYCKOFF_YF_CACHE_ONLY', '').lower() in ('1', 'true', 'yes')
 
         if os.environ.get('WYCKOFF_DISABLE_YF_CACHE', '').lower() not in ('1', 'true', 'yes'):
-            cached = self._read_cache(symbol, period, yf_interval, _DEFAULT_TTL)
+            ttl = _STALE_TTL if cache_only else _DEFAULT_TTL
+            cached = self._read_cache(symbol, period, yf_interval, ttl)
             if cached is not None:
+                if cache_only:
+                    logger.info(f"YFinance 缓存模式 {symbol}（跳过网络请求）")
                 return cached
+            if cache_only:
+                raise DataFetchError(
+                    symbol,
+                    f"缓存模式未找到本地数据: {self._cache_path(symbol, period, yf_interval)}",
+                    retriable=False,
+                )
 
         last_err: Exception | None = None
         for attempt in range(max_retries):

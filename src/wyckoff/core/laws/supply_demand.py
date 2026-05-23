@@ -37,6 +37,8 @@ class SupplyDemandMixin:
         upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
         sos = SignalExtractor.get_event_dict(events, 'sos')
         sow = SignalExtractor.get_event_dict(events, 'sow')
+        joc = SignalExtractor.get_event_dict(events, 'joc')
+        fti = SignalExtractor.get_event_dict(events, 'fti')
 
         supply_demand_analysis = {
             "current_phase": phase_obj,
@@ -55,9 +57,12 @@ class SupplyDemandMixin:
                 "spring_status": "detected" if spring.get('detected') else "not_detected",
                 "sos_status": "detected" if sos.get('detected') else "not_detected"
             }
-            if spring.get('detected') and sos.get('detected'):
+            if spring.get('detected') and sos.get('detected') and joc.get('detected'):
                 stage = "Phase D-E (准备突破)"
                 supply_demand_balance = "需求主导，准备进入上涨期"
+            elif spring.get('detected') and sos.get('detected'):
+                stage = "Phase C+ (SOS待JOC确认)"
+                supply_demand_balance = "SOS出现，等待JOC突破小溪确认"
             elif in_range:
                 stage = "Phase B-C (积累震荡)"
                 supply_demand_balance = "供求平衡，主力吸筹中"
@@ -87,9 +92,12 @@ class SupplyDemandMixin:
                 "upthrust_status": "detected" if upthrust.get('detected') else "not_detected",
                 "sow_status": "detected" if sow.get('detected') else "not_detected"
             }
-            if upthrust.get('detected') and sow.get('detected'):
+            if upthrust.get('detected') and sow.get('detected') and fti.get('detected'):
                 stage = "Phase D-E (准备下跌)"
                 supply_demand_balance = "供应主导，准备进入下跌期"
+            elif upthrust.get('detected') and sow.get('detected'):
+                stage = "Phase C+ (SOW待FTI确认)"
+                supply_demand_balance = "SOW出现，等待FTI跌破冰层确认"
             elif in_range:
                 stage = "Phase B-C (派发震荡)"
                 supply_demand_balance = "供求平衡，主力出货中"

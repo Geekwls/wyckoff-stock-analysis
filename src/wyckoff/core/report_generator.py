@@ -368,21 +368,10 @@ class WyckoffReportGenerator:
         
         if self.pattern_detector:
             try:
-                raw_patterns = self.pattern_detector._collect_all_events()
-                if raw_patterns:
-                    if not isinstance(raw_patterns, dict) and hasattr(raw_patterns, 'model_dump'):
-                        raw_dict = raw_patterns.model_dump()
-                    elif isinstance(raw_patterns, dict):
-                        raw_dict = raw_patterns
-                    else:
-                        raw_dict = {}
-                    
-                    if raw_dict:
-                        patterns['phase'] = raw_dict.get('phase', patterns['phase'])
-                        patterns['sequence_validation'] = raw_dict.get('sequence_validation', {})
-                        events = raw_dict.get('events_detected', {})
-                        if events:
-                            patterns['events_detected'] = {**default_events, **events}
+                phase_result = self.pattern_detector.identify_phase()
+                from .signal_extractor import SignalExtractor
+                patterns = SignalExtractor.build_scoring_payload(phase_result)
+                patterns.setdefault('sequence_validation', phase_result.get('sequence_validation', {}))
             except Exception:
                 pass
                 

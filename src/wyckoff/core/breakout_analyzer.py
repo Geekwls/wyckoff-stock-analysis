@@ -269,12 +269,15 @@ class BreakoutAnalyzer:
         pullback_zone_high = tr_high * 1.02
         pullback_zone_low = tr_high * 0.98
 
-        has_pullback = (post_data['Low'].min() <= pullback_zone_high).any() and \
-                      (post_data['Low'].min() >= pullback_zone_low).any()
+        in_pullback_zone = (
+            (post_data['Low'] <= pullback_zone_high) &
+            (post_data['Low'] >= pullback_zone_low)
+        )
+        has_pullback = bool(in_pullback_zone.any())
 
         if has_pullback:
             # 找到回测点
-            pullback_point = post_data[post_data['Low'] <= pullback_zone_high].iloc[0]
+            pullback_point = post_data[in_pullback_zone].iloc[0]
             pullback_vol = pullback_point['Volume']
 
             # 回测时的成交量应该萎缩（好迹象）
@@ -433,12 +436,15 @@ class BreakoutAnalyzer:
         rally_zone_high = tr_low * 1.02
         rally_zone_low = tr_low * 0.98
 
-        has_rally = (post_data['High'].max() >= rally_zone_low).all() and \
-                    (post_data['High'].max() <= rally_zone_high).all()
+        in_rally_zone = (
+            (post_data['High'] >= rally_zone_low) &
+            (post_data['High'] <= rally_zone_high)
+        )
+        has_rally = bool(in_rally_zone.any())
 
         if has_rally:
             # 找到反弹最高点所在的那天
-            rally_point = post_data[post_data['High'] >= rally_zone_low].iloc[0]
+            rally_point = post_data[in_rally_zone].iloc[0]
             rally_vol = rally_point['Volume']
 
             breakout_vol = self.data.loc[breakout_point, 'Volume']
@@ -620,12 +626,12 @@ class BreakoutAnalyzer:
 
         direction = trading_range.get('breakout_direction')
 
-        # 向上突破 + 派发判断 → 强制否决
+        # 向上突破 + 派发判断 → 不自动改再积累，须 JOC/结构确认（孟氏 checklist）
         if direction == 'up' and 'Distribution' in current_phase:
             return (
-                "Trending / Reaccumulation",
-                f"TR向上突破至{trading_range['current_price']:.2f}元，否决了'派发'假设",
-                0.6  # 降低置信度
+                current_phase,
+                f"TR向上突破至{trading_range['current_price']:.2f}元，待JOC/再积累结构确认后再修正阶段",
+                0.85
             )
 
         # 向下突破 + 吸筹判断 → 强制否决
