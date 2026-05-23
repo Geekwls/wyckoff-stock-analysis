@@ -35,6 +35,24 @@ class RecommendationEngine:
             'waiting_mode_active': False,
             'waiting_since': None,
         }
+        self._patience_symbol: Optional[str] = None
+
+    @staticmethod
+    def _effective_phase_str(pattern_results: Any) -> str:
+        coord = RecommendationEngine._get_attr(pattern_results, 'coordinator_phase', None)
+        phase = RecommendationEngine._get_attr(pattern_results, 'phase', None)
+        return coord or phase or 'Unknown'
+
+    def _reset_patience_for_symbol(self, symbol: Optional[str]) -> None:
+        if not symbol or symbol == self._patience_symbol:
+            return
+        self._patience_symbol = symbol
+        self._patience_state = {
+            'consecutive_weak_signals': 0,
+            'last_signal_quality': None,
+            'waiting_mode_active': False,
+            'waiting_since': None,
+        }
 
     def _calculate_patience_score(self, detected_keys: List[str], base_score: float, market_env: MarketEnvironment) -> tuple:
         """
@@ -225,8 +243,8 @@ class RecommendationEngine:
         """
         计算高级加权评分 (v2.1校准：修正Phase E冲突惩罚，提升基础分)
         """
-        # 兼容性转换：如果 pattern_results 是字典，且包含 'events_detected'，则从中提取核心事件和属性
         if isinstance(pattern_results, dict):
+            self._reset_patience_for_symbol(pattern_results.get('symbol'))
             events = pattern_results.get('events_detected') or pattern_results
             seq_val = pattern_results.get('sequence_validation')
             boring = pattern_results.get('boring_zone')
@@ -279,10 +297,10 @@ class RecommendationEngine:
             if key in ['joc', 'spring', 'sos', 'lps', 'automatic_reaction']:
                 bullish_count += 1
             elif key in ['fti', 'upthrust', 'sow', 'lpsy', 'secondary_test', 'utad']:
-                phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
-                if 'Distribution' in phase_str or '派发' in phase_str:
+                phase_str = self._effective_phase_str(pattern_results)
+                if PhaseAdapter.is_distribution(phase_str):
                     bearish_count += 1
-                elif 'Accumulation' in phase_str or '吸筹' in phase_str:
+                elif PhaseAdapter.is_accumulation(phase_str):
                     bullish_count += 1
 
             quality_factor = 1.0
@@ -618,7 +636,7 @@ class RecommendationEngine:
         direction = "观望"
         zone = "等待形态确认"
         stop = StopLossModel(conservative=0.0, aggressive=0.0)
-        phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
+        phase_str = self._effective_phase_str(pattern_results)
 
         def _get_lps_low(window: int = 15) -> float:
             return float(data['Low'].tail(window).min())
@@ -665,6 +683,19 @@ class RecommendationEngine:
         def _event_level(event_obj, key: str, default: float) -> float:
             return _as_float(_event_get(event_obj, key, default), default)
 
+        def _get_latest_spring_detail(sp_obj):
+            if not sp_obj:
+                return None
+            latest = RecommendationEngine._get_attr(sp_obj, 'latest_spring')
+            if not latest:
+                signals = RecommendationEngine._get_attr(sp_obj, 'signals', [])
+                latest = signals[-1] if signals else None
+            if not latest:
+                if RecommendationEngine._get_attr(sp_obj, 'spring_type'):
+                    return sp_obj
+                return None
+            return latest
+
         # ── 方向判断 (结构导向刚性止损) ──
         if _event_detected(joc):
             direction = "做多"
@@ -679,28 +710,33 @@ class RecommendationEngine:
                 atr_dynamic_stop=round(cons_stop - atr_val * 0.5, 2),
             )
         elif _event_detected(spring):
-            direction = "做多"
-            spring_low = _get_spring_low(spring)
-            if spring_low <= 0:
-                spring_low = current_price * 0.95
-            zone = f"{current_price:.2f} 附近 (Spring震仓)"
-            # 刚性止损：跌破 Spring 极值点则结构失效
-            stop = StopLossModel(
-                conservative=round(spring_low * 0.99, 2),
-                aggressive=round(spring_low * 0.995, 2),
-                atr_dynamic_stop=round(spring_low - atr_val * 0.5, 2),
+            sp_detail_early = _get_latest_spring_detail(spring)
+            spring_failed = (
+                sp_detail_early
+                and RecommendationEngine._get_attr(sp_detail_early, 'lifecycle_status') == 'failed'
             )
+            if spring_failed:
+                direction = "观望"
+                zone = "Spring 生命周期已失效，等待新结构确认"
+                stop = StopLossModel(conservative=0.0, aggressive=0.0)
+            else:
+                direction = "做多"
+                spring_low = _get_spring_low(spring)
+                if spring_low <= 0:
+                    spring_low = current_price * 0.95
+                zone = f"{current_price:.2f} 附近 (Spring震仓)"
+                stop = StopLossModel(
+                    conservative=round(spring_low * 0.99, 2),
+                    aggressive=round(spring_low * 0.995, 2),
+                    atr_dynamic_stop=round(spring_low - atr_val * 0.5, 2),
+                )
+
         elif _event_detected(sos) and not _event_detected(joc) and not _event_detected(spring):
-            direction = "做多"
+            # B14: 孤立 SOS 不足以给出做多计划，需 Spring/JOC/LPS 结构确认
+            direction = "观望"
             sos_price = _event_price(sos, current_price)
-            zone = f"{sos_price:.2f} 附近 (SOS突破)"
-            lps_low = _get_lps_low(15)
-            cons_stop = min(lps_low, sos_price * 0.99)
-            stop = StopLossModel(
-                conservative=round(cons_stop, 2),
-                aggressive=round(sos_price * 0.995, 2),
-                atr_dynamic_stop=round(cons_stop - atr_val * 0.5, 2),
-            )
+            zone = f"SOS 突破 ({sos_price:.2f}) 待 Spring/JOC/LPS 结构确认，暂不建议追多"
+            stop = StopLossModel(conservative=0.0, aggressive=0.0)
         elif _event_detected(fti):
             direction = "做空"
             ice = _event_level(fti, 'ice_level', current_price)
@@ -725,16 +761,11 @@ class RecommendationEngine:
                 atr_dynamic_stop=round(ut_high + atr_val * 0.5, 2),
             )
         elif _event_detected(sow) and not _event_detected(fti) and not _event_detected(upthrust):
-            direction = "做空"
+            # Phase 10: 孤立 SOW 对称 B14 — 待 FTI/Upthrust 结构确认
+            direction = "观望"
             sow_price = _event_price(sow, current_price)
-            zone = f"{sow_price:.2f} 附近 (SOW跌破)"
-            lpsy_high = _get_lpsy_high(15)
-            cons_stop = max(lpsy_high, sow_price * 1.01)
-            stop = StopLossModel(
-                conservative=round(cons_stop, 2),
-                aggressive=round(sow_price * 1.005, 2),
-                atr_dynamic_stop=round(cons_stop + atr_val * 0.5, 2),
-            )
+            zone = f"SOW 跌破 ({sow_price:.2f}) 待 FTI/Upthrust 结构确认，暂不建议追空"
+            stop = StopLossModel(conservative=0.0, aggressive=0.0)
 
         # ── 仓位建议 (Phase+风险导向，与信号得分动态加权) ──
         normal_position_pct = 50.0
@@ -801,8 +832,20 @@ class RecommendationEngine:
                 aggressive="75%"
             )
 
+        # ── 下跌/派发结构中 Spring 不足以确认做多 ──
+        if (
+            direction == "做多"
+            and not _event_detected(joc)
+            and PhaseAdapter.get_market_side(phase_str) == MarketSide.BEARISH.value
+            and not is_utad_falsified
+        ):
+            direction = "观望"
+            zone = "下跌或派发结构中 Spring 需 JOC/结构确认，建议观望"
+            stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
+            pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
+
         # ── 派发初期/中期做空逻辑拦截覆盖 (威科夫诊断与处方强制一致性) ──
-        is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
+        is_dist = PhaseAdapter.is_distribution(phase_str)
         is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
                          any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
         is_dist_early = is_dist and is_early_phase
@@ -813,19 +856,6 @@ class RecommendationEngine:
             pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
 
         # ── Spring 二次测试校验拦截 (未确认时强制做多拦截改签观望) ──
-        def _get_latest_spring_detail(sp_obj):
-            if not sp_obj:
-                return None
-            latest = RecommendationEngine._get_attr(sp_obj, 'latest_spring')
-            if not latest:
-                signals = RecommendationEngine._get_attr(sp_obj, 'signals', [])
-                latest = signals[-1] if signals else None
-            if not latest:
-                if RecommendationEngine._get_attr(sp_obj, 'spring_type'):
-                    return sp_obj
-                return None
-            return latest
-
         sp_detail = _get_latest_spring_detail(spring)
         st_unconfirmed_spring = False
         if sp_detail:

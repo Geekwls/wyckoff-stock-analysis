@@ -50,6 +50,11 @@ class AkShareStrategy(DataSourceStrategy):
                 ak_period = "weekly"
             elif freq_lower in ("m", "1m", "monthly"):
                 ak_period = "monthly"
+            elif freq_lower in ("60m", "1h", "60", "hourly", "30m", "30", "15m", "15", "5m", "5"):
+                raise DataFetchError(
+                    symbol,
+                    f"AkShare 不支持 {frequency} 频率，请回退 BaoStock",
+                )
             else:
                 ak_period = "daily"
             

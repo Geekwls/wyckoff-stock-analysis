@@ -405,7 +405,12 @@ class SignalExtractor:
         返回 True 表示已执行 suppression。
         """
         phase_result = phase_result or ctx.get('phase_result') or {}
-        is_distribution = 'Distribution' in phase_result.get('phase', '')
+        phase_str = (
+            phase_result.get('coordinator_phase')
+            or phase_result.get('phase', '')
+        )
+        from .utils import PhaseAdapter
+        is_distribution = PhaseAdapter.is_distribution(phase_str)
         ctx['should_suppress_bullish'] = is_distribution
 
         breakout_analysis = ctx.get('breakout_analysis')
@@ -478,6 +483,13 @@ class SignalExtractor:
         return default
 
     @classmethod
+    def _spring_lifecycle_failed(cls, spring_event: Any) -> bool:
+        latest = cls._latest(spring_event)
+        target = latest if latest else spring_event
+        status = cls._get(target, 'lifecycle_status')
+        return status == 'failed'
+
+    @classmethod
     def build_patterns_payload(cls, ctx: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         构建与报告展示一致的 patterns_payload。
@@ -537,6 +549,8 @@ class SignalExtractor:
             if not event and isinstance(pattern_results, dict):
                 event = pattern_results.get(key) or {}
             if cls._detected(event):
+                if key == 'spring' and cls._spring_lifecycle_failed(event):
+                    continue
                 return key, 'long'
 
         for key in short_chain:

@@ -149,6 +149,12 @@ class MengTrendDetector(BaseDetector):
         test_vol_ratio = float(vol / vol_ma) if vol_ma > 0 else 1.0
         return True, t_score, t_quality, test_vol_ratio
 
+    def _is_reaccumulation_context(self) -> bool:
+        """B12: 再吸筹/突破后语境允许 JOC 脱离严格 consolidation 门控。"""
+        phase = self._current_phase or ''
+        keywords = ('Re-accumulation', 'Markup', 'Phase C/D', 'Phase D', 'Phase E')
+        return any(k in phase for k in keywords)
+
     def detect_joc_enhanced(self) -> Dict:
         """孟洪涛增强版 JOC 检测"""
         if USE_VECTORIZED:
@@ -164,7 +170,7 @@ class MengTrendDetector(BaseDetector):
             return {"detected": False, "reason": "insufficient_data"}
         df = self.data.copy()
         tr = self._detect_trading_range(df, window=60)
-        if not tr.get("is_consolidation"):
+        if not tr.get("is_consolidation") and not self._is_reaccumulation_context():
             return {"detected": False, "reason": "not_in_consolidation"}
         
         # 🔧 v1.3重构：滚动计算每一天的 Creek 颈线，彻底消除前瞻偏差 (Lookahead Bias)
@@ -263,7 +269,7 @@ class MengTrendDetector(BaseDetector):
             return {"detected": False, "reason": "insufficient_data"}
         df = self.data.copy()
         tr = self._detect_trading_range(df, window=60)
-        if not tr.get("is_consolidation"):
+        if not tr.get("is_consolidation") and not self._is_reaccumulation_context():
             return {"detected": False, "reason": "not_in_consolidation"}
         vol_ma20 = df['Volume_MA20'].iloc[-1] if 'Volume_MA20' in df.columns else df['Volume'].rolling(20).mean().iloc[-1]
         vol_ma20_s = df['Volume_MA20'].values if 'Volume_MA20' in df.columns else df['Volume'].rolling(20, min_periods=1).mean().values

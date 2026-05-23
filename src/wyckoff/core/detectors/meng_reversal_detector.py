@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, List, cast, Any
+from typing import Dict, List, Optional, cast, Any
 from .base_detector import BaseDetector, USE_VECTORIZED
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,24 @@ class MengReversalDetector(BaseDetector):
         self.data = data
         self.config = config
         self.thresholds = thresholds
+
+    def _build_support_level_series(self, df) -> np.ndarray:
+        """Spring 支撑：优先 SC/TR 结构下沿，rolling 20d low 作 fallback。"""
+        rolling = df['Low'].rolling(window=20).min().shift(1).values
+        structural = self._resolve_structural_support()
+        if structural is None:
+            return np.asarray(rolling, dtype=float)
+        base = np.full(len(df), structural, dtype=float)
+        return np.where(np.isnan(rolling), base, np.maximum(rolling, structural))
+
+    def _build_resistance_level_series(self, df) -> np.ndarray:
+        """Upthrust 阻力：优先 BC/TR 结构上沿。"""
+        rolling = df['High'].rolling(window=20).max().shift(1).values
+        structural = self._resolve_structural_resistance()
+        if structural is None:
+            return np.asarray(rolling, dtype=float)
+        base = np.full(len(df), structural, dtype=float)
+        return np.where(np.isnan(rolling), base, np.minimum(rolling, structural))
 
     def detect_spring_enhanced(self) -> Dict:
         """孟洪涛增强版 Spring 检测"""
@@ -50,7 +68,7 @@ class MengReversalDetector(BaseDetector):
         highs = np.asarray(df['High'])
         opens = np.asarray(df['Open'])
         volumes = np.asarray(df['Volume'])
-        support_levels = np.asarray(df['Low'].rolling(window=20).min().shift(1))
+        support_levels = self._build_support_level_series(df)
         vol_ma20_s = np.asarray(df['Volume'].rolling(20).mean())
         
         safe_support = np.where(support_levels > 1e-9, support_levels, 1.0)
@@ -73,8 +91,8 @@ class MengReversalDetector(BaseDetector):
                     recovery_days, recovery_vol = j - i, volumes[j]
                     #  修复#2: 成交量比较逻辑 - 量比阈值提高到 1.2
                     vol_ratio = recovery_vol / breakdown_vol if breakdown_vol > 0 else 1.0
-                    if vol_ratio < 1.2:
-                        continue  # 孟洪涛要求：收回时成交量必须明显放大（>1.2 倍）
+                    if vol_ratio < t.MENG_SPRING_VOL_RATIO:
+                        continue  # 孟洪涛要求：收回时成交量必须明显放大
                     
                     # 计算收回日收盘在日内振幅中的位置 (0=最低, 1=最高)
                     bar_range = highs[j] - lows[j]
@@ -118,8 +136,9 @@ class MengReversalDetector(BaseDetector):
         # 与向量化路径保持一致：波动率越高，允许的收回窗口越长
         max_recovery_days = 3 if atr_pct < 1.5 else 4 if atr_pct < 3.0 else 5
         t = self.thresholds
+        support_series = self._build_support_level_series(df)
         for i in range(20, len(df) - 5):
-            support_level = df['Low'].iloc[i-20:i].min()
+            support_level = float(support_series[i]) if not np.isnan(support_series[i]) else df['Low'].iloc[i-20:i].min()
             if df['Low'].iloc[i] < support_level:
                 breakdown_price, breakdown_vol = df['Low'].iloc[i], df['Volume'].iloc[i]
                 breakdown_pct = (support_level - breakdown_price) / support_level * 100
@@ -239,6 +258,55 @@ class MengReversalDetector(BaseDetector):
         except Exception:
             signal['lifecycle_status'] = 'active'
 
+    def _track_upthrust_status(self, signal: dict):
+        """
+        跟踪 Upthrust 状态并进行生命周期管理（对称于 Spring）。
+        理论：假突破后应快速跌回；若10日不创新低或涨破突破位，则 UT 失效。
+        """
+        if self.data is None:
+            return
+        df = cast(Any, self.data)
+        try:
+            rejection_date = signal['date']
+            rejection_idx = df.index.get_loc(rejection_date)
+            rejection_high = signal.get('rejection_high', signal.get('breakout_price', 0))
+            res_level = signal.get('resistance_level', 0)
+
+            n = len(df)
+            window_end = min(rejection_idx + 10, n - 1)
+
+            if rejection_idx >= n - 1:
+                signal['lifecycle_status'] = 'active'
+                return
+
+            window_df = df.iloc[rejection_idx + 1:window_end + 1]
+            if len(window_df) == 0:
+                signal['lifecycle_status'] = 'active'
+                return
+
+            # 失败1：涨破 Upthrust 高点 3%
+            ut_high = signal.get('breakout_price', rejection_high)
+            failure_ceiling = ut_high * 1.03
+            if window_df['High'].max() > failure_ceiling:
+                signal['lifecycle_status'] = 'failed'
+                signal['failure_reason'] = f"价格涨破 Upthrust 高位 3% ({window_df['High'].max():.2f} > {failure_ceiling:.2f})"
+                return
+
+            # 失败2：10日内未能跌回阻力下方（假突破未确认）
+            if len(window_df) >= 10 and window_df['Close'].min() >= res_level:
+                signal['lifecycle_status'] = 'failed'
+                signal['failure_reason'] = f"10日内未能跌回阻力 {res_level:.2f} 下方"
+                return
+
+            # 成功：收盘持续在阻力下方且创新低
+            if window_df['Low'].min() < res_level * 0.98:
+                signal['lifecycle_status'] = 'confirmed'
+                return
+
+            signal['lifecycle_status'] = 'active'
+        except Exception:
+            signal['lifecycle_status'] = 'active'
+
     def detect_upthrust_enhanced(self) -> Dict:
         """孟洪涛增强版 Upthrust 检测"""
         if self.data is None or len(self.data) < 20:
@@ -256,11 +324,15 @@ class MengReversalDetector(BaseDetector):
         closes = np.asarray(df['Close'])
         volumes = np.asarray(df['Volume'])
         opens = np.asarray(df['Open'])
-        resistance_levels = np.asarray(df['High'].rolling(window=20).max().shift(1))
-        
+        resistance_levels = self._build_resistance_level_series(df)
+        t = self.thresholds
+        ut_vol_min = getattr(t, 'MENG_SPRING_VOL_RATIO', 1.0)
+
         signals, n = [], len(df)
         for i in range(20, n - 5):
             res_level = resistance_levels[i]
+            if np.isnan(res_level):
+                continue
             if highs[i] > res_level:
                 breakout_price, breakdown_vol = highs[i], volumes[i]
                 breakout_pct = (breakout_price - res_level) / res_level * 100
@@ -271,7 +343,7 @@ class MengReversalDetector(BaseDetector):
                     if closes[j] < res_level:
                         rejection_days, rejection_vol = j - i, volumes[j]
                         vol_ratio = rejection_vol / breakdown_vol if breakdown_vol > 0 else 1.0
-                        if vol_ratio < 1.2:
+                        if vol_ratio < ut_vol_min:
                             continue
                         
                         daily_range = highs[j] - lows[j]
@@ -296,7 +368,7 @@ class MengReversalDetector(BaseDetector):
                             ut_type, ut_note = 2, "2号 Upthrust (普通测试): 正常成交量突破。"
 
                         confidence = self._calculate_upthrust_confidence(breakout_pct, rejection_days, vol_ratio, close_position, is_high_speed, ut_type)
-                        signals.append({
+                        ut_signal = {
                             "date": df.index[j], "breakout_price": float(breakout_price), "resistance_level": float(res_level),
                             "rejection_price": float(closes[j]), "rejection_days": int(rejection_days), "vol_ratio": round(float(vol_ratio), 2),
                             "close_position": round(float(close_position) * 100, 1),
@@ -305,8 +377,11 @@ class MengReversalDetector(BaseDetector):
                             "is_high_speed_rejection": bool(is_high_speed),
                             "upthrust_type": ut_type,
                             "type_description": ut_note,
+                            "rejection_high": float(highs[j]),
                             "confidence": confidence
-                        })
+                        }
+                        self._track_upthrust_status(ut_signal)
+                        signals.append(ut_signal)
                         break
         
         if not signals:

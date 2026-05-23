@@ -103,6 +103,7 @@
 | Phase 6 | P0 契约：SOS/SOW/Spring/EventsModel | ✅ 已完成 |
 | Phase 7 | 语义级测试：SOS 1.5x / LPS Creek / 报告&定律一致性 | ✅ 已完成 |
 | Phase 8 | 审查 P0 收尾：orchestrator 同源 / none 信号 / upthrust normalize | ✅ 已完成 |
+| Phase 9–12 | 深度审查 + 架构收尾 + 门控/Phase E/VSA + 金样本 | ✅ 已完成 |
 
 ---
 
@@ -125,6 +126,8 @@
 - [x] Orchestrator 派发 suppression 与报告一致 (`tests/test_phase4_theory.py`)
 - [x] 无信号时 `resolve_primary_signal` → none/neutral (`tests/test_phase4_theory.py`)
 - [x] Upthrust `latest_upthrust` normalize (`tests/test_phase0_contracts.py`)
+- [x] Phase 9：JOC 优先 / FTI Phase D / CHoCH 归一化 (`tests/test_phase9_theory.py`)
+- [x] Phase 12：Spring normalize + 金样本 (`tests/test_phase12_golden.py`)
 
 ---
 
@@ -136,3 +139,20 @@
 4. `analyze_supply_demand_law()` 不再调用 `detect_spring()` — ✅
 5. `holding_diagnostic` 只读 `events_detected` — ✅
 6. `orchestrator.run_analysis()` 评分输入与报告同源（`build_scoring_payload`） — ✅ Phase 8
+
+---
+
+## 七、Phase 9 深度审查（见 [DEEP_REVIEW_ISSUES.md](./DEEP_REVIEW_ISSUES.md)）
+
+### 9a — 已修复
+
+| ID | 问题 | 位置 | 状态 |
+|----|------|------|------|
+| B1 | Phase B 优先于 JOC | `phase_identifier.py` | ✅ |
+| B2 | CHoCH 方向枚举不一致 | `phase_coordinator.py`, `utils.py` | ✅ |
+| B3 | 派发 Phase D 无 FTI 硬约束 | `phase_identifier.py` | ✅ |
+| B5 | Spring 向量化/迭代量比不一致 | `meng_reversal_detector.py` | ✅ |
+
+### 9b — 待修复
+
+B4, B6–B8, B9–B15 — 详见 [DEEP_REVIEW_ISSUES.md](./DEEP_REVIEW_ISSUES.md)

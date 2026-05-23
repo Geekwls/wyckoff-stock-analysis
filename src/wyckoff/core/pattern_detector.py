@@ -311,6 +311,7 @@ class WyckoffPatternDetector:
         # 收集事件后识别（使用阶段协调器）
         events = self.phase_coordinator.collect_all_events()
         phase_result = self.phase_identifier.identify(events)
+        phase_result = self._merge_coordinator_phase(phase_result, events)
 
         # 附加事件序列验证结果
         phase_result['sequence_validation'] = getattr(events, 'sequence_validation', {})
@@ -341,6 +342,47 @@ class WyckoffPatternDetector:
                 if 'Accumulation' in phase_result.get('phase', ''):
                     phase_result['confidence'] = min(phase_result.get('confidence', 0.50), 0.30)
 
+        return phase_result
+
+    def _merge_coordinator_phase(self, phase_result: Dict, events) -> Dict:
+        """Phase 10: 将协调器证伪/仲裁修订合并进用户可见阶段。"""
+        coord_final = getattr(events, 'coordinator_final_phase', None)
+        revision_log = getattr(events, 'phase_revision_log', []) or []
+
+        phase_result['identifier_phase'] = phase_result.get('phase')
+        if coord_final:
+            phase_result['coordinator_phase'] = coord_final
+        if revision_log:
+            phase_result['phase_revisions'] = list(revision_log)
+
+        if not coord_final or coord_final == phase_result.get('phase'):
+            return phase_result
+
+        override_markers = ('[事件仲裁]', '[时序修正]', '[突破反噬]', '[Phase Transition]', '[前序趋势否决]', '[Phase11]')
+        has_marker_override = revision_log and any(
+            any(marker in log for marker in override_markers)
+            for log in revision_log
+        )
+        should_override = has_marker_override or coord_final != phase_result.get('phase')
+
+        if not should_override:
+            return phase_result
+
+        from .enums import WyckoffPhase
+        phase_result['phase'] = coord_final
+        phase_result['phase_source'] = 'coordinator' if has_marker_override else 'coordinator_reconcile'
+        if 'Phase E' in coord_final or 'Markup' in coord_final:
+            phase_result['phase_enum'] = WyckoffPhase.PHASE_E
+        elif 'Phase D' in coord_final:
+            phase_result['phase_enum'] = WyckoffPhase.PHASE_D
+        elif 'Phase C' in coord_final:
+            phase_result['phase_enum'] = WyckoffPhase.PHASE_C
+        elif 'Phase B' in coord_final:
+            phase_result['phase_enum'] = WyckoffPhase.PHASE_B
+        elif 'Phase A' in coord_final:
+            phase_result['phase_enum'] = WyckoffPhase.PHASE_A
+        elif 'Markdown' in coord_final or 'Trending Down' in coord_final:
+            phase_result['phase_enum'] = WyckoffPhase.UNKNOWN
         return phase_result
 
     # --- 私有辅助方法 ---
@@ -383,11 +425,20 @@ class WyckoffPatternDetector:
             joc_result=joc_result,
         )
 
-    def detect_lpsy(self, sow_result: Optional[Dict] = None, trading_range: Optional[Dict] = None) -> Dict:
+    def detect_lpsy(
+        self,
+        sow_result: Optional[Dict] = None,
+        trading_range: Optional[Dict] = None,
+        fti_result: Optional[Dict] = None,
+    ) -> Dict:
         """检测 LPSY (Last Point of Supply)"""
         if trading_range is None:
             trading_range = self.detect_trading_range()
-        return self.sw_detector.detect_lpsy(trading_range=trading_range)
+        return self.sw_detector.detect_lpsy(
+            trading_range=trading_range,
+            fti_result=fti_result,
+            sow_result=sow_result,
+        )
 
     # --- 孟洪涛增强检测方法 ---
 

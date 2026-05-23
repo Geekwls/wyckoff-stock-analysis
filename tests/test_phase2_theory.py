@@ -96,7 +96,7 @@ class TestPhaseDRequiresJoc(unittest.TestCase):
         idx = pd.Series({'Close': [45] * 80})
         ident = PhaseIdentifier(idx.to_frame(), WyckoffConfig(), WyckoffThresholds())
         events = self._make_events(joc=False, spring=True, sos=True)
-        phase, enum, conf = ident._determine_phase_from_events(events)
+        phase, enum, conf, _ = ident._determine_phase_from_events(events)
         self.assertIn('Phase C', phase)
         self.assertNotIn('Phase D', phase)
 
@@ -104,7 +104,7 @@ class TestPhaseDRequiresJoc(unittest.TestCase):
         idx = pd.Series({'Close': [45] * 80})
         ident = PhaseIdentifier(idx.to_frame(), WyckoffConfig(), WyckoffThresholds())
         events = self._make_events(joc=True, spring=True, sos=True)
-        phase, enum, conf = ident._determine_phase_from_events(events)
+        phase, enum, conf, _ = ident._determine_phase_from_events(events)
         self.assertIn('Phase D', phase)
         self.assertGreaterEqual(conf, 0.85)
 

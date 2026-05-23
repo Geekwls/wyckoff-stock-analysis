@@ -637,65 +637,9 @@ class WyckoffAnalyzer:
         return self.pattern_detector.detect_trading_range()
 
     def _get_baseline_index_symbol(self) -> Optional[str]:
-        """
-        获取基准指数代码
-        
-        A股市场分类：
-        - 上证主板：600/601/603/605开头 → sh.000001 (上证综指)
-        - 科创板：688开头 → sh.000688 (科创50) 或 sh.000001
-        - 深证主板：000/001/002/003开头 → sz.399001 (深证成指)
-        - 创业板：300/301开头 → sz.399006 (创业板指)
-        - 北交所：8/4开头 → bj.899050 (北证50)
-        
-        返回 None 如果当前标的本身就是指数（避免递归分析）
-        """
-        from .core.symbol_resolver import SymbolResolver, MarketType
-        info = SymbolResolver().resolve(self.symbol)
-        
-        # 指数代码白名单 (避免递归分析)
-        INDEX_SYMBOLS = {
-            'sh.000001', 'sh.000300', 'sh.000688', 'sh.000016',
-            'sz.399001', 'sz.399006', 'sz.399005', 'sz.399673',
-            'bj.899050',
-            '^HSI', '^GSPC', '^DJI', '^IXIC',  # 港股/美股指数
-            'BTC-USD', 'ETH-USD',  # 加密货币基准
-        }
-        
-        normalized = info.normalized if hasattr(info, 'normalized') else self.symbol
-        if normalized in INDEX_SYMBOLS or self.symbol in INDEX_SYMBOLS:
-            return None
-        
-        if info.market == MarketType.A_SHARE:
-            code = info.normalized.split('.')[-1]
-            prefix = info.normalized.split('.')[0]
-            
-            # 北交所：8或4开头（430/830/870等）
-            if code.startswith(('8', '4')) and prefix == 'BJ':
-                return "bj.899050"  # 北证50
-            
-            # 科创板：688/689开头
-            if code.startswith(('688', '689')):
-                return "sh.000688"  # 科创50
-            
-            # 创业板：300/301开头
-            if code.startswith(('300', '301')):
-                return "sz.399006"  # 创业板指
-            
-            # 上证主板：600/601/603/605开头
-            if code.startswith('6'):
-                return "sh.000001"  # 上证综指
-            
-            # 深证主板：000/001/002/003开头
-            return "sz.399001"  # 深证成指
-        
-        if info.market == MarketType.CRYPTO:
-            return "BTC-USD"
-            
-        if info.market == MarketType.HK_STOCK:
-            return "^HSI"  # 恒生指数
-            
-        # 美股及其他默认
-        return "SPY"
+        """获取基准指数代码；当前标的为指数时返回 None。"""
+        from .core.symbol_resolver import SymbolResolver
+        return SymbolResolver().resolve_benchmark_index(self.symbol)
 
     def _analyze_market_environment(self) -> Dict:
         """

@@ -80,7 +80,7 @@ class WyckoffReportGenerator:
         signal_type, direction = SignalExtractor.resolve_primary_signal(patterns)
 
         hourly_data = None
-        fetcher = getattr(self.analyzer, 'data_fetcher', None)
+        fetcher = getattr(getattr(self.analyzer, 'orchestrator', None), 'data_fetcher', None)
         if fetcher is not None:
             try:
                 _, hourly_data = fetcher.fetch_data(self.symbol, '1m', frequency='1h')

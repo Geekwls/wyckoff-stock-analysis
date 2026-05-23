@@ -113,6 +113,19 @@ class EventArbitrator:
             sow_signals = self._extract_sow_signals(sow)
             signals.extend(sow_signals)
 
+        # B6: Upthrust / JOC / FTI
+        upthrust = events.get('upthrust')
+        if upthrust and self._is_signal_detected(upthrust):
+            signals.extend(self._extract_upthrust_signals(upthrust))
+
+        joc = events.get('joc')
+        if joc and self._is_signal_detected(joc):
+            signals.extend(self._extract_joc_signals(joc))
+
+        fti = events.get('fti')
+        if fti and self._is_signal_detected(fti):
+            signals.extend(self._extract_fti_signals(fti))
+
         # 按日期排序（最新的在前）
         signals.sort(key=lambda x: self._parse_date(x.date), reverse=True)
 
@@ -153,32 +166,37 @@ class EventArbitrator:
         return signals
 
     def _extract_spring_signals(self, spring: SpringModel) -> List[ArbitrationSignal]:
-        """提取Spring信号"""
+        """提取Spring信号（B13: 去重 latest_spring 与 signals）"""
         signals = []
+        seen_dates = set()
 
-        # 如果有多个Spring信号，处理所有信号
         if hasattr(spring, 'signals') and spring.signals:
             for sig in spring.signals:
+                date_key = str(getattr(sig, 'date', None))
+                if date_key in seen_dates:
+                    continue
+                seen_dates.add(date_key)
                 signals.append(ArbitrationSignal(
                     signal_type='spring',
                     date=sig.date,
                     direction='bullish',
                     confidence=self._calculate_spring_confidence(sig),
-                    strength=sig.total_score,
+                    strength=getattr(sig, 'total_score', None) or getattr(sig, 'confidence', 0),
                     raw_data={'spring': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
                 ))
 
-        # 处理最新Spring
         if hasattr(spring, 'latest_spring') and spring.latest_spring:
             sig = spring.latest_spring
-            signals.append(ArbitrationSignal(
-                signal_type='spring',
-                date=sig.date,
-                direction='bullish',
-                confidence=self._calculate_spring_confidence(sig),
-                strength=sig.total_score,
-                raw_data={'spring': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
-            ))
+            date_key = str(getattr(sig, 'date', None))
+            if date_key not in seen_dates:
+                signals.append(ArbitrationSignal(
+                    signal_type='spring',
+                    date=sig.date,
+                    direction='bullish',
+                    confidence=self._calculate_spring_confidence(sig),
+                    strength=getattr(sig, 'total_score', None) or getattr(sig, 'confidence', 0),
+                    raw_data={'spring': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
+                ))
 
         return signals
 
@@ -220,8 +238,8 @@ class EventArbitrator:
             return SignalExtractor.normalize_confidence(raw, default)
         vol = self._get_signal_field(sig, 'volume_ratio')
         if vol is not None:
-            # 无量化 confidence 时，用 moderate 阈值 2.5x 作为满分参考回推 0–1
-            return min(float(vol) / 2.5, 1.0)
+            # 孟氏 SOS 阈值 1.5x；无量化 confidence 时用 1.5x 作为满分参考
+            return min(float(vol) / 1.5, 1.0)
         score = self._get_signal_field(sig, 'total_score')
         if score is not None:
             return SignalExtractor.normalize_confidence(score, default)
@@ -257,6 +275,55 @@ class EventArbitrator:
                 raw_data={'sow': self._dump_signal(sig)}
             ))
 
+        return signals
+
+    def _extract_upthrust_signals(self, upthrust: Any) -> List[ArbitrationSignal]:
+        """提取 Upthrust 信号"""
+        signals = []
+        seen_dates = set()
+        for sig in self._iter_signal_details(upthrust, latest_key='latest_upthrust'):
+            date_key = str(self._get_signal_field(sig, 'date'))
+            if date_key in seen_dates:
+                continue
+            seen_dates.add(date_key)
+            conf_raw = self._get_signal_field(sig, 'confidence', 50)
+            conf = conf_raw / 100.0 if conf_raw and conf_raw > 1 else (conf_raw or 0.5)
+            signals.append(ArbitrationSignal(
+                signal_type='upthrust',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bearish',
+                confidence=min(float(conf), 1.0),
+                strength=self._get_signal_field(sig, 'vol_ratio'),
+                raw_data={'upthrust': self._dump_signal(sig)}
+            ))
+        return signals
+
+    def _extract_joc_signals(self, joc: Any) -> List[ArbitrationSignal]:
+        """提取 JOC 信号"""
+        signals = []
+        for sig in self._iter_signal_details(joc, latest_key='latest'):
+            signals.append(ArbitrationSignal(
+                signal_type='joc',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bullish',
+                confidence=self._signal_confidence(sig, 0.75),
+                strength=self._get_signal_field(sig, 'volume_ratio'),
+                raw_data={'joc': self._dump_signal(sig)}
+            ))
+        return signals
+
+    def _extract_fti_signals(self, fti: Any) -> List[ArbitrationSignal]:
+        """提取 FTI 信号"""
+        signals = []
+        for sig in self._iter_signal_details(fti, latest_key='latest'):
+            signals.append(ArbitrationSignal(
+                signal_type='fti',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bearish',
+                confidence=self._signal_confidence(sig, 0.75),
+                strength=self._get_signal_field(sig, 'volume_ratio'),
+                raw_data={'fti': self._dump_signal(sig)}
+            ))
         return signals
 
     def _calculate_spring_confidence(self, spring_signal: Any) -> float:
@@ -395,6 +462,11 @@ class EventArbitrator:
         if spring_signals and lpsy_signals:
             return self._arbitrate_spring_lpsy(spring_signals[0], lpsy_signals[0], time_diff)
 
+        # === 规则1b: Spring vs Upthrust 特殊处理 ===
+        upthrust_signals = [s for s in signals if s.signal_type == 'upthrust']
+        if spring_signals and upthrust_signals:
+            return self._arbitrate_spring_upthrust(spring_signals[0], upthrust_signals[0], time_diff)
+
         # === 规则2: 时间优先规则 ===
         # 如果时间差超过30天，最新信号优先
         if time_diff > 30:
@@ -507,6 +579,31 @@ class EventArbitrator:
                 return spring, rejected, \
                     f"Spring出现在LPSY后{time_diff}天，市场可能重新进入吸筹", \
                     "Accumulation Phase C"
+
+    def _arbitrate_spring_upthrust(
+        self,
+        spring: ArbitrationSignal,
+        upthrust: ArbitrationSignal,
+        time_diff: int
+    ) -> Tuple[ArbitrationSignal, List[ArbitrationSignal], str, Optional[str]]:
+        """
+        Spring vs Upthrust 仲裁：同区间内的方向性测试冲突。
+        """
+        spring_date = self._parse_date(spring.date)
+        upthrust_date = self._parse_date(upthrust.date)
+
+        if not spring_date or not upthrust_date:
+            if upthrust.confidence > spring.confidence:
+                return upthrust, [spring], "Upthrust 置信度更高", "Distribution Phase C"
+            return spring, [upthrust], "Spring 置信度更高", "Accumulation Phase C"
+
+        if upthrust_date > spring_date:
+            if time_diff <= 7:
+                return spring, [upthrust], f"间隔{time_diff}天，Upthrust 可能是假信号，维持 Spring", "Accumulation Phase C（需观察）"
+            return upthrust, [spring], f"Upthrust 在 Spring 后 {time_diff} 天，供应可能主控", "Distribution Phase C"
+        if time_diff <= 7:
+            return upthrust, [spring], f"间隔{time_diff}天，Spring 可能是假信号，维持 Upthrust", "Distribution Phase C（需观察）"
+        return spring, [upthrust], f"Spring 在 Upthrust 后 {time_diff} 天，需求可能重新主导", "Accumulation Phase C"
 
     def _calculate_confidence_adjustment(
         self,

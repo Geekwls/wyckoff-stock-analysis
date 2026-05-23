@@ -104,8 +104,22 @@ class SymbolResolver:
                 is_st=is_st
             )
         
-        # 港股逻辑
+        # 港股逻辑 — hk.00700 / HK.00700
+        hk_prefix = re.match(r'^[Hh][Kk]\.(\d{1,5})$', symbol)
+        if hk_prefix:
+            code = str(int(hk_prefix.group(1))).zfill(4)
+            return SymbolInfo(
+                original=original,
+                normalized=f"{code}.HK",
+                market=MarketType.HK_STOCK,
+                source='yfinance',
+                is_st=is_st
+            )
+
         if symbol_upper.endswith('.HK'):
+            code_part = symbol_upper[:-3]
+            if code_part.isdigit():
+                symbol_upper = f"{code_part.zfill(4)}.HK"
             return SymbolInfo(
                 original=original,
                 normalized=symbol_upper,
@@ -179,3 +193,36 @@ class SymbolResolver:
                 json.dump(self._name_cache, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"更新代码缓存失败: {e}")
+
+    def resolve_benchmark_index(self, symbol: str) -> Optional[str]:
+        """返回用于大盘环境分析的基准指数代码；若输入本身为指数则返回 None。"""
+        info = self.resolve(symbol)
+        normalized = info.normalized
+        index_symbols = {
+            'sh.000001', 'sh.000300', 'sh.000688', 'sh.000016',
+            'sz.399001', 'sz.399006', 'sz.399005', 'sz.399673',
+            'bj.899050',
+            '^HSI', '^GSPC', '^DJI', '^IXIC',
+            'BTC-USD', 'ETH-USD',
+        }
+        if normalized in index_symbols or symbol in index_symbols:
+            return None
+
+        if info.market == MarketType.A_SHARE:
+            code = normalized.split('.')[-1]
+            prefix = normalized.split('.')[0]
+            if code.startswith(('8', '4')) and prefix == 'BJ':
+                return 'bj.899050'
+            if code.startswith(('688', '689')):
+                return 'sh.000688'
+            if code.startswith(('300', '301')):
+                return 'sz.399006'
+            if code.startswith('6'):
+                return 'sh.000001'
+            return 'sz.399001'
+
+        if info.market == MarketType.CRYPTO:
+            return 'BTC-USD'
+        if info.market == MarketType.HK_STOCK:
+            return '^HSI'
+        return 'SPY'

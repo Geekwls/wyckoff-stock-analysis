@@ -9,6 +9,7 @@ from .signal_extractor import SignalExtractor, set_cached_phase_result
 from ..config.settings import WyckoffConfig
 from ..exceptions import WyckoffError, DataError, CalculationError
 from .enums import MarketEnvironment
+from .cache_service import CacheService
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,11 @@ class WyckoffOrchestrator:
         self.config = config or WyckoffConfig()
         self.data_fetcher = WyckoffDataFetcher(self.config)
         self.rec_engine = RecommendationEngine(self.config)
+        self._analysis_cache = CacheService.get_instance().get_legacy_lru_adapter(
+            namespace="orchestrator_analysis",
+            max_size=256,
+            ttl_seconds=3600,
+        )
 
     def run_analysis(self, symbol: str, period: str = "1y") -> Dict[str, Any]:
         """
@@ -36,7 +42,7 @@ class WyckoffOrchestrator:
             weekly_data = None
             hourly_data = None
             try:
-                _, weekly_data = self.data_fetcher.fetch_data(symbol, period, frequency="1w")
+                _, weekly_data = self.data_fetcher.fetch_data(symbol, period, frequency="1wk")
             except Exception as e:
                 logger.info(f"无法获取周线数据，将尝试日线重采样: {e}")
             try:
@@ -51,7 +57,12 @@ class WyckoffOrchestrator:
             )
 
             patterns, detector = self._detect_patterns_and_phase(data)
+            patterns['symbol'] = resolved_symbol
             market_env = self._analyze_market_env(resolved_symbol, period)
+            if isinstance(market_env, dict):
+                patterns['market_env'] = market_env.get('environment', MarketEnvironment.UNKNOWN)
+            else:
+                patterns['market_env'] = market_env
 
             quality, trading_plan, risk_advice, resonance_result = self._generate_recommendations(
                 data, patterns, market_env, detector, mtf_coordinator
@@ -75,7 +86,7 @@ class WyckoffOrchestrator:
         return resolved_symbol, data
 
     def _detect_patterns_and_phase(self, data: pd.DataFrame) -> tuple:
-        detector = WyckoffPatternDetector(data, self.config, analysis_cache=None)
+        detector = WyckoffPatternDetector(data, self.config, self._analysis_cache)
 
         phase_info = detector.identify_phase()
         set_cached_phase_result(detector, phase_info)
@@ -145,7 +156,20 @@ class WyckoffOrchestrator:
         return res
 
     def _analyze_market_env(self, symbol: str, period: str) -> Any:
-        return MarketEnvironment.UNKNOWN
+        try:
+            from .market_context_analyzer import MarketContextAnalyzer
+            from .symbol_resolver import SymbolResolver
+
+            index_symbol = SymbolResolver().resolve_benchmark_index(symbol)
+            if not index_symbol:
+                return MarketEnvironment.UNKNOWN
+
+            _, index_data = self.data_fetcher.fetch_data(index_symbol, period)
+            context = MarketContextAnalyzer(index_data, index_symbol).analyze()
+            return context.get('environment', MarketEnvironment.UNKNOWN)
+        except Exception as e:
+            logger.info(f"市场环境分析失败 ({symbol}): {e}")
+            return MarketEnvironment.UNKNOWN
 
     def _calculate_targets(
         self,

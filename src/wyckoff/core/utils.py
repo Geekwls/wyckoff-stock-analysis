@@ -67,6 +67,50 @@ class PhaseAdapter:
         return MarketSide.NEUTRAL.value
 
 
+def normalize_choch_direction(direction: Any) -> Optional[str]:
+    """将 CHoCH direction 统一为 bullish / bearish（兼容 up/down 等别名）。"""
+    if direction is None:
+        return None
+    d = str(direction).lower()
+    if d in ('up', 'bullish', 'long'):
+        return 'bullish'
+    if d in ('down', 'bearish', 'short'):
+        return 'bearish'
+    return None
+
+
+def is_bullish_choch(direction: Any) -> bool:
+    return normalize_choch_direction(direction) == 'bullish'
+
+
+def is_bearish_choch(direction: Any) -> bool:
+    return normalize_choch_direction(direction) == 'bearish'
+
+
+def continuous_price_confirmation(
+    df: pd.DataFrame,
+    days: int,
+    phase_label: str = '',
+) -> bool:
+    """阶段感知的连续价格确认（D→E：吸筹需连涨、派发需连跌）。"""
+    if df is None or len(df) < days + 1:
+        return False
+    try:
+        tail = df.tail(days + 1)
+        changes = tail['Close'].pct_change().dropna()
+        if len(changes) == 0:
+            return False
+        positive_ratio = (changes > 0).sum() / len(changes)
+        negative_ratio = (changes < 0).sum() / len(changes)
+        if PhaseAdapter.is_accumulation(phase_label) or PhaseAdapter.is_markup(phase_label):
+            return positive_ratio >= 0.8 and negative_ratio <= 0.25
+        if PhaseAdapter.is_distribution(phase_label) or PhaseAdapter.is_markdown(phase_label):
+            return negative_ratio >= 0.8 and positive_ratio <= 0.25
+        return positive_ratio >= 0.8 or negative_ratio >= 0.8
+    except Exception:
+        return False
+
+
 class TypeConverter:
     """
     统一的类型转换工具类
