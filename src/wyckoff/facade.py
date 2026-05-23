@@ -593,7 +593,12 @@ class WyckoffAnalyzer:
             rs_data = self.rs_analyzer.calculate_rs(idx_analyzer.data)
             result['relative_strength'] = rs_data
         else:
-            result['relative_strength'] = {'rs_trend': 'unknown', 'rs_value': None}
+            result['relative_strength'] = {
+                'rs_trend': 'unknown',
+                'rs_value': None,
+                'relative_strength_bypass': True,
+                'rs_anomaly_warning': '⚠️ 相对强度 (RS) 分析已失效，因大盘基准数据对照组缺失，主力锁仓留存率已退回至中性，请检查网络或提供指数对照数据。'
+            }
 
         return result
 

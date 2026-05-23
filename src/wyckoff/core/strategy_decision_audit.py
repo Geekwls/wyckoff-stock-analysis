@@ -48,6 +48,9 @@ class StrategyDecisionAuditLog:
         direction_after: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
     ) -> None:
+        if self._started_at is None:
+            self.begin()
+
         self._entries.append({
             'rule_id': rule_id,
             'category': category.value,

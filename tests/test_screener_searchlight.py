@@ -15,14 +15,14 @@ class _MockBearishMarketState:
     def to_dict(self):
         return {
             'state_probs': {
-                'S0: Panic Supply Dominance': 0.62,
-                'S3: Absorption': 0.15,
+                'S0: Panic Liquidation (恐慌出清)': 0.62,
+                'S1: Absorption (主力高密持续吸收)': 0.15,
             },
             'aps': 2.0,
             'is_confidence_degraded': False,
             'hidden_weakness': False,
             'hidden_strength': False,
-            'regime': 'S0: Panic Supply Dominance',
+            'regime': 'S0: Panic Liquidation (恐慌出清)',
         }
 
 

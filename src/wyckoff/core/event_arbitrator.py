@@ -229,15 +229,20 @@ class EventArbitrator:
     def _extract_lpsy_signals(self, lpsy: LpsyModel) -> List[ArbitrationSignal]:
         """提取LPSY信号"""
         signals = []
+        seen_dates = set()
 
         # 处理所有LPSY信号
         if hasattr(lpsy, 'signals') and lpsy.signals:
             for sig in lpsy.signals:
+                date_key = str(getattr(sig, 'date', None))
+                if date_key in seen_dates:
+                    continue
+                seen_dates.add(date_key)
                 signals.append(ArbitrationSignal(
                     signal_type='lpsy',
                     date=sig.date,
                     direction='bearish',
-                    confidence=min(sig.volume_ratio / 2.0, 1.0),  # 基于量比估算置信度
+                    confidence=self._signal_confidence(sig, 0.7),
                     strength=sig.volume_ratio,
                     raw_data={'lpsy': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
                 ))
@@ -245,14 +250,16 @@ class EventArbitrator:
         # 处理最新LPSY
         if hasattr(lpsy, 'latest') and lpsy.latest:
             sig = lpsy.latest
-            signals.append(ArbitrationSignal(
-                signal_type='lpsy',
-                date=sig.date,
-                direction='bearish',
-                confidence=min(sig.volume_ratio / 2.0, 1.0),
-                strength=sig.volume_ratio,
-                raw_data={'lpsy': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
-            ))
+            date_key = str(getattr(sig, 'date', None))
+            if date_key not in seen_dates:
+                signals.append(ArbitrationSignal(
+                    signal_type='lpsy',
+                    date=sig.date,
+                    direction='bearish',
+                    confidence=self._signal_confidence(sig, 0.7),
+                    strength=sig.volume_ratio,
+                    raw_data={'lpsy': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
+                ))
 
         return signals
 

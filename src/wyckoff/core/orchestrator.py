@@ -64,8 +64,9 @@ class WyckoffOrchestrator:
             )
 
             patterns, detector = self._detect_patterns_and_phase(data)
-            patterns = self._enrich_patterns_with_rs(resolved_symbol, period, data, patterns)
-            patterns = self._enrich_patterns_with_searchlight(resolved_symbol, period, data, patterns)
+            benchmark_df = self._fetch_benchmark_data(resolved_symbol, period)
+            patterns = self._enrich_patterns_with_rs(resolved_symbol, period, data, patterns, benchmark_df)
+            patterns = self._enrich_patterns_with_searchlight(resolved_symbol, period, data, patterns, benchmark_df)
             patterns['symbol'] = resolved_symbol
             market_env = self._analyze_market_env(resolved_symbol, period)
             if isinstance(market_env, dict):
@@ -114,21 +115,23 @@ class WyckoffOrchestrator:
         period: str,
         data: pd.DataFrame,
         patterns: Dict[str, Any],
+        benchmark_df: Optional[pd.DataFrame] = None,
     ) -> Dict[str, Any]:
         """Phase 25：为 orchestrator 分析链附加相对强度（威科夫第二步）。"""
         if patterns.get('relative_strength'):
             return patterns
         try:
-            from .symbol_resolver import SymbolResolver
             from .relative_strength_analyzer import RelativeStrengthAnalyzer
-
-            index_symbol = SymbolResolver().resolve_benchmark_index(symbol)
-            if not index_symbol:
-                return patterns
-            _, index_df = self.data_fetcher.fetch_data(index_symbol, period)
+            if benchmark_df is None:
+                from .symbol_resolver import SymbolResolver
+                index_symbol = SymbolResolver().resolve_benchmark_index(symbol)
+                if not index_symbol:
+                    return patterns
+                _, benchmark_df = self.data_fetcher.fetch_data(index_symbol, period)
+            
             patterns['relative_strength'] = RelativeStrengthAnalyzer(
                 data, symbol
-            ).calculate_rs(index_df)
+            ).calculate_rs(benchmark_df)
         except Exception as exc:
             logger.debug(f"RS enrichment skipped for {symbol}: {exc}")
         return patterns
@@ -139,16 +142,18 @@ class WyckoffOrchestrator:
         period: str,
         data: pd.DataFrame,
         patterns: Dict[str, Any],
+        index_df: Optional[pd.DataFrame] = None,
     ) -> Dict[str, Any]:
         """Attach Searchlight/WIE arbitration to the orchestrator decision path."""
-        index_df = self._fetch_benchmark_data(symbol, period)
+        if index_df is None:
+            index_df = self._fetch_benchmark_data(symbol, period)
         return enrich_patterns_with_searchlight(
             patterns,
             data,
             self._wie3_service,
             self.thresholds,
             index_df=index_df,
-            resolve_index_df=lambda: self._fetch_benchmark_data(symbol, period),
+            resolve_index_df=lambda: index_df if index_df is not None else self._fetch_benchmark_data(symbol, period),
         )
 
     def _fetch_benchmark_data(self, symbol: str, period: str) -> Optional[pd.DataFrame]:
@@ -205,7 +210,7 @@ class WyckoffOrchestrator:
 
         quality = self.rec_engine.calculate_signal_quality(data, patterns, market_env)
         targets = self._calculate_targets(detector, patterns)
-        trading_plan = self.rec_engine.generate_trading_plan(data, patterns, targets)
+        trading_plan = self.rec_engine.generate_trading_plan(data, patterns, targets, precomputed_score=quality.score)
         risk_advice = self.rec_engine.generate_risk_advice(
             quality, trading_plan,
             has_conflict=has_conflict,

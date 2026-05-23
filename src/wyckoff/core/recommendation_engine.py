@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from .enums import MarketEnvironment, MarketSide, WyckoffPhase
 from .utils import PhaseAdapter
 from .signal_extractor import SignalExtractor
@@ -115,7 +115,7 @@ class RecommendationEngine:
             'waiting_since': None,
         }
 
-    def _calculate_patience_score(self, detected_keys: List[str], base_score: float, market_env: MarketEnvironment, audit_log: Optional[StrategyDecisionAuditLog] = None) -> tuple:
+    def _calculate_patience_score(self, detected_keys: Set[str], base_score: float, market_env: MarketEnvironment, audit_log: Optional[StrategyDecisionAuditLog] = None) -> tuple:
         """
         计算耐心评分（孟洪涛70%等待原则）
 
@@ -501,16 +501,26 @@ class RecommendationEngine:
                         pass
 
                 if isinstance(sig_date, datetime):
-                    from datetime import timezone
-                    now = datetime.now(timezone.utc) if sig_date.tzinfo else datetime.now()
-                    try:
-                        days_ago = (now - sig_date).days
-                    except Exception:
-                        if sig_date.tzinfo:
-                            sig_date = sig_date.replace(tzinfo=None)
-                        now = datetime.now()
-                        days_ago = (now - sig_date).days
+                    reference_date = getattr(data, 'index', None)
+                    if reference_date is not None and len(reference_date) > 0:
+                        ref_date = reference_date[-1]
+                        import pandas as pd
+                        if isinstance(ref_date, pd.Timestamp):
+                            ref_date = ref_date.to_pydatetime()
+                    else:
+                        ref_date = None
+                        
+                    if not isinstance(ref_date, datetime):
+                        from datetime import timezone
+                        ref_date = datetime.now(timezone.utc) if getattr(sig_date, 'tzinfo', None) else datetime.now()
+                    
+                    if getattr(ref_date, 'tzinfo', None) and not getattr(sig_date, 'tzinfo', None):
+                        from datetime import timezone
+                        sig_date = sig_date.replace(tzinfo=timezone.utc)
+                    elif not getattr(ref_date, 'tzinfo', None) and getattr(sig_date, 'tzinfo', None):
+                        sig_date = sig_date.replace(tzinfo=None)
 
+                    days_ago = (ref_date - sig_date).days
                     decay = np.exp(-0.693 * max(0, days_ago) / self.thresholds.TIME_DECAY_HALF_LIFE)
                     quality_factor *= decay
                     if decay < 0.7:
@@ -580,7 +590,7 @@ class RecommendationEngine:
             reasons.append(f"检测到「枯燥区」(得分:{boring_score})，主力可能正在吸筹")
 
             # Boring Zone 联动加权 (P2 #3.1)
-            if boring_score > 85:
+            if boring_score > self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD:
                 for key in ['spring', 'joc']:
                     info = RecommendationEngine._get_attr(events, key, None)
                     if info and self._get_attr(info, 'detected'):
@@ -777,13 +787,13 @@ class RecommendationEngine:
             if missing_signals:
                 reasons.append(f"虽有完整{seq_rating}级序列结构，但缺少核心交易信号：{', '.join(missing_signals)}。当前处于{phase_str}，信号尚未成熟，建议等待关键确认出现。")
 
-        if self._get_attr(boring, 'score', 0) >= 85 and final_score < 85:
+        if self._get_attr(boring, 'score', 0) >= self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD and final_score < self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD:
             phase_str_floor = self._effective_phase_str(pattern_results)
             fti_for_gate = RecommendationEngine._get_attr(events, 'fti') or {}
             if PhaseAdapter.is_distribution(phase_str_floor):
                 if self._event_detected_static(fti_for_gate):
-                    final_score = 85
-                    reasons.append("派发侧枯燥区 + FTI 确认，综合评分托底至 85")
+                    final_score = self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD
+                    reasons.append(f"派发侧枯燥区 + FTI 确认，综合评分托底至 {self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD}")
                 else:
                     reasons.append("枯燥区高能预警但缺 FTI 冰层确认，评分不上调（派发对称门控）")
             elif PhaseAdapter.is_accumulation(phase_str_floor) or PhaseAdapter.is_markup(phase_str_floor):
@@ -791,17 +801,17 @@ class RecommendationEngine:
                     self._event_detected_static(joc_for_gate)
                     or self._dead_corner_actionable(dead_corner, joc_for_gate)
                 ):
-                    final_score = 85
-                    reasons.append("吸筹侧枯燥区高能预警 + JOC 确认，综合评分托底至 85")
+                    final_score = self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD
+                    reasons.append(f"吸筹侧枯燥区高能预警 + JOC 确认，综合评分托底至 {self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD}")
                 else:
                     reasons.append("枯燥区高能预警但缺 JOC 小溪确认，评分不上调")
             else:
-                final_score = 85
-                reasons.append("触发高能预警阈值，综合评分上调至 85 (死角突破临界)")
+                final_score = self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD
+                reasons.append(f"触发高能预警阈值，综合评分上调至 {self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD} (死角突破临界)")
 
-        if self._dead_corner_actionable(dead_corner, joc_for_gate) and final_score < 85:
-            final_score = 85
-            reasons.append("🎯 死角突破 + JOC 确认，综合评分托底至 85")
+        if self._dead_corner_actionable(dead_corner, joc_for_gate) and final_score < self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD:
+            final_score = self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD
+            reasons.append(f"🎯 死角突破 + JOC 确认，综合评分托底至 {self.thresholds.BORING_ZONE_HIGH_QUALITY_THRESHOLD}")
 
         # Phase 24：相对强度 / 跨周期冲突评分上限（威科夫第二、三步）
         if isinstance(pattern_results, dict):
@@ -964,7 +974,7 @@ class RecommendationEngine:
             count += 1
         return count
 
-    def generate_trading_plan(self, data: Any, pattern_results: Dict[str, Any], targets: Dict[str, Any]) -> TradingPlanModel:
+    def generate_trading_plan(self, data: Any, pattern_results: Dict[str, Any], targets: Dict[str, Any], *, precomputed_score: Optional[int] = None) -> TradingPlanModel:
         """
         生成具体交易计划 (威科夫结构导向止损 + Phase风险导向仓位)
 
@@ -1244,14 +1254,18 @@ class RecommendationEngine:
                 normal_position_pct = ps_config.normal_position_pct
 
         # 计算信号质量得分以与仓位进行动态联动
-        market_env = MarketEnvironment.RANGE_BOUND
-        if isinstance(pattern_results, dict) and 'market_env' in pattern_results:
-            market_env = pattern_results['market_env']
-        elif hasattr(pattern_results, 'market_env'):
-            market_env = getattr(pattern_results, 'market_env')
-        
-        signal_quality = self.calculate_signal_quality(data, pattern_results, market_env, audit=False)
-        final_score = signal_quality.score
+        if precomputed_score is not None:
+            final_score = precomputed_score
+        else:
+            market_env = MarketEnvironment.RANGE_BOUND
+            if isinstance(pattern_results, dict) and 'market_env' in pattern_results:
+                market_env = pattern_results['market_env']
+            elif hasattr(pattern_results, 'market_env'):
+                market_env = getattr(pattern_results, 'market_env')
+            
+            signal_quality = self.calculate_signal_quality(data, pattern_results, market_env, audit=False)
+            final_score = signal_quality.score
+            
         quality_score = float(final_score) / 100.0
         
         # 动态加权基准常规仓位百分比
@@ -1499,6 +1513,15 @@ class RecommendationEngine:
                         stage='trading_plan',
                         direction=direction,
                     )
+        
+        target_1 = targets.get('target_1', 0)
+        target_2 = targets.get('target_2', 0)
+        if target_1 or target_2:
+            _audit_watch(
+                'plan.pnf_targets_applied',
+                f"融合 Point & Figure 目标位: T1={target_1}, T2={target_2}",
+                context={'target_1': target_1, 'target_2': target_2}
+            )
 
         return TradingPlanModel(
             direction=direction,

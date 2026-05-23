@@ -215,11 +215,25 @@ class PhaseCoordinator:
         ps_res = self.detector.detect_preliminary_support()
         psy_res = self.detector.detect_preliminary_supply()
 
-        # B4: 结构价位锚定（SC/BC）后再检测 Spring/Upthrust
+        # P1 修复：存储完整Phase A事件(PS→SC/BC→AR→ST)到detector
+        phase_a_events = {
+            'ps': ps_res,
+            'psy': psy_res,
+            'climax': climax_res,
+            'ar': ar_res,
+            'st': st_res
+        }
+        # 设置到所有子detector中，供后续 Spring/Upthrust 等依赖 Phase A 结构的检测使用
+        for detector in self.detector.all_detectors:
+            if hasattr(detector, 'set_phase_a_events'):
+                detector.set_phase_a_events(phase_a_events)
+
+        # 第一次调用：注入初步结构价位供事件检测使用
         self._apply_structural_levels(climax_res, ar_res)
 
         spring_res = self.detector.detect_spring_menhongtao()
         upthrust_res = self.detector.detect_upthrust()
+        utad_res = self.detector.detect_utad()
 
         boring_zone_res = self.detector.detect_boring_zone()
         vsa_meng_res = self.detector.detect_vsa_menhongtao()
@@ -229,31 +243,16 @@ class PhaseCoordinator:
         spring_res = _normalize_spring_event(spring_res)
         upthrust_res = _normalize_upthrust_event(upthrust_res) if upthrust_res.get('detected') else upthrust_res
 
-        # P1 修复：存储完整Phase A事件(PS→SC/BC→AR→ST)到detector
-        phase_a_events = {
-            'ps': ps_res,
-            'psy': psy_res,
-            'climax': climax_res,
-            'ar': ar_res,
-            'st': st_res
-        }
-        # 设置到所有子detector中
-        for detector in self.detector.all_detectors:
-            if hasattr(detector, 'set_phase_a_events'):
-                detector.set_phase_a_events(phase_a_events)
-
         # 2. 初步阶段识别
         preliminary_phase = self._preliminary_phase_identification(
-            climax_res, ar_res, st_res, spring_res, upthrust_res, ps_res, psy_res, choch_res
+            climax_res, ar_res, st_res, spring_res, upthrust_res, ps_res, psy_res, choch_res, utad_res
         )
         gating_phase = preliminary_phase
 
         # 3. 用威科夫事件边界更新交易区间检测器
-        # UTAD检测需要移到这里，以便在更新TR边界时使用
-        utad_res = self.detector.detect_utad()
-
         self._update_trading_range_from_events(climax_res, ar_res, preliminary_phase, utad_res)
         tr_res = self.detector.detect_trading_range()
+        # 第二次调用：基于识别出的 TR 再次修正结构价位
         self._apply_structural_levels(climax_res, ar_res, tr_res)
 
         # 统一更新子检测器的分析上下文
@@ -543,8 +542,9 @@ class PhaseCoordinator:
     def _apply_boring_joc_gate(boring_res: Dict, joc_res: Dict, phase: str) -> Dict:
         """Phase 28：吸筹侧枯燥区高能预警须 JOC 确认，否则降级 high_alert。"""
         from .utils import PhaseAdapter
+        from ..config.settings import WyckoffThresholds
 
-        if not isinstance(boring_res, dict) or boring_res.get('score', 0) < 85:
+        if not isinstance(boring_res, dict) or boring_res.get('score', 0) < WyckoffThresholds().BORING_ZONE_HIGH_QUALITY_THRESHOLD:
             return boring_res
         if not (PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase)):
             return boring_res
@@ -560,8 +560,9 @@ class PhaseCoordinator:
     def _apply_boring_fti_gate(boring_res: Dict, fti_res: Dict, phase: str) -> Dict:
         """Phase 28：派发侧枯燥区高能预警须 FTI 确认（与 JOC 门控对称）。"""
         from .utils import PhaseAdapter
+        from ..config.settings import WyckoffThresholds
 
-        if not isinstance(boring_res, dict) or boring_res.get('score', 0) < 85:
+        if not isinstance(boring_res, dict) or boring_res.get('score', 0) < WyckoffThresholds().BORING_ZONE_HIGH_QUALITY_THRESHOLD:
             return boring_res
         if not PhaseAdapter.is_distribution(phase):
             return boring_res
@@ -752,7 +753,8 @@ class PhaseCoordinator:
         upthrust_res: Dict,
         ps_res: Optional[Dict] = None,
         psy_res: Optional[Dict] = None,
-        choch_res: Optional[Dict] = None
+        choch_res: Optional[Dict] = None,
+        utad_res: Optional[Dict] = None
     ) -> str:
         """
         初步阶段识别：基于已收集的事件进行初步判断
@@ -848,11 +850,8 @@ class PhaseCoordinator:
         if upthrust_res.get('detected'):
             latest_ut = upthrust_res.get('latest_upthrust')
             is_utad = False
-            try:
-                utad_check = self.detector.detect_utad()
-                is_utad = utad_check.get('detected', False)
-            except Exception:
-                pass
+            if utad_res:
+                is_utad = utad_res.get('detected', False)
 
             is_valid_ut = False
             if latest_ut:
@@ -1121,7 +1120,7 @@ class PhaseCoordinator:
         from .utils import PhaseAdapter
         return PhaseAdapter.is_phase_a_structure_complete(events)
 
-    def _calculate_consolidation_duration(self, events: 'EventsModel') -> int:
+    def _calculate_consolidation_duration(self, events: 'EventsModel', trading_range: Optional[Dict] = None) -> int:
         """计算震荡持续时间（从 ST 完成后开始计数）
 
         威科夫理论：震荡期应从 Phase A 结构完成后（SC/BC → AR → ST 序列结束）
@@ -1131,13 +1130,13 @@ class PhaseCoordinator:
         try:
             if hasattr(self.detector, 'data') and self.detector.data is not None:
                 df = self.detector.data
+                tr = trading_range or self.detector.detect_trading_range()
 
                 # 优先从 ST 日期开始计算
                 st = getattr(events, 'secondary_test', None)
                 st_date = getattr(st, 'date', None) if getattr(st, 'detected', False) else None
                 if st_date is not None:
                     df_after_st = df[df.index >= pd.Timestamp(st_date)]
-                    tr = self.detector.detect_trading_range()
                     if tr and 'low' in tr and 'high' in tr:
                         in_tr = df_after_st[
                             (df_after_st['Close'] >= tr['low']) &
@@ -1152,7 +1151,6 @@ class PhaseCoordinator:
                 ar_date = getattr(ar, 'date', None) if getattr(ar, 'detected', False) else None
                 if ar_date is not None:
                     df_after_ar = df[df.index >= pd.Timestamp(ar_date)]
-                    tr = self.detector.detect_trading_range()
                     if tr and 'low' in tr and 'high' in tr:
                         in_tr = df_after_ar[
                             (df_after_ar['Close'] >= tr['low']) &
@@ -1163,7 +1161,6 @@ class PhaseCoordinator:
                             return days
 
                 # 兜底：全区间计数
-                tr = self.detector.detect_trading_range()
                 if tr and 'low' in tr and 'high' in tr:
                     in_tr = df[
                         (df['Close'] >= tr['low']) &
@@ -1430,12 +1427,14 @@ class PhaseCoordinator:
                             break
                 
                 has_choch_up = False
-                choch_dict = self.detector.detect_choch()
+                choch_dict = {}
+                if getattr(events, 'choch', None):
+                    choch_dict = {'detected': getattr(events.choch, 'detected', False), 'direction': getattr(events.choch, 'direction', 'unknown')}
                 from .utils import is_bullish_choch
                 if choch_dict.get('detected') and is_bullish_choch(choch_dict.get('direction')):
                     has_choch_up = True
                 
-                if not has_confirmed_spring and not has_choch_up:
+                if 'Phase A' not in preliminary_phase and not has_confirmed_spring and not has_choch_up:
                     new_phase = self._replace_phase_type(preliminary_phase, 'Distribution (Re-distribution)')
                     revision_logs.append(
                         f"[前序趋势否决] 当前前序趋势为 markdown（下跌趋势），且缺乏已确认的 Spring 或 Choch Up 强确认，"

@@ -317,7 +317,7 @@ class TestSearchlightArbitrator(unittest.TestCase):
         result = build_searchlight_arbitration(
             'Accumulation Phase D',
             {
-                'state_probs': {'S0: Panic Supply Dominance': 0.62},
+                'state_probs': {'S0: Panic Liquidation (恐慌出清)': 0.62},
                 'aps': 2.0,
                 'hidden_weakness': False,
             },
@@ -330,14 +330,14 @@ class TestSearchlightArbitrator(unittest.TestCase):
             'Accumulation Phase D',
             {
                 'state_probs': {
-                    'S0: Panic Supply Dominance': 0.62,
-                    'S3: Absorption': 0.15,
+                    'S0: Panic Liquidation (恐慌出清)': 0.62,
+                    'S1: Absorption (主力高密持续吸收)': 0.15,
                 },
                 'aps': 2.0,
                 'is_confidence_degraded': False,
                 'hidden_weakness': False,
                 'hidden_strength': False,
-                'regime': 'S0: Panic Supply Dominance',
+                'regime': 'S0: Panic Liquidation (恐慌出清)',
             },
         )
 
@@ -350,14 +350,14 @@ class TestSearchlightArbitrator(unittest.TestCase):
             def to_dict(self):
                 return {
                     'state_probs': {
-                        'S0: Panic Supply Dominance': 0.62,
-                        'S3: Absorption': 0.15,
+                        'S0: Panic Liquidation (恐慌出清)': 0.62,
+                        'S1: Absorption (主力高密持续吸收)': 0.15,
                     },
                     'aps': 2.0,
                     'is_confidence_degraded': False,
                     'hidden_weakness': False,
                     'hidden_strength': False,
-                    'regime': 'S0: Panic Supply Dominance',
+                    'regime': 'S0: Panic Liquidation (恐慌出清)',
                 }
 
         wie3 = WIE3MarketStateService()
@@ -388,14 +388,14 @@ class TestSearchlightArbitrator(unittest.TestCase):
             def to_dict(self):
                 return {
                     'state_probs': {
-                        'S0: Panic Supply Dominance': 0.62,
-                        'S3: Absorption': 0.15,
+                        'S0: Panic Liquidation (恐慌出清)': 0.62,
+                        'S1: Absorption (主力高密持续吸收)': 0.15,
                     },
                     'aps': 2.0,
                     'is_confidence_degraded': False,
                     'hidden_weakness': False,
                     'hidden_strength': False,
-                    'regime': 'S0: Panic Supply Dominance',
+                    'regime': 'S0: Panic Liquidation (恐慌出清)',
                 }
 
         orch = WyckoffOrchestrator()

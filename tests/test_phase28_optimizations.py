@@ -15,14 +15,14 @@ class _MockBullishMicroState:
     def to_dict(self):
         return {
             'state_probs': {
-                'S3: Absorption': 0.55,
-                'S4: Demand Emergence': 0.25,
+                'S1: Absorption (主力高密持续吸收)': 0.55,
+                'S3: Demand Emergence (需求萌芽/起跳突破)': 0.25,
             },
             'aps': 8.0,
             'is_confidence_degraded': False,
             'hidden_weakness': False,
             'hidden_strength': True,
-            'regime': 'S3: Absorption',
+            'regime': 'S1: Absorption (主力高密持续吸收)',
         }
 
 
@@ -30,14 +30,14 @@ class _MockBearishMicroState:
     def to_dict(self):
         return {
             'state_probs': {
-                'S0: Panic Supply Dominance': 0.62,
-                'S5: Distribution': 0.18,
+                'S0: Panic Liquidation (恐慌出清)': 0.62,
+                'S5: Distribution (高位派发)': 0.18,
             },
             'aps': 2.0,
             'is_confidence_degraded': False,
             'hidden_weakness': True,
             'hidden_strength': False,
-            'regime': 'S0: Panic Supply Dominance',
+            'regime': 'S0: Panic Liquidation (恐慌出清)',
         }
 
 

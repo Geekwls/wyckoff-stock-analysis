@@ -211,7 +211,7 @@ class SignalExtractor:
         }
 
     @staticmethod
-    def calculate_weighted_score(phase_result: Dict[str, Any], thresholds: WyckoffThresholds = None) -> float:
+    def calculate_weighted_score(phase_result: Dict[str, Any], thresholds: WyckoffThresholds = None, reference_date: Optional[datetime] = None) -> float:
         """
         计算加权信号强度得分 (0-100)
         包含：信号质量分、时间衰减、多空冲突惩罚
@@ -311,7 +311,14 @@ class SignalExtractor:
                         latest_date = sig_date
 
                     # 时间衰减因子
-                    days_ago = (datetime.now() - sig_date).days
+                    ref_date = reference_date or datetime.now()
+                    if ref_date.tzinfo and not sig_date.tzinfo:
+                        from datetime import timezone
+                        sig_date = sig_date.replace(tzinfo=timezone.utc)
+                    elif not ref_date.tzinfo and sig_date.tzinfo:
+                        sig_date = sig_date.replace(tzinfo=None)
+                    
+                    days_ago = (ref_date - sig_date).days
                     decay = np.exp(-0.693 * max(0, days_ago) / thresholds.TIME_DECAY_HALF_LIFE)
                     quality_factor *= decay
 

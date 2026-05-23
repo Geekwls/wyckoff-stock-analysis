@@ -29,7 +29,7 @@ class IntradayVSAService:
                 'note': '小时线数据不足',
             }
 
-        window = min(self.vol_window, max(len(df_hourly), self.spread_window))
+        window = min(self.vol_window, len(df_hourly))
         analyzer = VSAAnalyzer(spread_window=min(self.spread_window, window), vol_percentile_window=window)
         out = analyzer.analyze(df_hourly.tail(max(window, 24)).copy())
         if out.empty:

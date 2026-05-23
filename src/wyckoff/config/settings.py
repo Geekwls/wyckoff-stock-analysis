@@ -78,6 +78,9 @@ class WyckoffThresholds(BaseModel):
     # ── AR (Automatic Rally/Reaction) 立即反弹参数 ────────────
     AR_MIN_REBOUND_PCT: Annotated[float, Field(description="AR 立即反弹/回落判定最低百分比阈值")] = 3.0
 
+    # ── 无聊区阈值 ──────────────────────────────────────────
+    BORING_ZONE_HIGH_QUALITY_THRESHOLD: Annotated[int, Field(description="高质量的无聊区评分阈值")] = 85
+
     # ── FTI (Fall Through the Ice / 跌破冰层) 参数 ────────────
     FTI_ICE_QUANTILE: Annotated[float, Field(description="近期区间低点分位数（冰层支撑）")] = 0.15
     FTI_BODY_RATIO: Annotated[float, Field(description="跌破日实体占波幅最小比例")] = 0.55

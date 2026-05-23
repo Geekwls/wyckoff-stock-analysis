@@ -120,10 +120,11 @@ class WyckoffReportGenerator:
         return mtf
 
     def _targets_from_cause_effect(self, cause_effect: Dict[str, Any]) -> Dict[str, Any]:
-        pnf_targets = (cause_effect or {}).get('targets') or {}
+        cause_effect = cause_effect or {}
+        # orchestrator already flattened PnF targets into the cause_effect dictionary
         return {
-            'target_1': pnf_targets.get('target_1', 0) or 0,
-            'target_2': pnf_targets.get('target_2', 0) or 0,
+            'target_1': cause_effect.get('target_1', 0) or 0,
+            'target_2': cause_effect.get('target_2', 0) or 0,
         }
 
     def _resolve_mtf_signal_conflict(self, patterns_payload: Dict[str, Any], mtf: Dict[str, Any]) -> tuple:
@@ -260,6 +261,11 @@ class WyckoffReportGenerator:
         strategy_decision_audit = decision['strategy_decision_audit']
 
         report = self.header_builder.build(phase_result, trading_range)
+        
+        last_result = getattr(self.analyzer, 'wie3_last_result', None)
+        if last_result and getattr(last_result, 'rs_bypass_warning', False):
+            report += "\n> [!WARNING]\n> **相对强度 (RS) 分析已失效，因大盘基准数据对照组缺失，主力锁仓留存率已退回至中性，请检查网络或提供指数对照数据。**\n\n"
+
         report += self.evidence_builder.build(phase_result)
         report += self.pattern_builder.build(trading_range, spring, upthrust, sos, sow, lps, lpsy, effective_phase, ps=ps, psy=psy)
         report += self.signal_builder.build(joc, fti, vsa, boring_res, dead_corner)

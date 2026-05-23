@@ -38,6 +38,7 @@ class WIE3MarketStateService:
     """Run the VSA → APS → Regime → RS → state-engine stack once for all callers."""
 
     def __init__(self, thresholds: Optional[WyckoffThresholds] = None):
+        import collections
         self.thresholds = thresholds or WyckoffThresholds()
         self.vsa_analyzer = None
         self.efficiency_analyzer = None
@@ -45,7 +46,8 @@ class WIE3MarketStateService:
         self.regime_tracker = None
         self.rs_engine = None
         self._engines_ready = False
-        self._result_cache: Dict[CacheKey, WIE3AnalysisResult] = {}
+        self._result_cache: collections.OrderedDict[CacheKey, WIE3AnalysisResult] = collections.OrderedDict()
+        self._cache_max_size = 50
 
     def clear_cache(self) -> None:
         """Drop memoized results, e.g. after fetch_data loads fresh OHLCV."""
@@ -120,6 +122,8 @@ class WIE3MarketStateService:
             result = self._compute(data, effective_index=effective_index)
             if result is not None:
                 self._result_cache[cache_key] = result
+                if len(self._result_cache) > self._cache_max_size:
+                    self._result_cache.popitem(last=False)
             return result
         except (DataError, CalculationError):
             raise

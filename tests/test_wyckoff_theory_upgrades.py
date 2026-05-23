@@ -168,7 +168,7 @@ def test_redistribution_phase_override_and_long_blocking(monkeypatch):
     
     # 验证在吸筹阶段且前序为熊市趋势时，一票否决定性为 "再派发"
     final_phase, logs = coordinator.validate_phase_consistency(
-        preliminary_phase="Accumulation Phase A",
+        preliminary_phase="Accumulation Phase B",
         events=events
     )
     

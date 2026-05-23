@@ -33,12 +33,12 @@ def weak_label_state(
     event_flag: str = 'NORMAL',
 ) -> str:
     """Map microstructure features to a weak S0–S5 label (same heuristics as state_engine)."""
-    is_breakdown = (clv < -0.6 and exp_eff < 0.5) or hidden_weakness
+    is_breakdown = (clv < -0.6 and exp_eff < 0.5) or hidden_weakness or (aps < 5 and cds < 10)
     if is_breakdown:
         return RegimeState.S0_PANIC_LIQUIDATION.value
 
     scores = {
-        RegimeState.S0_PANIC_LIQUIDATION.value: 1.0 if aps < 5 and cds < 10 else 0.0,
+        RegimeState.S0_PANIC_LIQUIDATION.value: 0.0,
         RegimeState.S1_ABSORPTION.value: max(0.0, (aps - 8.0) / 10.0),
         RegimeState.S2_NEUTRAL_COMPRESSION.value: max(0.0, (cds - 10.0) / 20.0 + lcs / 10.0),
         RegimeState.S3_DEMAND_EMERGENCE.value: (
