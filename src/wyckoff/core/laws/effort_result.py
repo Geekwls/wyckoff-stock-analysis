@@ -540,7 +540,8 @@ class EffortResultMixin:
 
             # 对周线进行简单的 EVR 判定 (复用核心逻辑片段)
             recent_w = weekly_df.tail(2) # 比较本周与上周
-            if len(recent_w) < 2: return
+            if len(recent_w) < 2:
+                return
             
             w_curr, w_prev = recent_w.iloc[-1], recent_w.iloc[-2]
             w_vol_ratio = w_curr['Volume'] / max(w_prev['Volume'], 1e-9)

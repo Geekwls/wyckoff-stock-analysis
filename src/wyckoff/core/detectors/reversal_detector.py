@@ -511,7 +511,8 @@ class ReversalDetector(BaseDetector):
         #  缺陷3修复：优先使用确认的TR下沿作为Spring支撑位
         if trading_range_low is not None and trading_range_low > 0:
             return round(float(trading_range_low), 2)
-        if len(df) < 20: return None
+        if len(df) < 20:
+            return None
         lows = df['Low'].values
         sorted_lows = sorted(lows)
         p5_idx = max(0, int(len(sorted_lows) * 0.05))
@@ -525,9 +526,12 @@ class ReversalDetector(BaseDetector):
 
     def _calculate_spring_follow_score(self, nxt: pd.Series, d2: pd.Series) -> int:
         score = 0
-        if nxt['Close'] > nxt['Open']: score += 3
-        if nxt['Close'] > (nxt['High'] + nxt['Low']) / 2: score += 2
-        if d2 is not None and d2['Close'] > nxt['Close']: score += 2
+        if nxt['Close'] > nxt['Open']:
+            score += 3
+        if nxt['Close'] > (nxt['High'] + nxt['Low']) / 2:
+            score += 2
+        if d2 is not None and d2['Close'] > nxt['Close']:
+            score += 2
         if d2 is not None and (d2['High'] > nxt['High'] and d2['Low'] > nxt['Low'] and d2['Close'] > nxt['Close']):
             score += 3
         return score
@@ -567,7 +571,8 @@ class ReversalDetector(BaseDetector):
         springs = []
         for i in candidate_indices:
             cur_idx, nxt_idx, d2_idx = i, i + 1, i + 2
-            if d2_idx >= n: continue
+            if d2_idx >= n:
+                continue
             follow_score = self._calculate_spring_follow_score(recent.iloc[nxt_idx], recent.iloc[d2_idx])
             breakdown_pct = breakdown_pcts[i]
             recovery_vol_r, nxt_close_pos = float(vol_ratios[i]), float(close_positions[i])
@@ -633,16 +638,20 @@ class ReversalDetector(BaseDetector):
         candidate_indices = recent.index[breakdown_mask]
         for idx in candidate_indices:
             i = recent.index.get_loc(idx)
-            if i + 2 >= len(recent): continue
+            if i + 2 >= len(recent):
+                continue
             cur, nxt, d2 = recent.iloc[i], recent.iloc[i + 1], recent.iloc[i + 2]
             breakdown_pct = (support - cur['Low']) / support * 100
-            if breakdown_pct > 5 or nxt['Close'] <= support or nxt['Close'] <= cur['Close']: continue
+            if breakdown_pct > 5 or nxt['Close'] <= support or nxt['Close'] <= cur['Close']:
+                continue
             recovery_vol_r = nxt['Volume'] / cur['Volume'] if cur['Volume'] > 0 else 1
-            if recovery_vol_r <= 1.0: continue
+            if recovery_vol_r <= 1.0:
+                continue
             nxt_range = nxt['High'] - nxt['Low']
             nxt_close_pos = (nxt['Close'] - nxt['Low']) / nxt_range if nxt_range > 0 else 0.5
             #  孟洪涛阈值：使用 MENG_SPRING_RECOVERY_CLOSE_POS 替代硬编码 0.7
-            if nxt_close_pos < self.thresholds.MENG_SPRING_RECOVERY_CLOSE_POS: continue
+            if nxt_close_pos < self.thresholds.MENG_SPRING_RECOVERY_CLOSE_POS:
+                continue
             follow_score = self._calculate_spring_follow_score(nxt, d2)
             recovery_pct = (nxt['Close'] - support) / support * 100 if support > 0 else 0
             actual_recovery_days = self._count_recovery_days(recent, i, support)
@@ -744,20 +753,25 @@ class ReversalDetector(BaseDetector):
         )
 
     def _detect_upthrust_impl(self, lookback: int) -> Dict:
-        if self.data is None or len(self.data) < 30: return {'detected': False}
+        if self.data is None or len(self.data) < 30:
+            return {'detected': False}
         df = self.data.tail(lookback).copy()
         resistance_level = self._check_upthrust_preconditions(df)
-        if resistance_level is None: return {'detected': False}
+        if resistance_level is None:
+            return {'detected': False}
         upthrusts = self._find_and_verify_upthrusts(df, resistance_level)
-        if upthrusts: return {'detected': True, 'upthrusts': upthrusts, 'latest_upthrust': upthrusts[-1]}
+        if upthrusts:
+            return {'detected': True, 'upthrusts': upthrusts, 'latest_upthrust': upthrusts[-1]}
         return {'detected': False}
 
     def _check_upthrust_preconditions(self, df: pd.DataFrame) -> Optional[float]:
         M = self.config.breakout_search_window
-        if len(df) <= M: return None
+        if len(df) <= M:
+            return None
         range_df = df.iloc[:-M]
         high_max, low_min = range_df['High'].max(), range_df['Low'].min()
-        if (high_max - low_min) / low_min < self.config.spring_range_threshold: return high_max
+        if (high_max - low_min) / low_min < self.config.spring_range_threshold:
+            return high_max
         return None
 
     def _find_and_verify_upthrusts(self, df: pd.DataFrame, resistance_level: float):

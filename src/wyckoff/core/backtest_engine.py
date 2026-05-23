@@ -3,7 +3,6 @@
 从report_generator.py中提取，负责信号历史表现回测
 """
 import pandas as pd
-import numpy as np
 from typing import Dict, List, Any, Optional
 import logging
 from ..config.settings import WyckoffThresholds
@@ -41,7 +40,7 @@ class BacktestEngine:
         "FTI (穿透冰层)": {"key": "fti", "is_bullish": False},
     }
 
-    def __init__(self, data: pd.DataFrame, thresholds: WyckoffThresholds = None,
+    def __init__(self, data: pd.DataFrame, thresholds: Optional[WyckoffThresholds] = None,
                  lookforward_days: int = 45, min_samples: int = 3):
         """
         初始化回测引擎
@@ -63,7 +62,7 @@ class BacktestEngine:
             for i, dt in enumerate(self.data.index)
         }
 
-    def calculate_signal_performance(self, events: Dict[str, Any], current_phase: str = None) -> Dict[str, Dict[str, Any]]:
+    def calculate_signal_performance(self, events: Dict[str, Any], current_phase: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
         """
         计算各信号的历史表现
 
@@ -122,7 +121,7 @@ class BacktestEngine:
 
         return results
 
-    def _backtest_signal(self, signals: List[Dict[str, Any]], is_bullish: bool) -> Dict[str, Any]:
+    def _backtest_signal(self, signals: List[Dict[str, Any]], is_bullish: bool) -> Optional[Dict[str, Any]]:
         """
         回测单个信号，加入成本与滑点建模
 
@@ -138,13 +137,16 @@ class BacktestEngine:
         for sig in signals:
             date_str = sig.get("date")
             entry_price = sig.get("price")
-            if not date_str or not entry_price: continue
+            if not date_str or not entry_price:
+                continue
 
             entry_idx = self._get_date_index(date_str)
-            if entry_idx == -1: continue
+            if entry_idx == -1:
+                continue
 
             target_idx = min(entry_idx + self.lookforward_days, len(self.data) - 1)
-            if target_idx - entry_idx < 5: continue
+            if target_idx - entry_idx < 5:
+                continue
 
             # 全程追踪：检查窗口内是否达到目标
             window_df = self.data.iloc[entry_idx:target_idx+1]
@@ -162,7 +164,8 @@ class BacktestEngine:
             net_ret = raw_ret - (cost * 2)
             total_net_returns.append(net_ret)
 
-            if net_ret > 0: winning_trades += 1
+            if net_ret > 0:
+                winning_trades += 1
 
             # 全程最大回撤
             if is_bullish:
@@ -172,7 +175,8 @@ class BacktestEngine:
             max_drawdowns.append(mdd)
 
         valid_count = len(total_net_returns)
-        if valid_count < 1: return None
+        if valid_count < 1:
+            return None
 
         # 计算置信度等级
         # A: >= 10个样本, B: 5-9个, C: < 5个

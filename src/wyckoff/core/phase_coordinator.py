@@ -12,9 +12,10 @@ from typing import Dict, List, Tuple, Any, Optional
 from ..schemas import (
     ClimaxModel, WyckoffEventModel, SpringModel, UpthrustModel,
     SosModel, SowModel, LpsModel, LpsyModel, TradingRangeModel,
-    JocModel, FtiModel, DualEventModel, EventsModel
+    JocModel, FtiModel, DualEventModel, EventsModel,
+    ArbitrationResult, BreakoutAnalysisModel, BoringZoneModel,
+    SequenceValidationModel
 )
-from ..config.settings import WyckoffConfig
 from .sequence_validator import SequenceValidator
 from .event_arbitrator import EventArbitrator
 from .breakout_analyzer import BreakoutAnalyzer
@@ -95,7 +96,7 @@ class PhaseCoordinator:
         self.arbitrator = None  # 事件仲裁器，稍后初始化
         self.breakout_analyzer = None  # 突破分析器，稍后初始化
 
-    def collect_all_events(self) -> Dict[str, Any]:
+    def collect_all_events(self) -> 'EventsModel':
         """
         收集所有威科夫事件供阶段识别使用
 
@@ -115,7 +116,7 @@ class PhaseCoordinator:
         #  P3修复：弃用旧的基于固定百分比的 detect_climax，全面拥抱动态 ATR 的 SC/BC
         sc_res = self.detector.detect_climax_panic_selling()
         bc_res = self.detector.detect_climax_buying()
-        
+
         # 仲裁：如果同时检测到SC和BC（比如先暴涨后暴跌），取距离当前最近的一个作为主高潮
         if sc_res.get('detected') and bc_res.get('detected'):
             climax_res = sc_res if sc_res.get('date') > bc_res.get('date') else bc_res
@@ -131,7 +132,7 @@ class PhaseCoordinator:
         ps_res = self.detector.detect_preliminary_support()
         psy_res = self.detector.detect_preliminary_supply()
 
-        spring_res = self.detector.detect_spring()
+        spring_res = self.detector.detect_spring_menhongtao()
         upthrust_res = self.detector.detect_upthrust()
 
         boring_zone_res = self.detector.detect_boring_zone()
@@ -209,7 +210,7 @@ class PhaseCoordinator:
         lps_list = self._build_lps_sequence(arbitration_raw)
         ut_list = self._build_ut_sequence(arbitration_raw)
 
-        # 6. 统一使用强类型模型封装
+        # 统一使用强类型模型封装
         # 安全地构造Pydantic模型：过滤掉dict中模型不存在的字段
         def _safe_model(model_cls, data: dict):
             # 兼容 Pydantic v1 和 v2（带缓存，避免热路径重复检测）
@@ -217,27 +218,10 @@ class PhaseCoordinator:
             filtered = {k: v for k, v in data.items() if k in valid_fields}
             return model_cls(**filtered)
 
-        # 保存原始检测结果供 scoring 引擎使用
-        raw_events_map = {
-            'spring': spring_res,
-            'upthrust': upthrust_res,
-            'sos': sos_res,
-            'sow': sow_res,
-            'lps': lps_res,
-            'lpsy': lpsy_res,
-            'joc': joc_res,
-            'fti': fti_res,
-            'secondary_test': st_res,
-            'automatic_reaction': ar_res,
-            'preliminary_support': ps_res,
-            'utad': utad_res,
-        }
-        # 5.6. 分析突破质量（在tr_res和trading_range创建后调用）
+        #  分析突破质量（在tr_resandtrading_range创建后调用）
         trading_range_model = _safe_model(TradingRangeModel, tr_res)
         breakout_analysis = self.analyze_breakout_quality(tr_res)
 
-        from ..schemas import DualEventModel, EventsModel, BoringZoneModel, BreakoutAnalysisModel, SequenceValidationModel
-        
         events_dict = {
             'trading_range': trading_range_model,
             'lps_list': lps_list,
@@ -278,8 +262,6 @@ class PhaseCoordinator:
         events_model = EventsModel(**events_dict)
 
         # 5. 运行事件序列验证（使用完整的 Pydantic 模型）
-        from .sequence_validator import SequenceValidator
-        from ..schemas import SequenceValidationModel
         seq_val_res = SequenceValidator(events_model, self.detector.data).validate_all()
         events_model.sequence_validation = _safe_model(SequenceValidationModel, seq_val_res)
 
@@ -308,7 +290,7 @@ class PhaseCoordinator:
 
         return events_model
 
-    def _update_trading_range_from_events(self, climax_res: Dict, ar_res: Dict, phase: str, utad_res: Dict = None):
+    def _update_trading_range_from_events(self, climax_res: Dict, ar_res: Dict, phase: str, utad_res: Optional[Dict] = None):
         """
         从威科夫事件更新交易区间边界
 
@@ -341,14 +323,17 @@ class PhaseCoordinator:
     def _detect_prior_trend(self) -> str:
         """识别前序趋势 (Markup / Markdown)"""
         df = self.detector.data
-        if len(df) < 60: return 'neutral'
-        
+        if len(df) < 60:
+            return 'neutral'
+
         # 使用 50/200 均线及价格斜率判断
         ma50 = df['Close'].rolling(50).mean().iloc[-1]
         ma200 = df['Close'].rolling(200).mean().iloc[-1] if len(df) >= 200 else df['Close'].rolling(100).mean().iloc[-1]
-        
-        if ma50 > ma200 * 1.05: return 'markup'
-        if ma50 < ma200 * 0.95: return 'markdown'
+
+        if ma50 > ma200 * 1.05:
+            return 'markup'
+        if ma50 < ma200 * 0.95:
+            return 'markdown'
         return 'neutral'
 
     def _preliminary_phase_identification(
@@ -374,14 +359,14 @@ class PhaseCoordinator:
         is_bc = climax_res.get('detected') and climax_res.get('type') == 'buying_climax'
         is_ar = ar_res.get('detected')
         is_st = st_res.get('detected')
-        
+
         # P1: 再吸筹识别 (Re-accumulation Mode)
         prior_trend = self._detect_prior_trend()
         if prior_trend == 'markup':
             # 在上涨趋势中，即使没有明显的 SC，只要有回踩后的 AR 和 ST
             if not is_sc and is_ar and is_st:
                 return 'Accumulation Phase A (Re-accumulation)'
-        
+
         # 1. 理论优先级重构：首先由初次支撑 (PS) 和初次供应 (PSY) 奠定趋势衰竭的底色与大方向
         direction = 'Unknown'
         if is_ps and not is_psy:
@@ -396,7 +381,7 @@ class PhaseCoordinator:
                 direction = 'Distribution'
             else:
                 direction = 'Accumulation' if prior_trend == 'markdown' else 'Distribution'
-        
+
         # 2. 其次组合 SC/BC + AR / ST 时序底座确认 Phase A 结构
         phase = 'Unknown'
         if direction == 'Accumulation':
@@ -436,7 +421,6 @@ class PhaseCoordinator:
         # Spring 直接跳转到 Phase C，且给予最高置信度
         if spring_res.get('detected'):
             # 评估 Spring 质量：type_3_safe > type_2_neutral > type_1_dangerous
-            spring_signals = spring_res.get('signals', [])
             latest_spring = spring_res.get('latest_spring', {})
             if isinstance(latest_spring, dict):
                 spring_type = latest_spring.get('spring_type', 'type_2_neutral')
@@ -457,24 +441,24 @@ class PhaseCoordinator:
                 is_utad = utad_check.get('detected', False)
             except Exception:
                 pass
-            
+
             is_valid_ut = False
             if latest_ut:
                 # 检查最新 upthrust 信号的有效性、回落效率与跟随性
                 is_valid = latest_ut.get('is_valid', True)
                 rejection_days = latest_ut.get('rejection_days', 99)
                 ft_quality = latest_ut.get('follow_through_quality', 0.0)
-                
+
                 # 快速跌回且具有向下跟随性，或已被直接识别为 UTAD
                 is_strong_rejection = rejection_days <= 3 and ft_quality >= 33.0
                 if is_valid and (is_strong_rejection or is_utad):
                     is_valid_ut = True
-            
+
             # 联合证据：伴随向下特征变异（CHoCH down）
             has_weakness_confirm = False
             if choch_res and choch_res.get('detected') and choch_res.get('direction') == 'down':
                 has_weakness_confirm = True
-            
+
             if is_valid_ut or has_weakness_confirm:
                 return 'Distribution Phase C'
             else:
@@ -492,7 +476,7 @@ class PhaseCoordinator:
         # 长周期重构检查 (避免 2 年以上长跨度机械停留在 Phase A)
         if 'Phase A' in phase and hasattr(self.detector, 'data') and self.detector.data is not None and not self.detector.data.empty:
             df = self.detector.data
-            
+
             # 安全处理不同类型的索引，防止强转崩溃
             import numpy as np
             idx_val = df.index[-1]
@@ -509,7 +493,8 @@ class PhaseCoordinator:
             for res in [psy_res, ps_res, climax_res]:
                 if res and res.get('detected') and res.get('date'):
                     d = pd.Timestamp(res.get('date'))
-                    if earliest_date is None or d < earliest_date: earliest_date = d
+                    if earliest_date is None or d < earliest_date:
+                        earliest_date = d
             if earliest_date:
                 days_diff = (last_date - earliest_date).days
                 bars_count = len(df[df.index >= earliest_date])
@@ -581,7 +566,6 @@ class PhaseCoordinator:
             (新阶段, 置信度)
         """
         criteria = PhaseTransitionCriteria()
-        phase_type = current_phase.split()[0] if 'Phase' in current_phase else current_phase
 
         # Phase A → B/C 转换
         if 'Phase A' in current_phase:
@@ -811,7 +795,6 @@ class PhaseCoordinator:
         try:
             # 延迟初始化仲裁器
             if self.arbitrator is None and hasattr(self.detector, 'data'):
-                from ..schemas import ArbitrationResult
                 self.arbitrator = EventArbitrator(self.detector.data)
 
             if self.arbitrator is None:
@@ -863,7 +846,7 @@ class PhaseCoordinator:
     def validate_phase_consistency(
         self,
         preliminary_phase: str,
-        events: Dict,
+        events: 'EventsModel',
         arbitration_result: Optional['ArbitrationResult'] = None,
         breakout_analysis: Optional[Dict] = None
     ) -> Tuple[str, List[str]]:
@@ -885,10 +868,10 @@ class PhaseCoordinator:
             return preliminary_phase, revision_logs
 
         # === 优先级0: TR突破反噬规则 ===
-        breakout_analysis = events.breakout_analysis
-        if breakout_analysis and getattr(breakout_analysis, 'is_breakout', False):
+        bo_analysis = events.breakout_analysis
+        if bo_analysis and getattr(bo_analysis, 'is_breakout', False):
             override_phase, override_reason, conf_adjust = self._apply_breakout_override(
-                preliminary_phase, events.trading_range, breakout_analysis
+                preliminary_phase, events.trading_range, bo_analysis
             )
 
             if override_reason:

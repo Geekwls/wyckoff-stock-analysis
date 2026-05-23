@@ -170,10 +170,14 @@ class MultiTimeframeAnalyzer:
             resonance_signals.append('volume_resonance')
 
         # 共振等级分类
-        if resonance_strength >= 8: resonance_level = 'strong_resonance'
-        elif resonance_strength >= 5: resonance_level = 'moderate_resonance'
-        elif resonance_strength >= 2: resonance_level = 'weak_resonance'
-        else: resonance_level = 'no_resonance'
+        if resonance_strength >= 8:
+            resonance_level = 'strong_resonance'
+        elif resonance_strength >= 5:
+            resonance_level = 'moderate_resonance'
+        elif resonance_strength >= 2:
+            resonance_level = 'weak_resonance'
+        else:
+            resonance_level = 'no_resonance'
 
         #  v1.3新增：生成交易建议
         trading_implication = self._generate_mtf_trading_advice(
@@ -330,7 +334,8 @@ class MultiTimeframeAnalyzer:
 
     def _check_signal_resonance(self, timeframe: str) -> Dict:
         """检查特定时间框架的信号（Wyckoff-aware 检测）"""
-        if self.data is None or len(self.data) < 60: return {}
+        if self.data is None or len(self.data) < 60:
+            return {}
         try:
             if timeframe == 'weekly':
                 resampled = self.data.resample('W-FRI').agg({
@@ -343,7 +348,8 @@ class MultiTimeframeAnalyzer:
                 }).ffill().dropna()
                 min_periods = 8
 
-            if len(resampled) < min_periods: return {'insufficient_data': True}
+            if len(resampled) < min_periods:
+                return {'insufficient_data': True}
 
             recent_data = resampled.tail(12).copy()
             recent_data['Vol_MA5'] = recent_data['Volume'].rolling(5, min_periods=1).mean()

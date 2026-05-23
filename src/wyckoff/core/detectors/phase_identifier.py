@@ -1,6 +1,6 @@
 import pandas as pd
 import logging
-from typing import Dict, Optional, Tuple, List, Any, Union
+from typing import Dict, Optional, Tuple, List, Any, Union, cast
 from .base_detector import BaseDetector
 from ...config.settings import WyckoffConfig, WyckoffThresholds
 from ..enums import WyckoffPhase
@@ -571,7 +571,7 @@ class PhaseIdentifier(BaseDetector):
         if isinstance(date, pd.Timestamp):
             return date
         try:
-            return pd.Timestamp(date)
+            return cast(pd.Timestamp, pd.Timestamp(date))
         except Exception as e:
             logger.debug(f"Failed to normalize date {date}: {e}")
             return None
@@ -862,7 +862,8 @@ class PhaseIdentifier(BaseDetector):
         """
         filtered = {}
         for key, event in events.items():
-            if not event: continue
+            if not event:
+                continue
 
             date = None
             # 安全地获取日期信息
@@ -907,15 +908,22 @@ class PhaseIdentifier(BaseDetector):
             ps_detected = self._safe_check_detected(ps_event)
 
         count = 0
-        if climax and (isinstance(climax, dict) and climax.get('detected') or getattr(climax, 'detected', False)): count += 1
-        if ar and (isinstance(ar, dict) and ar.get('detected') or getattr(ar, 'detected', False)): count += 1
-        if st and (isinstance(st, dict) and st.get('detected') or getattr(st, 'detected', False)): count += 1
-        if ps_detected: count += 1
+        if climax and (isinstance(climax, dict) and climax.get('detected') or getattr(climax, 'detected', False)):
+            count += 1
+        if ar and (isinstance(ar, dict) and ar.get('detected') or getattr(ar, 'detected', False)):
+            count += 1
+        if st and (isinstance(st, dict) and st.get('detected') or getattr(st, 'detected', False)):
+            count += 1
+        if ps_detected:
+            count += 1
 
         # 如果 4 个支柱只剩 1-2 个，置信度打折
-        if count <= 1: return 0.4
-        if count == 2: return 0.6
-        if count == 3: return 0.85
+        if count <= 1:
+            return 0.4
+        if count == 2:
+            return 0.6
+        if count == 3:
+            return 0.85
         return 1.0
 
     def calculate_sequence_score(self, events: Dict, phase: Union[str, WyckoffPhase]) -> Dict:
@@ -927,7 +935,8 @@ class PhaseIdentifier(BaseDetector):
             event = self._get_event(events, c)
             if event:
                 if isinstance(event, _DEMC):
-                    if getattr(event.data, 'detected', False): count += 1
+                    if getattr(event.data, 'detected', False):
+                        count += 1
                 elif hasattr(event, 'detected') and event.detected:
                     count += 1
             

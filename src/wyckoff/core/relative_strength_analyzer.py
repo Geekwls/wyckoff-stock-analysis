@@ -33,9 +33,12 @@ class RelativeStrengthAnalyzer:
             current_rs_ma20 = rs_ma20.iloc[-1]
             current_rs_ma50 = rs_ma50.iloc[-1]
 
-            if current_rs_ma20 > current_rs_ma50: rs_trend = 'rising'
-            elif current_rs_ma20 < current_rs_ma50: rs_trend = 'falling'
-            else: rs_trend = 'flat'
+            if current_rs_ma20 > current_rs_ma50:
+                rs_trend = 'rising'
+            elif current_rs_ma20 < current_rs_ma50:
+                rs_trend = 'falling'
+            else:
+                rs_trend = 'flat'
 
             rs_change_20d = (rs.iloc[-1] / rs.iloc[-20] - 1) * 100 if len(rs) >= 20 else 0
 

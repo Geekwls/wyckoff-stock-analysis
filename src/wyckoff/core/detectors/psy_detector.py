@@ -83,10 +83,14 @@ class PsyDetector(BaseDetector):
 
                 # 评分逻辑
                 confidence = 50
-                if vol_ratio > vol_strong_threshold: confidence += 15
-                if upper_shadow > body_size: confidence += 15
-                if current['Close'] < current['Open']: confidence += 10 # 阴线 PSY 更有力
-                if effort_vs_result: confidence += 10
+                if vol_ratio > vol_strong_threshold:
+                    confidence += 15
+                if upper_shadow > body_size:
+                    confidence += 15
+                if current['Close'] < current['Open']:
+                    confidence += 10 # 阴线 PSY 更有力
+                if effort_vs_result:
+                    confidence += 10
                 
                 potential_psy.append({
                     "date": search_data.index[i],
@@ -135,7 +139,8 @@ class PsyDetector(BaseDetector):
 
     def _find_uptrend_high_area(self, data: pd.DataFrame) -> Optional[any]:
         """寻找上涨趋势的高位区域起点"""
-        if len(data) < 10: return None
+        if len(data) < 10:
+            return None
         
         # 简单判断：价格位于 MA20 之上且 MA20 向上
         ma20 = data['Close'].rolling(window=20).mean()

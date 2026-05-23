@@ -1,6 +1,5 @@
 from abc import ABC
-from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional, cast, Any
 import pandas as pd
 import os
 
@@ -15,6 +14,7 @@ class BaseDetector(ABC):
     - 支持不同信号类型的自定义有效期
     """
     def __init__(self, indicator_cache=None):
+        self.data: Optional[pd.DataFrame] = None
         self._current_phase = ""
         #  P1-1修复：存储Phase A事件检测结果，供LPS等信号验证前置结构
         self._phase_a_events = {}
@@ -60,10 +60,10 @@ class BaseDetector(ABC):
         """获取当前分析的基准时间（优先使用数据最新索引，其次使用当前物理时间）"""
         if hasattr(self, 'data') and self.data is not None and len(self.data) > 0:
             try:
-                ts = pd.Timestamp(self.data.index[-1])
+                ts = pd.Timestamp(cast(Any, self.data.index[-1]))
                 if ts.tz is None:
-                    return ts.tz_localize('UTC')
-                return ts.tz_convert('UTC')
+                    return cast(pd.Timestamp, ts.tz_localize('UTC'))
+                return cast(pd.Timestamp, ts.tz_convert('UTC'))
             except Exception:
                 pass
         return pd.Timestamp.now(tz='UTC')
@@ -96,7 +96,7 @@ class BaseDetector(ABC):
                 ts = pd.to_datetime(signal_date)
             else:
                 ts = pd.Timestamp(signal_date)
-            
+
             if ts.tz is None:
                 ts = ts.tz_localize('UTC')
             else:
@@ -112,19 +112,23 @@ class BaseDetector(ABC):
 
     def _get_signal_age_days(self, signal_date) -> int:
         """获取信号距今的天数"""
-        if signal_date is None: return 0
+        if signal_date is None:
+            return 0
         try:
             ts = pd.to_datetime(signal_date)
-            if ts.tz is None: ts = ts.tz_localize('UTC')
-            else: ts = ts.tz_convert('UTC')
-        except Exception: return 0
+            if ts.tz is None:
+                ts = ts.tz_localize('UTC')
+            else:
+                ts = ts.tz_convert('UTC')
+        except Exception:
+            return 0
         now = self._get_reference_now()
         return max(0, (now - ts).days)
 
     def _is_signal_falsified(self, signal_type: str, signal_price: float, current_price: float) -> bool:
         """
         根据当前价格判断信号是否已被“证伪”
-        
+
         理论依据：
         - 如果是 FTI (看跌)，但价格已大幅上涨并站稳冰层上方 -> 信号被证伪 (可能是震仓)
         - 如果是 JOC (看涨)，但价格已大幅下跌并站稳小溪下方 -> 信号被证伪 (可能是诱多)
@@ -135,21 +139,21 @@ class BaseDetector(ABC):
         # 🧪 特判：测试数据集兼容，如果处于测试环境，不执行过于严苛的证伪过滤，防止拦截合法的测试信号
         if getattr(self, 'is_test_env', False):
             return False
-            
+
         if signal_type in ['fti', 'sow', 'upthrust']:
             # 看跌信号证伪：价格站稳阻力位上方 5% 以上
             return current_price > signal_price * 1.05
-        
+
         if signal_type in ['joc', 'sos', 'spring']:
             # 看涨信号证伪：价格跌破支撑位下方 5% 以下
             return current_price < signal_price * 0.95
-            
+
         return False
 
     def _get_tech_indicators(self, window: int = 20):
         """统一获取技术指标（Volume MA, Low Min, High Max）"""
         if not self._indicator_cache:
-            if hasattr(self, 'data'):
+            if hasattr(self, 'data') and self.data is not None:
                 from ..indicator_cache import IndicatorCache
                 self._indicator_cache = IndicatorCache(self.data)
             else:
@@ -169,7 +173,8 @@ class BaseDetector(ABC):
 
     def _detect_trading_range(self, df: pd.DataFrame, window: int = 60) -> Dict:
         """检测交易区间"""
-        if len(df) < window: return {"is_consolidation": False}
+        if len(df) < window:
+            return {"is_consolidation": False}
         recent_df = df.tail(window)
         high_max, low_min = recent_df['High'].max(), recent_df['Low'].min()
         range_pct = (high_max - low_min) / max(low_min, 1e-9)
@@ -179,8 +184,9 @@ class BaseDetector(ABC):
         """计算ATR序列"""
         if self._indicator_cache:
             try:
-                return self._indicator_cache.get('ATR', period=period)
-            except Exception: pass
+                return cast(pd.Series, self._indicator_cache.get('ATR', period=period))
+            except Exception:
+                pass
         high, low, close = df['High'], df['Low'], df['Close'].shift(1)
         tr = pd.concat([high - low, (high - close).abs(), (low - close).abs()], axis=1).max(axis=1)
-        return tr.rolling(window=period, min_periods=1).mean()
+        return cast(pd.Series, tr.rolling(window=period, min_periods=1).mean())

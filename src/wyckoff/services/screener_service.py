@@ -365,11 +365,16 @@ class ScreenerService:
         """显示信号信息"""
         icons = []
         # 注意：此处 result 现在直接包含标志位，由调用者决定
-        if result.get('has_lps'):      icons.append('LPS')
-        if result.get('has_upthrust'): icons.append('Upthrust')
-        if result.get('has_lpsy'):     icons.append('LPSY')
-        if result.get('has_sos'):      icons.append('SOS')
-        if result.get('has_sow'):      icons.append('SOW')
+        if result.get('has_lps'):
+            icons.append('LPS')
+        if result.get('has_upthrust'):
+            icons.append('Upthrust')
+        if result.get('has_lpsy'):
+            icons.append('LPSY')
+        if result.get('has_sos'):
+            icons.append('SOS')
+        if result.get('has_sow'):
+            icons.append('SOW')
         
         if icons:
             strength_str = f"强度{result['strength']}/6"

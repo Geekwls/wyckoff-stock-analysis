@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, List
+from typing import Dict, List, cast, Any
 from .base_detector import BaseDetector, USE_VECTORIZED
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class MengReversalDetector(BaseDetector):
         if self.data is None or len(self.data) < 20:
             return {"detected": False, "reason": "insufficient_data"}
 
-        df = self.data.copy()
+        df = cast(Any, self.data).copy()
         atr_series = self._calculate_atr_series(df, 14)
         last_close = df['Close'].iloc[-1]
         atr_pct = (atr_series.iloc[-1] / last_close * 100) if last_close > 0 else 0
@@ -45,8 +45,13 @@ class MengReversalDetector(BaseDetector):
         else:
             max_recovery_days = 5  # 高波动：最多 5 天
         
-        lows, closes, highs, opens, volumes = df['Low'].values, df['Close'].values, df['High'].values, df['Open'].values, df['Volume'].values
-        support_levels = df['Low'].rolling(window=20).min().shift(1).values
+        lows = np.asarray(df['Low'])
+        closes = np.asarray(df['Close'])
+        highs = np.asarray(df['High'])
+        opens = np.asarray(df['Open'])
+        volumes = np.asarray(df['Volume'])
+        support_levels = np.asarray(df['Low'].rolling(window=20).min().shift(1))
+        vol_ma20_s = np.asarray(df['Volume'].rolling(20).mean())
         
         safe_support = np.where(support_levels > 1e-9, support_levels, 1.0)
         breakdown_pcts = (safe_support - lows) / safe_support * 100
@@ -68,7 +73,8 @@ class MengReversalDetector(BaseDetector):
                     recovery_days, recovery_vol = j - i, volumes[j]
                     #  修复#2: 成交量比较逻辑 - 量比阈值提高到 1.2
                     vol_ratio = recovery_vol / breakdown_vol if breakdown_vol > 0 else 1.0
-                    if vol_ratio < 1.2: continue  # 孟洪涛要求：收回时成交量必须明显放大（>1.2 倍）
+                    if vol_ratio < 1.2:
+                        continue  # 孟洪涛要求：收回时成交量必须明显放大（>1.2 倍）
                     
                     # 计算收回日收盘在日内振幅中的位置 (0=最低, 1=最高)
                     bar_range = highs[j] - lows[j]
@@ -84,26 +90,29 @@ class MengReversalDetector(BaseDetector):
                     is_high_speed = (recovery_velocity > breakdown_velocity * 1.5) and (close_position > 0.7)
 
                     # 获取均量用于分类 (Type 1/2/3)
-                    v_ma = vol_ma20_s[i] if 'vol_ma20_s' in locals() else (df['Volume'].rolling(20).mean().values[i] if i >= 20 else breakdown_vol)
+                    v_ma = vol_ma20_s[i] if i >= 20 else breakdown_vol
                     
                     signal = self._build_spring_signal(
-                        df.index[j], breakdown_price, support_level, closes[j], 
-                        recovery_days, vol_ratio, close_position, breakdown_pct,
-                        recovery_velocity, breakdown_velocity, is_high_speed,
-                        breakdown_vol, v_ma, float(highs[j])
+                        df.index[j], float(breakdown_price), float(support_level), float(closes[j]), 
+                        int(recovery_days), float(vol_ratio), float(close_position), float(breakdown_pct),
+                        float(recovery_velocity), float(breakdown_velocity), bool(is_high_speed),
+                        float(breakdown_vol), float(v_ma), float(highs[j])
                     )
                     self._track_spring_status(signal)
                     signals.append(signal)
                     break
                     
-        if not signals: return {"detected": False, "reason": "no_valid_spring_found"}
+        if not signals:
+            return {"detected": False, "reason": "no_valid_spring_found"}
         latest_spring = signals[-1]
         latest_spring["confidence"] = round(latest_spring["confidence"], 2)
         return {"detected": True, "signals": signals, "latest_spring": latest_spring, "method": "meng_hongtao_5_filters_vectorized", "description": "孟洪涛5重过滤Spring检测"}
 
     def _detect_spring_enhanced_iterative(self) -> Dict:
-        if self.data is None or len(self.data) < 20: return {"detected": False, "reason": "insufficient_data"}
-        df, signals = self.data.copy(), []
+        if self.data is None or len(self.data) < 20:
+            return {"detected": False, "reason": "insufficient_data"}
+        df = cast(Any, self.data).copy()
+        signals = []
         atr_series = self._calculate_atr_series(df, 14)
         atr_pct = (atr_series.iloc[-1] / df['Close'].iloc[-1] * 100) if df['Close'].iloc[-1] > 0 else 0
         # 与向量化路径保持一致：波动率越高，允许的收回窗口越长
@@ -115,11 +124,13 @@ class MengReversalDetector(BaseDetector):
                 breakdown_price, breakdown_vol = df['Low'].iloc[i], df['Volume'].iloc[i]
                 breakdown_pct = (support_level - breakdown_price) / support_level * 100
                 dynamic_max_breakdown = 3.0 if atr_pct < 1.5 else 4.0 if atr_pct < 3.0 else 6.0
-                if not (t.MENG_SPRING_BREAKDOWN_MIN <= breakdown_pct <= dynamic_max_breakdown): continue
+                if not (t.MENG_SPRING_BREAKDOWN_MIN <= breakdown_pct <= dynamic_max_breakdown):
+                    continue
                 for j in range(i+1, min(i+max_recovery_days+1, len(df))):
                     if df['Close'].iloc[j] > support_level:
                         vol_ratio = df['Volume'].iloc[j] / breakdown_vol if breakdown_vol > 0 else 1
-                        if vol_ratio < t.MENG_SPRING_VOL_RATIO: continue
+                        if vol_ratio < t.MENG_SPRING_VOL_RATIO:
+                            continue
                         
                         # 计算收回日收盘在日内振幅中的位置 (0=最低, 1=最高)
                         bar_range = df['High'].iloc[j] - df['Low'].iloc[j]
@@ -138,20 +149,21 @@ class MengReversalDetector(BaseDetector):
                         v_ma = df['Volume'].rolling(20).mean().iloc[i] if i >= 20 else breakdown_vol
                         
                         signal = self._build_spring_signal(
-                            df.index[j], breakdown_price, support_level, df['Close'].iloc[j], 
-                            j - i, vol_ratio, close_position, breakdown_pct,
-                            recovery_velocity, breakdown_velocity, is_high_speed,
-                            breakdown_vol, v_ma, float(df['High'].iloc[j])
+                            df.index[j], float(breakdown_price), float(support_level), float(df['Close'].iloc[j]), 
+                            int(j - i), float(vol_ratio), float(close_position), float(breakdown_pct),
+                            float(recovery_velocity), float(breakdown_velocity), bool(is_high_speed),
+                            float(breakdown_vol), float(v_ma), float(df['High'].iloc[j])
                         )
                         self._track_spring_status(signal)
                         signals.append(signal)
                         break
-        if not signals: return {"detected": False, "reason": "no_valid_spring_found"}
+        if not signals:
+            return {"detected": False, "reason": "no_valid_spring_found"}
         latest_spring = signals[-1]
         latest_spring["confidence"] = round(latest_spring["confidence"], 2)
         return {"detected": True, "signals": signals, "latest_spring": latest_spring, "method": "meng_hongtao_5_filters", "description": "孟洪涛5重过滤Spring检测"}
 
-    def _build_spring_signal(self, idx, breakdown_price, support_level, close_price, recovery_days, vol_ratio, close_position, breakdown_pct, recovery_vel=0, breakdown_vel=0, is_high_speed=False, b_vol=0, v_ma=0, recovery_high=0) -> dict:
+    def _build_spring_signal(self, idx, breakdown_price, support_level, close_price, recovery_days, vol_ratio, close_position, breakdown_pct, recovery_vel=0.0, breakdown_vel=0.0, is_high_speed=False, b_vol=0.0, v_ma=0.0, recovery_high=0.0) -> dict:
         # 分类逻辑 (P0: 1-3 号模型)
         vol_to_ma = b_vol / v_ma if v_ma > 0 else 1.0
         if vol_to_ma > 1.5:
@@ -180,7 +192,9 @@ class MengReversalDetector(BaseDetector):
         跟踪 Spring 状态并进行生命周期管理 (P0 #1)
         理论依据：震仓后应快速恢复。若10日不创新高或深度跌破，则为失败。
         """
-        df = self.data
+        if self.data is None:
+            return
+        df = cast(Any, self.data)
         try:
             recovery_date = signal['date']
             recovery_idx = df.index.get_loc(recovery_date)
@@ -227,8 +241,9 @@ class MengReversalDetector(BaseDetector):
 
     def detect_upthrust_enhanced(self) -> Dict:
         """孟洪涛增强版 Upthrust 检测"""
-        if self.data is None or len(self.data) < 20: return {"detected": False, "reason": "insufficient_data"}
-        df = self.data.copy()
+        if self.data is None or len(self.data) < 20:
+            return {"detected": False, "reason": "insufficient_data"}
+        df = cast(Any, self.data).copy()
         atr_series = self._calculate_atr_series(df, 14)
         atr_pct = (atr_series.iloc[-1] / df['Close'].iloc[-1] * 100) if df['Close'].iloc[-1] > 0 else 0
         
@@ -236,8 +251,12 @@ class MengReversalDetector(BaseDetector):
         max_rejection_days = 3 if atr_pct < 1.5 else 4 if atr_pct < 3.0 else 5
         dynamic_max_breakout = 3.0 if atr_pct < 1.5 else 4.0 if atr_pct < 3.0 else 6.0
         
-        highs, lows, closes, volumes, opens = df['High'].values, df['Low'].values, df['Close'].values, df['Volume'].values, df['Open'].values
-        resistance_levels = df['High'].rolling(window=20).max().shift(1).values
+        highs = np.asarray(df['High'])
+        lows = np.asarray(df['Low'])
+        closes = np.asarray(df['Close'])
+        volumes = np.asarray(df['Volume'])
+        opens = np.asarray(df['Open'])
+        resistance_levels = np.asarray(df['High'].rolling(window=20).max().shift(1))
         
         signals, n = [], len(df)
         for i in range(20, n - 5):
@@ -245,18 +264,21 @@ class MengReversalDetector(BaseDetector):
             if highs[i] > res_level:
                 breakout_price, breakdown_vol = highs[i], volumes[i]
                 breakout_pct = (breakout_price - res_level) / res_level * 100
-                if not (0.5 <= breakout_pct <= dynamic_max_breakout): continue
+                if not (0.5 <= breakout_pct <= dynamic_max_breakout):
+                    continue
                 
                 for j in range(i + 1, min(i + max_rejection_days + 1, n)):
                     if closes[j] < res_level:
                         rejection_days, rejection_vol = j - i, volumes[j]
                         vol_ratio = rejection_vol / breakdown_vol if breakdown_vol > 0 else 1.0
-                        if vol_ratio < 1.2: continue
+                        if vol_ratio < 1.2:
+                            continue
                         
                         daily_range = highs[j] - lows[j]
                         # 收盘位置：(High - Close) / Range -> 越靠近低位越好
                         close_position = (highs[j] - closes[j]) / daily_range if daily_range > 0 else 0.5
-                        if close_position < 0.7: continue
+                        if close_position < 0.7:
+                            continue
                         
                         # 速率量化 (Symmetry with Spring)
                         breakout_velocity = breakout_price - res_level
@@ -287,27 +309,39 @@ class MengReversalDetector(BaseDetector):
                         })
                         break
         
-        if not signals: return {"detected": False, "reason": "no_valid_upthrust_found"}
+        if not signals:
+            return {"detected": False, "reason": "no_valid_upthrust_found"}
         latest_ut = signals[-1]
         latest_ut["confidence"] = round(latest_ut["confidence"], 2)
         return {"detected": True, "signals": signals, "latest_upthrust": latest_ut, "method": "meng_hongtao_upthrust", "description": "孟洪涛增强版Upthrust检测"}
 
     def _calculate_upthrust_confidence(self, breakout_pct, rejection_days, vol_ratio, close_position, is_high_speed, ut_type=2):
         score = 0
-        if 1.0 <= breakout_pct <= 3.0: score += 25
-        elif 0.5 <= breakout_pct <= 5.0: score += 15
-        if rejection_days in [1, 2]: score += 25
-        elif rejection_days in [3, 4]: score += 20
-        if vol_ratio >= 1.5: score += 25
-        elif vol_ratio >= 1.2: score += 15
-        if close_position >= 0.8: score += 25
-        elif close_position >= 0.7: score += 15
-        if is_high_speed: score += 15
+        if 1.0 <= breakout_pct <= 3.0:
+            score += 25
+        elif 0.5 <= breakout_pct <= 5.0:
+            score += 15
+        if rejection_days in [1, 2]:
+            score += 25
+        elif rejection_days in [3, 4]:
+            score += 20
+        if vol_ratio >= 1.5:
+            score += 25
+        elif vol_ratio >= 1.2:
+            score += 15
+        if close_position >= 0.8:
+            score += 25
+        elif close_position >= 0.7:
+            score += 15
+        if is_high_speed:
+            score += 15
         else: score -= 10
         
         # 类型加权
-        if ut_type == 3: score += 10 # 3号最强
-        elif ut_type == 1: score -= 5 # 1号需等待测试
+        if ut_type == 3:
+            score += 10 # 3号最强
+        elif ut_type == 1:
+            score -= 5 # 1号需等待测试
         
         return max(0, min(100, score))
 
@@ -349,12 +383,12 @@ class MengReversalDetector(BaseDetector):
         elif vol_ratio >= 1.2:
             score += 15
         
-        # 收盘位置评分（0~1，最优>80%）
-        if close_position >= 0.80:
+        # 收盘位置评分（最优>80%）
+        if close_position >= 0.8:
             score += 25
-        elif close_position >= 0.70:
+        elif close_position >= 0.7:
             score += 20
-        elif close_position >= 0.60:
+        elif close_position >= 0.6:
             score += 15
         
         # 收回速率评分 (P0 优化)
@@ -364,8 +398,10 @@ class MengReversalDetector(BaseDetector):
             score -= 10
         
         # 类型加权
-        if s_type == 3: score += 10
-        elif s_type == 1: score -= 5
+        if s_type == 3:
+            score += 10
+        elif s_type == 1:
+            score -= 5
             
         return max(0, min(100, score))
 
@@ -378,7 +414,7 @@ class MengReversalDetector(BaseDetector):
             return {"detected": False}
             
         # 简化逻辑：最近 5 天的波动率 vs 20 天波动率
-        df = self.data.tail(30).copy()
+        df = cast(Any, self.data).tail(30).copy()
         recent = df.tail(5)
         
         # 计算最高价差
@@ -403,7 +439,7 @@ class MengReversalDetector(BaseDetector):
             if is_bullish_choch or is_bearish_choch:
                 return {
                     "detected": True,
-                    "date": recent.index[-1].strftime('%Y-%m-%d') if hasattr(recent.index[-1], 'strftime') else str(recent.index[-1]),
+                    "date": pd.to_datetime(recent.index[-1]).strftime('%Y-%m-%d'),
                     "type": "CHoCH",
                     "direction": "bullish" if is_bullish_choch else "bearish",
                     "intensity": round(float(recent_range / avg_range), 2),

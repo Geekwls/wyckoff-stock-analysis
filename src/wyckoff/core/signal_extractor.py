@@ -186,8 +186,10 @@ class SignalExtractor:
             if not data or not SignalExtractor._detected(data): continue
 
             # 判断方向供冲突检测
-            if sig_type in ['spring', 'sos', 'lps']: bullish_count += 1
-            elif sig_type in ['upthrust', 'sow', 'lpsy']: bearish_count += 1
+            if sig_type in ['spring', 'sos', 'lps']:
+                bullish_count += 1
+            elif sig_type in ['upthrust', 'sow', 'lpsy']:
+                bearish_count += 1
 
             # 计算该信号的质量因子 (0.5 - 1.2)
             quality_factor = 0.8 # 默认基础分
@@ -212,7 +214,8 @@ class SignalExtractor:
             sig_date = SignalExtractor._get(data, 'date', SignalExtractor._get(latest, 'date'))
             if sig_date:
                 if isinstance(sig_date, str):
-                    try: sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
+                    try:
+                        sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
                     except Exception:
                         pass
 

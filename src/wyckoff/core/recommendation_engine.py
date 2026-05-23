@@ -264,7 +264,8 @@ class RecommendationEngine:
         for key, max_weight in important_signals:
             info = RecommendationEngine._get_attr(events, key, None)
 
-            if not info or not self._get_attr(info, 'detected'): continue
+            if not info or not self._get_attr(info, 'detected'):
+                continue
 
             detected_keys.append(key)
             if key in ('spring', 'sos', 'sow', 'joc', 'fti', 'upthrust', 'utad'):
@@ -316,7 +317,8 @@ class RecommendationEngine:
             sig_date = self._get_signal_attr(info, 'date')
             if sig_date:
                 if isinstance(sig_date, str):
-                    try: sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
+                    try:
+                        sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
                     except Exception:
                         pass
 
@@ -333,7 +335,8 @@ class RecommendationEngine:
 
                     decay = np.exp(-0.693 * max(0, days_ago) / self.thresholds.TIME_DECAY_HALF_LIFE)
                     quality_factor *= decay
-                    if decay < 0.7: reasons.append(f"{key.upper()} 信号已过最佳期 (衰减)")
+                    if decay < 0.7:
+                        reasons.append(f"{key.upper()} 信号已过最佳期 (衰减)")
 
             base_score += max_weight * min(quality_factor, 1.5)
 
@@ -806,7 +809,8 @@ class RecommendationEngine:
 
         # ── Spring 二次测试校验拦截 (未确认时强制做多拦截改签观望) ──
         def _get_latest_spring_detail(sp_obj):
-            if not sp_obj: return None
+            if not sp_obj:
+                return None
             latest = RecommendationEngine._get_attr(sp_obj, 'latest_spring')
             if not latest:
                 signals = RecommendationEngine._get_attr(sp_obj, 'signals', [])
@@ -938,14 +942,16 @@ class RecommendationEngine:
         # 安全获取属性辅助函数
         def _safe_get_stop(p_obj, field):
             stop_obj = getattr(p_obj, 'stop_loss', None) or (p_obj.get('stop_loss') if isinstance(p_obj, dict) else None)
-            if not stop_obj: return 0.0
+            if not stop_obj:
+                return 0.0
             if isinstance(stop_obj, dict):
                 return float(stop_obj.get(field, 0.0))
             return float(getattr(stop_obj, field, 0.0))
 
         def _safe_get_pos(p_obj, field):
             pos_obj = getattr(p_obj, 'position_sizing', None) or (p_obj.get('position_sizing') if isinstance(p_obj, dict) else None)
-            if not pos_obj: return "0%"
+            if not pos_obj:
+                return "0%"
             if isinstance(pos_obj, dict):
                 return str(pos_obj.get(field, "0%"))
             return str(getattr(pos_obj, field, "0%"))
@@ -1172,7 +1178,8 @@ class RecommendationEngine:
         计算交易可执行性得分 (风盈比与距离支撑/阻力位的百分比)
         """
         if direction == "做多":
-            if current_price <= support or current_price >= resistance: return 10.0
+            if current_price <= support or current_price >= resistance:
+                return 10.0
             dist_to_support = (current_price - support) / current_price
             
             # 越接近支撑位得分越高，理想距离在 1-5%
@@ -1180,7 +1187,8 @@ class RecommendationEngine:
                 return round(100.0 * (1.0 - dist_to_support/0.05), 2)
             return 20.0
         else:
-            if current_price >= resistance or current_price <= support: return 10.0
+            if current_price >= resistance or current_price <= support:
+                return 10.0
             dist_to_res = (resistance - current_price) / current_price
             if dist_to_res < 0.05:
                 return round(100.0 * (1.0 - dist_to_res/0.05), 2)

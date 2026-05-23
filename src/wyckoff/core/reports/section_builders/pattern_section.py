@@ -130,8 +130,10 @@ class PatternSection(BaseSectionBuilder):
         s_desc = self._get(latest, 'type_description', f"{s_type}号 Spring")
         status_label = self._get(latest, 'lifecycle_status', 'active')
         status_note = ""
-        if status_label == 'failed': status_note = " (⚠️ 信号已证伪)"
-        elif status_label == 'confirmed': status_note = " (🚀 强势确认)"
+        if status_label == 'failed':
+            status_note = " (⚠️ 信号已证伪)"
+        elif status_label == 'confirmed':
+            status_note = " (🚀 强势确认)"
         
         return f"""
 [YES] 检测到Spring:
