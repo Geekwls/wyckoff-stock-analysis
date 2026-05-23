@@ -58,7 +58,7 @@ class TradingRangeDetector(BaseDetector):
             high = self._phase_high
             low = self._phase_low
             method = "phase_events"
-            return self._build_result(high, low, method)
+            return self._build_result(high, low, method, window=window)
 
         # ---------- 摆动点检测 ----------
         swing_highs = _swing_levels(self.data['High'], kind='high', window=3)
@@ -84,9 +84,9 @@ class TradingRangeDetector(BaseDetector):
             low = recent['Low'].min()
             method = "mechanical"
 
-        return self._build_result(high, low, method)
+        return self._build_result(high, low, method, window=window)
 
-    def _build_result(self, high: float, low: float, method: str) -> Dict:
+    def _build_result(self, high: float, low: float, method: str, window: int = 60) -> Dict:
         range_pct = (high - low) / low if low > 0 else 0
 
         # 使用 ATR 动态计算合理振幅阈值
@@ -199,6 +199,11 @@ class TradingRangeDetector(BaseDetector):
                 absorption_detected = True
                 absorption_score += 1.0  # 放量吸收信号强烈
 
+        duration = min(window, len(self.data))
+        # 记录 TR 窗口起点，供 BreakoutAnalyzer / P&F 只在当前区间之后搜索突破与计数
+        range_start_idx = max(0, len(self.data) - duration)
+        range_start_date = self.data.index[range_start_idx]
+
         return {
             'is_consolidation': is_consolidation,
             'is_broken': is_broken,
@@ -206,8 +211,10 @@ class TradingRangeDetector(BaseDetector):
             'high': high,
             'low': low,
             'range_pct': range_pct,
-            'duration_days': 60,
-            'consolidation_duration_days': 60,
+            'duration_days': duration,
+            'consolidation_duration_days': duration,
+            'range_start_idx': int(range_start_idx),
+            'range_start_date': range_start_date,
             'volume_trend': vol_trend,
             'position': position,
             'current_price': current_price,

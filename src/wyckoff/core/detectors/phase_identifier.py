@@ -292,8 +292,19 @@ class PhaseIdentifier(BaseDetector):
         is_sow = (isinstance(ss_info, _DEM) and ss_info.type_ == 'sow'
                   and getattr(ss_info.data, 'detected', False))
 
+        joc = getattr(events, 'joc', None)
+        is_joc = bool(joc and getattr(joc, 'detected', False))
+
+        # 孟氏理论：Phase D 吸筹突破以 JOC（跃过小溪+回测）为准；
+        # 仅有 Spring+SOS 而无 JOC 时最高 Phase C+，避免过早标为突破期。
+        if is_joc:
+            conf = 0.85
+            if getattr(joc, 'test_detected', False) and getattr(joc, 'test_score', 0) >= 60:
+                conf = 0.90
+            return 'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, conf
+
         if is_spring and is_sos:
-            return 'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, 0.85
+            return 'Accumulation Phase C+ (SOS出现待JOC确认)', WyckoffPhase.PHASE_C, 0.75
         if is_spring:
             return 'Accumulation Phase C (积累期震仓)', WyckoffPhase.PHASE_C, 0.70
         if is_upthrust and is_sow:

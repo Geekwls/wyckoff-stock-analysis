@@ -10,6 +10,7 @@ from .reports.section_builders.signal_section import SignalSection
 from .reports.section_builders.conclusion_section import ConclusionSection
 from .recommendation_engine import RecommendationEngine
 from .enums import MarketEnvironment
+from .signal_extractor import SignalExtractor, set_cached_phase_result
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,75 @@ class WyckoffReportGenerator:
         self.signal_builder = SignalSection(self)
         self.conclusion_builder = ConclusionSection(self)
 
+    def _prepare_analysis_context(self) -> Dict[str, Any]:
+        """
+        单次 identify_phase()，从 events_detected 构建报告上下文（唯一事实源）。
+        VSA / dead_corner 不在 EventsModel 内，仍单独检测一次。
+        """
+        phase_result = self.pattern_detector.identify_phase()
+        set_cached_phase_result(self.pattern_detector, phase_result)
+        ctx = SignalExtractor.build_report_context(phase_result)
+
+        ctx['vsa'] = self.pattern_detector.detect_vsa_menhongtao()
+        ctx['dead_corner'] = self.pattern_detector.detect_dead_corner_breakout()
+
+        market_idx_analyzer = getattr(self.analyzer, '_get_cached_index_analyzer', lambda: None)()
+        market_df = market_idx_analyzer.data if market_idx_analyzer else None
+        ctx['vsa']['rvs'] = self.pattern_detector.detect_rvs(market_df=market_df)
+
+        sos = ctx['sos']
+        sow = ctx['sow']
+        ctx['sos_sow_analysis'] = None
+        if sos.get('detected') and sow.get('detected'):
+            from .sos_sow_analyzer import SOSSOWAnalyzer
+            current_price = self.data['Close'].iloc[-1]
+            ctx['sos_sow_analysis'] = SOSSOWAnalyzer.analyze_sos_sow_conflict(
+                sos, sow, current_price, ctx['trading_range']
+            )
+
+        SignalExtractor.apply_distribution_suppression(ctx, phase_result, symbol=self.symbol)
+
+        return ctx
+
+    def _build_mtf_analysis(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        多周期分析：趋势/共振评分（Analyzer）+ 威科夫信号三级共振（Coordinator）。
+        """
+        from .multi_timeframe_analyzer import MultiTimeframeAnalyzer
+        from .multi_timeframe_coordinator import MultiTimeframeCoordinator
+
+        phase_result = ctx['phase_result']
+        mtf_analyzer = MultiTimeframeAnalyzer(self.data, self.pattern_detector)
+        mtf = mtf_analyzer.analyze_resonance(phase_result=phase_result)
+
+        patterns = SignalExtractor.build_patterns_payload(ctx)
+        signal_type, direction = SignalExtractor.resolve_primary_signal(patterns)
+
+        hourly_data = None
+        fetcher = getattr(self.analyzer, 'data_fetcher', None)
+        if fetcher is not None:
+            try:
+                _, hourly_data = fetcher.fetch_data(self.symbol, '1m', frequency='1h')
+            except Exception as exc:
+                logger.debug(f"报告 MTF 小时线获取跳过: {exc}")
+
+        coord = MultiTimeframeCoordinator.build_from_daily(
+            self.data,
+            hourly_data=hourly_data,
+        )
+        if signal_type == 'none' or direction == 'neutral':
+            mtf['signal_resonance'] = coord.no_signal_resonance()
+        else:
+            try:
+                mtf['signal_resonance'] = coord.verify_signal_resonance(
+                    signal_type, direction, patterns
+                )
+            except Exception as exc:
+                logger.warning(f"Coordinator 信号共振失败: {exc}")
+                mtf['signal_resonance'] = None
+
+        return mtf
+
     def generate_report(self) -> str:
         if self.data is None:
             self.analyzer.fetch_data()
@@ -54,44 +124,26 @@ class WyckoffReportGenerator:
         except Exception as e:
             logger.warning(f"[WIE 3.0 MVP] 微观结构分析失败,继续使用传统流程: {e}")
 
-        # 获取各检测器的结果
-        phase_result = self.pattern_detector.identify_phase()
-        trading_range = self.pattern_detector.detect_trading_range()
-
-        # 模式检测
-        spring = self.pattern_detector.detect_spring_menhongtao()
-        upthrust = self.pattern_detector.detect_upthrust()
-        sos = self.pattern_detector.detect_sos()
-        #  修复：传递trading_range参数给SOW检测
-        sow = self.pattern_detector.detect_sow(trading_range=trading_range)
-        joc = self.pattern_detector.detect_joc_menhongtao()
-        lps = self.pattern_detector.detect_lps(sos, spring, trading_range=trading_range, joc_result=joc)
-        lpsy = self.pattern_detector.detect_lpsy(trading_range=trading_range)
-        ps = self.pattern_detector.detect_preliminary_support()
-        psy = self.pattern_detector.detect_preliminary_supply()
-
-
-        #  新增：SOS-SOW矛盾分析
-        sos_sow_analysis = None
-        if sos.get('detected') and sow.get('detected'):
-            from .sos_sow_analyzer import SOSSOWAnalyzer
-            current_price = self.data['Close'].iloc[-1]
-            sos_sow_analysis = SOSSOWAnalyzer.analyze_sos_sow_conflict(
-                sos, sow, current_price, trading_range
-            )
-
-        # 高级信号
-        fti = self.pattern_detector.detect_fti()
-        vsa = self.pattern_detector.detect_vsa_menhongtao()
-        boring_res = self.pattern_detector.detect_boring_zone()
-        dead_corner = self.pattern_detector.detect_dead_corner_breakout()
-
-        # 集成 RVS 分析 (P2 #5)
-        market_df = None
-        if not market_idx_analyzer:
-            market_idx_analyzer = getattr(self.analyzer, '_get_cached_index_analyzer', lambda: None)()
-        market_df = market_idx_analyzer.data if market_idx_analyzer else None
-        vsa['rvs'] = self.pattern_detector.detect_rvs(market_df=market_df)
+        ctx = self._prepare_analysis_context()
+        phase_result = ctx['phase_result']
+        trading_range = ctx['trading_range']
+        spring = ctx['spring']
+        upthrust = ctx['upthrust']
+        sos = ctx['sos']
+        sow = ctx['sow']
+        lps = ctx['lps']
+        lpsy = ctx['lpsy']
+        joc = ctx['joc']
+        fti = ctx['fti']
+        ps = ctx['ps']
+        psy = ctx['psy']
+        vsa = ctx['vsa']
+        boring_res = ctx['boring_res']
+        dead_corner = ctx['dead_corner']
+        sos_sow_analysis = ctx['sos_sow_analysis']
+        arbitration_result = ctx['arbitration_result']
+        breakout_analysis = ctx['breakout_analysis']
+        events = ctx['events']
 
         # 集成 WIE 3.0 微观结构VSA摘要
         if wie3_market_state and hasattr(self.analyzer, 'wie3_vsa_analyzer') and self.analyzer.wie3_vsa_analyzer:
@@ -116,61 +168,12 @@ class WyckoffReportGenerator:
         market_env_res = getattr(self.analyzer, '_analyze_market_environment', lambda: {})()
         market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
 
-        # 信号质量
-        patterns = self.pattern_detector._collect_all_events()
-        if hasattr(patterns, 'update'):
-            patterns.update({'phase': phase_result.get('phase'), 'boring_zone': boring_res, 'dead_corner_breakout': dead_corner})
-        else:
-            # patterns 是 EventsModel 实例，使用 object.__setattr__ 动态注入属性以保持向后兼容
-            object.__setattr__(patterns, 'phase', phase_result.get('phase'))
-            object.__setattr__(patterns, 'boring_zone', boring_res)
-            object.__setattr__(patterns, 'dead_corner_breakout', dead_corner)
-        quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
+        patterns_payload = SignalExtractor.build_patterns_payload(ctx)
+        quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns_payload, market_env)
 
-        # 跨周期分析
-        from .multi_timeframe_analyzer import MultiTimeframeAnalyzer
-        mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
+        mtf = self._build_mtf_analysis(ctx)
         conflict = self._analyze_conflict(phase_result.get('phase'), mtf)
 
-        #  终极逻辑自检 (Final Sanity Check): 解决"诊断与处方打架"问题
-        is_distribution = 'Distribution' in phase_result.get('phase', '')
-
-        # 获取事件仲裁结果和突破分析（在组装报告前）
-        arbitration_result = None
-        breakout_analysis = None
-        try:
-            if hasattr(self.pattern_detector, 'phase_coordinator'):
-                events = self.pattern_detector.phase_coordinator.collect_all_events()
-                if isinstance(events, dict):
-                    arbitration_result = events.get('arbitration_result')
-                    breakout_analysis = events.get('breakout_analysis')
-                else:
-                    arbitration_result = getattr(events, 'arbitration_result', None)
-                    breakout_analysis = getattr(events, 'breakout_analysis', None)
-        except Exception as e:
-            logger.debug(f"Failed to get arbitration/breakout analysis: {e}")
-
-        #  修复：检查突破覆盖规则 - 如果有向上突破，覆盖派发判断
-        should_suppress_bullish = is_distribution
-        if is_distribution and breakout_analysis:
-            is_broken = trading_range.get('is_broken', False) if isinstance(trading_range, dict) else getattr(trading_range, 'is_broken', False)
-            direction = breakout_analysis.get('direction', '')
-            is_upthrust = breakout_analysis.get('is_upthrust', False)
-
-            # 向上突破 + 非Upthrust = 真实突破，应该否决派发判断
-            if is_broken and direction == 'up' and not is_upthrust:
-                should_suppress_bullish = False
-                logger.info(f"Breakout override: Upward breakout detected, NOT suppressing bullish signals despite Distribution phase for {self.symbol}")
-
-        # 在生成结论前，如果处于派发阶段且无突破覆盖，强制修正做多信号为无效
-        if should_suppress_bullish:
-            # 强制屏蔽做多信号的影响
-            joc['detected'] = False
-            lps['detected'] = False
-            spring['detected'] = False
-            logger.warning(f"Detection contradiction: Distribution phase detected. Bullish signals (JOC/LPS/Spring) suppressed for {self.symbol}.")
-
-        # 组装报告
         report = self.header_builder.build(phase_result, trading_range)
         report += self.evidence_builder.build(phase_result)
         report += self.pattern_builder.build(trading_range, spring, upthrust, sos, sow, lps, lpsy, phase_result.get('phase'), ps=ps, psy=psy)
@@ -201,64 +204,36 @@ class WyckoffReportGenerator:
         except Exception as e:
             logger.warning(f"[WIE 3.0 MVP] 微观结构分析失败, JSON 报告跳过此节点: {e}")
 
-        # 获取各检测器的结果
-        phase_result = self.pattern_detector.identify_phase()
-        trading_range = self.pattern_detector.detect_trading_range()
-
-        # 模式检测
-        spring = self.pattern_detector.detect_spring_menhongtao()
-        upthrust = self.pattern_detector.detect_upthrust()
-        sos = self.pattern_detector.detect_sos()
-        #  修复：传递trading_range参数给SOW检测
-        sow = self.pattern_detector.detect_sow(trading_range=trading_range)
-        joc = self.pattern_detector.detect_joc_menhongtao()
-        lps = self.pattern_detector.detect_lps(sos, spring, trading_range=trading_range, joc_result=joc)
-        lpsy = self.pattern_detector.detect_lpsy(trading_range=trading_range)
-        ps = self.pattern_detector.detect_preliminary_support()
-        psy = self.pattern_detector.detect_preliminary_supply()
-
-
-        # 高级信号
-        fti = self.pattern_detector.detect_fti()
-        vsa = self.pattern_detector.detect_vsa_menhongtao()
-        boring_res = self.pattern_detector.detect_boring_zone()
-        dead_corner = self.pattern_detector.detect_dead_corner_breakout()
+        ctx = self._prepare_analysis_context()
+        phase_result = ctx['phase_result']
+        trading_range = ctx['trading_range']
+        spring = ctx['spring']
+        upthrust = ctx['upthrust']
+        sos = ctx['sos']
+        sow = ctx['sow']
+        lps = ctx['lps']
+        lpsy = ctx['lpsy']
+        joc = ctx['joc']
+        fti = ctx['fti']
+        ps = ctx['ps']
+        psy = ctx['psy']
+        vsa = ctx['vsa']
+        boring_res = ctx['boring_res']
+        dead_corner = ctx['dead_corner']
+        arbitration_result = ctx['arbitration_result']
+        breakout_analysis = ctx['breakout_analysis']
+        events = ctx['events']
 
         # 外部分析
         cause_effect = getattr(self.analyzer, 'calculate_cause_effect', lambda: {})()
         market_env_res = getattr(self.analyzer, '_analyze_market_environment', lambda: {})()
         market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
 
-        # 信号质量
-        patterns = self.pattern_detector._collect_all_events()
-        if hasattr(patterns, 'update'):
-            patterns.update({'phase': phase_result.get('phase'), 'boring_zone': boring_res, 'dead_corner_breakout': dead_corner})
-        else:
-            # patterns 是 EventsModel 实例，使用 object.__setattr__ 动态注入属性以保持向后兼容
-            object.__setattr__(patterns, 'phase', phase_result.get('phase'))
-            object.__setattr__(patterns, 'boring_zone', boring_res)
-            object.__setattr__(patterns, 'dead_corner_breakout', dead_corner)
-        quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns, market_env)
+        patterns_payload = SignalExtractor.build_patterns_payload(ctx)
+        quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns_payload, market_env)
 
-        # 跨周期分析
-        from .multi_timeframe_analyzer import MultiTimeframeAnalyzer
-        mtf = MultiTimeframeAnalyzer(self.data, self.pattern_detector).analyze_resonance()
+        mtf = self._build_mtf_analysis(ctx)
         conflict = self._analyze_conflict(phase_result.get('phase'), mtf)
-
-        # 获取事件仲裁结果和突破分析
-        arbitration_result = None
-        breakout_analysis = None
-        try:
-            if hasattr(self.pattern_detector, 'phase_coordinator'):
-                events = self.pattern_detector.phase_coordinator.collect_all_events()
-                if isinstance(events, dict):
-                    arbitration_result = events.get('arbitration_result')
-                    breakout_analysis = events.get('breakout_analysis')
-                else:
-                    arbitration_result = getattr(events, 'arbitration_result', None)
-                    breakout_analysis = getattr(events, 'breakout_analysis', None)
-        except Exception as e:
-            logger.debug(f"Failed to get arbitration/breakout analysis: {e}")
 
         # 构建JSON结果
         result = {

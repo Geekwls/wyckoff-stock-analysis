@@ -13,7 +13,8 @@ class EventDrivenStateEngine:
     P1.2 重构：新增 batch_update() 向量化方法，避免逐行 Python 循环。
     """
     
-    def __init__(self, ema_alpha: float = 0.2):
+    def __init__(self, ema_alpha: float = 0.2, entropy_degraded_threshold: float = 1.55):
+        self.entropy_degraded_threshold = entropy_degraded_threshold
         self.current_state: str = RegimeState.S0_PANIC_LIQUIDATION.value
         # 初始后验概率 (均匀分布)
         self.state_prob_posterior: Dict[str, float] = {s.value: 1.0/len(RegimeState) for s in RegimeState}
@@ -186,7 +187,7 @@ class EventDrivenStateEngine:
             
             # 计算熵
             entropy = -np.sum(posterior * np.log(posterior + 1e-12))
-            is_degraded = entropy > 1.55
+            is_degraded = entropy > self.entropy_degraded_threshold
             
             dominant_idx = np.argmax(posterior)
             dominant_label = self._state_labels[dominant_idx]
@@ -323,7 +324,7 @@ class EventDrivenStateEngine:
 
         # 5. 判定是否触发置信度降级自保令
         # 6个离散状态的最大可能熵为 ln(6) approx 1.7917
-        is_degraded = (entropy > 1.55)
+        is_degraded = (entropy > self.entropy_degraded_threshold)
 
         # 确定主导状态 (最高概率标签，用于UI展示，但决策层将使用完整概率分布)
         dominant_state = max(self.state_prob_posterior.items(), key=lambda x: x[1])[0]

@@ -156,7 +156,9 @@ class WyckoffAnalyzer:
             self.wie3_rs_engine = RelativeStrengthEngine()
 
             # 6. 事件驱动状态引擎
-            self.wie3_state_engine = EventDrivenStateEngine()
+            self.wie3_state_engine = EventDrivenStateEngine(
+                entropy_degraded_threshold=self.thresholds.STATE_ENTROPY_DEGRADED_THRESHOLD,
+            )
 
             logger.info("[WIE 3.0 MVP] 微观结构引擎初始化完成")
 
@@ -266,7 +268,9 @@ class WyckoffAnalyzer:
             # 6. 状态机推演 (P1.2: 向量化批量更新)
             # 必须重置状态机，确保每次 analyze 都是从先验开始，而不是从上次的脏状态开始
             from .core.state_engine import EventDrivenStateEngine
-            self.wie3_state_engine = EventDrivenStateEngine()
+            self.wie3_state_engine = EventDrivenStateEngine(
+                entropy_degraded_threshold=self.thresholds.STATE_ENTROPY_DEGRADED_THRESHOLD,
+            )
 
             n_rows = len(df_rs)
             
@@ -376,20 +380,29 @@ class WyckoffAnalyzer:
             seq = phase_res.get('sequence_score', {})
             seq_completeness = seq.get('completeness', 0.0) if isinstance(seq, dict) else 0.0
 
-            # 关键事件摘要（轻量版）
+            # 关键事件摘要（轻量版）— 与主链 events_detected 同源
             events_summary = {}
             try:
-                tr = self.pattern_detector.detect_trading_range()
+                from .core.signal_extractor import SignalExtractor, get_events_from_phase
+                events = get_events_from_phase(phase_res)
+                tr = SignalExtractor.get_event_dict(events, 'trading_range')
                 events_summary['trading_range'] = {
-                    'high': tr.get('high'), 'low': tr.get('low'),
-                    'duration_days': tr.get('duration_days')
+                    'high': tr.get('high'),
+                    'low': tr.get('low'),
+                    'duration_days': tr.get('duration_days') or tr.get('consolidation_duration_days'),
                 }
-                sos = self.pattern_detector.sw_detector.detect_sos()
-                events_summary['sos_detected'] = sos.get('detected', False)
-                sow = self.pattern_detector.sw_detector.detect_sow()
-                events_summary['sow_detected'] = sow.get('detected', False)
-                spring = self.pattern_detector.reversal_detector.detect_spring()
-                events_summary['spring_detected'] = spring.get('detected', False)
+                events_summary['sos_detected'] = SignalExtractor._detected(
+                    SignalExtractor.get_event(events, 'sos')
+                )
+                events_summary['sow_detected'] = SignalExtractor._detected(
+                    SignalExtractor.get_event(events, 'sow')
+                )
+                events_summary['spring_detected'] = SignalExtractor._detected(
+                    SignalExtractor.get_event(events, 'spring')
+                )
+                events_summary['joc_detected'] = SignalExtractor._detected(
+                    SignalExtractor.get_event(events, 'joc')
+                )
             except Exception:
                 pass
 

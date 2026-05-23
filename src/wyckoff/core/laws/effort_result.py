@@ -1,5 +1,6 @@
 import logging
 from ...exceptions import InsufficientDataError
+from ..signal_extractor import SignalExtractor, get_events_from_phase, get_cached_phase_result
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,12 @@ class EffortResultMixin:
         if all(interp == "CONFIRMATION" for interp in interpretations):
             overall_assessment = "STRONG_CONFIRMATION"
             wyckoff_guidance = "多时间框架一致确认，趋势可靠性高"
-        elif any(interp in ["DIVERGENCE", "EFFORT_WITHOUT_RESULT"] for interp in interpretations):
+        elif any(
+            interp in ["DIVERGENCE", "EFFORT_WITHOUT_RESULT"]
+            # 检测器会返回 EFFORT_WITHOUT_RESULT_AT_HIGH 等带后缀变体，需前缀匹配
+            or (isinstance(interp, str) and interp.startswith("EFFORT_WITHOUT_RESULT"))
+            for interp in interpretations
+        ):
             overall_assessment = "WARNING_SIGNAL"
             wyckoff_guidance = "检测到努力vs结果背离，建议谨慎或等待确认"
         elif any(interp == "RESULT_WITHOUT_EFFORT" for interp in interpretations):
@@ -294,8 +300,12 @@ class EffortResultMixin:
         if len(self.data) < 5:
             return {"status": "insufficient_data"}
         df = self.data
-        spring = self.pattern_detector.detect_spring() if self.pattern_detector else {}
-        upthrust = self.pattern_detector.detect_upthrust() if self.pattern_detector else {}
+        # 第二定律跟进分析：Spring/Upthrust 结论与主链 events_detected 一致
+        events = get_events_from_phase(
+            get_cached_phase_result(self.pattern_detector) if self.pattern_detector else None
+        )
+        spring = SignalExtractor.get_event_dict(events, 'spring')
+        upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
         out = {"status": "ok", "spring_follow_through": {"tracked": False}, "upthrust_follow_through": {"tracked": False}}
         if spring.get('detected'):
             c0, c1 = df.iloc[-2], df.iloc[-1]
@@ -327,7 +337,7 @@ class EffortResultMixin:
         """获取当前Phase上下文用于增强努力vs结果分析"""
         try:
             if self.pattern_detector:
-                phase_result = self.pattern_detector.identify_phase()
+                phase_result = get_cached_phase_result(self.pattern_detector)
                 if isinstance(phase_result, dict):
                     return phase_result.get('phase', 'Unknown')
                 return str(phase_result) if phase_result else 'Unknown'

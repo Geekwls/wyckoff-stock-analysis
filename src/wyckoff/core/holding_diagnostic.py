@@ -5,6 +5,7 @@
 """
 from typing import Dict, List, Optional, Any
 import pandas as pd
+from .signal_extractor import SignalExtractor, get_events_from_phase
 
 
 class HoldingDiagnostic:
@@ -22,15 +23,17 @@ class HoldingDiagnostic:
         price = self.analyzer.data['Close'].iloc[-1]
         pnl = ((price - cost) / cost * 100) if cost and cost > 0 else None
 
-        tr = self.pd.detect_trading_range()
         phase_res = self.pd.identify_phase()
-        spring_res = self.pd.detect_spring()
-        sos_res = self.pd.detect_sos()
-        joc_res = self.pd.detect_joc_menhongtao()
+        # 与报告主链同源：从 events_detected 读取，不再独立 detect_spring（classic）
+        events = get_events_from_phase(phase_res)
+        tr = SignalExtractor.get_event_dict(events, 'trading_range')
+        spring_res = SignalExtractor.get_event_dict(events, 'spring')
+        sos_res = SignalExtractor.get_event_dict(events, 'sos')
+        lps_res = SignalExtractor.get_event_dict(events, 'lps')
+        lpsy_res = SignalExtractor.get_event_dict(events, 'lpsy')
+
         spring = spring_res.get('detected', False)
         sos = sos_res.get('detected', False)
-        lps_res = self.pd.detect_lps(sos_res, spring_res, trading_range=tr, joc_result=joc_res)
-        lpsy_res = self.pd.detect_lpsy(trading_range=tr)
 
         ma20 = self.analyzer.data['MA20'].iloc[-1] if 'MA20' in self.analyzer.data.columns else None
         ma50 = self.analyzer.data['MA50'].iloc[-1] if 'MA50' in self.analyzer.data.columns else None

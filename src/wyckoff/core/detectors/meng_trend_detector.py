@@ -115,6 +115,40 @@ class MengTrendDetector(BaseDetector):
         # 水平兜底：取过滤高点的算术均值
         return float(np.mean([item[0] for item in filtered_candidates]))
 
+    def _is_valid_joc_test_bar(
+        self, low: float, close: float, vol: float, vol_ma: float, creek_level: float
+    ) -> bool:
+        """
+        孟氏 Test of JOC：缩量回测 Creek 价格带，且收盘重新站稳小溪附近。
+        """
+        if creek_level <= 0:
+            return False
+        band = self.thresholds.JOC_TEST_BAND
+        vol_ratio = vol / vol_ma if vol_ma > 0 else 1.0
+        low_lower = creek_level * (1 - band)
+        low_upper = creek_level * (1 + band)
+        in_test_band = low_lower <= low <= low_upper
+        close_reclaimed = close >= creek_level * (1 - band * 0.5)
+        vol_shrunk = vol_ratio <= self.thresholds.JOC_TEST_VOL_RATIO
+        return in_test_band and close_reclaimed and vol_shrunk
+
+    def _finalize_joc_test(
+        self, low, close, open_, high, vol, vol_ma, creek_level, prev_body_pct
+    ):
+        """评估单根 K 线是否为有效 JOC 回测，并返回 test 字段。"""
+        if not self._is_valid_joc_test_bar(low, close, vol, vol_ma, creek_level):
+            return False, 0, None, None
+
+        t_score, t_quality = self._calculate_joc_test_quality(
+            close, open_, high, low, vol, vol_ma, creek_level, prev_body_pct
+        )
+        min_score = getattr(self.thresholds, 'JOC_TEST_MIN_SCORE', 60.0)
+        if t_score < min_score:
+            return False, 0, None, None
+
+        test_vol_ratio = float(vol / vol_ma) if vol_ma > 0 else 1.0
+        return True, t_score, t_quality, test_vol_ratio
+
     def detect_joc_enhanced(self) -> Dict:
         """孟洪涛增强版 JOC 检测"""
         if USE_VECTORIZED:
@@ -192,29 +226,23 @@ class MengTrendDetector(BaseDetector):
         signals, n = [], len(df)
         for i in indices:
             test_detected, test_date, test_vol_ratio = False, None, None
+            test_score, test_quality = 0, None
             end = min(i + 11, n)
             if end > i + 1:
-                t_lows, t_closes, t_vols = lows[i+1:end], closes[i+1:end], volumes[i+1:end]
-                # 孟洪涛理论：回测可以短暂跌破小溪，只要快速收回即可
-                hits = (t_lows < creek_levels[i] * 1.02) & ((t_vols / vol_ma20_s[i]) < 1.0 if vol_ma20_s[i] > 0 else False)
-                hit_idx = np.where(hits)[0]
-                if len(hit_idx) > 0:
-                    fh = hit_idx[0] + i + 1
-                    test_detected = True
-                    test_date = df.index[fh]
-                    test_vol_ratio = float(volumes[fh] / vol_ma20_s[fh]) if vol_ma20_s[fh] > 0 else 1.0
-                    
-                    # 细化回测质量评分
-                    prev_close = closes[fh-1] if fh > 0 else closes[fh]
-                    prev_open = opens[fh-1] if fh > 0 else opens[fh]
+                for fh in range(i + 1, end):
+                    prev_close = closes[fh - 1] if fh > 0 else closes[fh]
+                    prev_open = opens[fh - 1] if fh > 0 else opens[fh]
                     prev_body_pct = abs(prev_close - prev_open) / prev_close * 100 if prev_close > 0 else 0
-                    
-                    t_score, t_quality = self._calculate_joc_test_quality(
-                        closes[fh], opens[fh], highs[fh], lows[fh], 
+                    td, t_score, t_quality, tvr = self._finalize_joc_test(
+                        lows[fh], closes[fh], opens[fh], highs[fh],
                         volumes[fh], vol_ma20_s[fh], creek_levels[i], prev_body_pct
                     )
-                    test_score = t_score
-                    test_quality = t_quality
+                    if td:
+                        test_detected = True
+                        test_date = df.index[fh]
+                        test_vol_ratio = tvr
+                        test_score = t_score
+                        break
             signals.append({
                 "date": df.index[i], "creek_level": float(creek_levels[i]), "close_price": float(closes[i]), "breakout_pct": round(float(price_changes[i]), 2),
                 "volume_ratio": round(float(volume_ratios[i]), 2), "close_position": round(float(close_positions[i]) * 100, 1),
@@ -286,24 +314,19 @@ class MengTrendDetector(BaseDetector):
                 
                 td, tdt, tvr = False, None, None
                 test_score, test_quality = 0, None
-                for j in range(i+1, min(i+11, len(df))):
-                    #  修复#5: 回测检测逻辑优化 - 允许短暂跌破后收回
-                    if df['Low'].iloc[j] < current_creek * 1.02:
-                        tvr_curr = df['Volume'].iloc[j] / vol_ma20_s[j] if vol_ma20_s[j] > 0 else 1.0
-                        if tvr_curr < 1.0:
-                            td, tdt, tvr = True, df.index[j], tvr_curr
-                            fh = j
-                            prev_close = df['Close'].iloc[fh-1] if fh > 0 else df['Close'].iloc[fh]
-                            prev_open = df['Open'].iloc[fh-1] if fh > 0 else df['Open'].iloc[fh]
-                            prev_body_pct = abs(prev_close - prev_open) / prev_close * 100 if prev_close > 0 else 0
-                            
-                            t_score, t_quality = self._calculate_joc_test_quality(
-                                df['Close'].iloc[fh], df['Open'].iloc[fh], df['High'].iloc[fh], df['Low'].iloc[fh], 
-                                df['Volume'].iloc[fh], vol_ma20_s[fh], current_creek, prev_body_pct
-                            )
-                            test_score = t_score
-                            test_quality = t_quality
-                            break
+                for j in range(i + 1, min(i + 11, len(df))):
+                    prev_close = df['Close'].iloc[j - 1] if j > 0 else df['Close'].iloc[j]
+                    prev_open = df['Open'].iloc[j - 1] if j > 0 else df['Open'].iloc[j]
+                    prev_body_pct = abs(prev_close - prev_open) / prev_close * 100 if prev_close > 0 else 0
+                    td, t_score, t_quality, tvr = self._finalize_joc_test(
+                        df['Low'].iloc[j], df['Close'].iloc[j], df['Open'].iloc[j], df['High'].iloc[j],
+                        df['Volume'].iloc[j], vol_ma20_s[j], current_creek, prev_body_pct
+                    )
+                    if td:
+                        tdt = df.index[j]
+                        test_score = t_score
+                        test_quality = t_quality
+                        break
                             
                 signals.append({
                     "date": df.index[i], "creek_level": float(current_creek), "close_price": float(df['Close'].iloc[i]), "breakout_pct": round(price_change, 2),
@@ -345,11 +368,14 @@ class MengTrendDetector(BaseDetector):
         elif close_position >= t.JOC_CLOSE_POSITION:
             score += 15
 
-        # 回测权重提升
-        if has_test:
-            score += 25
+        # 回测权重：仅高质量 Test of JOC 才加分
+        min_test_score = getattr(t, 'JOC_TEST_MIN_SCORE', 60.0)
+        if has_test and test_score >= min_test_score:
+            score += 20
             if test_score >= 80:
-                score += 10  # 高质量回测额外加分
+                score += 10
+        elif has_test and test_score >= 40:
+            score += 8
 
         return min(100, score)
 

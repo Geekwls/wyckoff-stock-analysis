@@ -31,6 +31,16 @@ class TestDataFetcherRefactoring(unittest.TestCase):
         self.assertEqual(info.normalized, "BTC-USDT")
         self.assertEqual(info.source, "yfinance")
 
+    def test_symbol_resolver_us_hyphen_ticker(self):
+        info = self.fetcher.resolver.resolve("BRK-B")
+        self.assertEqual(info.market, MarketType.US_STOCK)
+        self.assertEqual(info.normalized, "BRK-B")
+
+    def test_symbol_resolver_btc_usd_crypto(self):
+        info = self.fetcher.resolver.resolve("BTC-USD")
+        self.assertEqual(info.market, MarketType.CRYPTO)
+        self.assertEqual(info.normalized, "BTC-USD")
+
     def test_symbol_resolver_hk_stock(self):
         info = self.fetcher.resolver.resolve("0700.HK")
         self.assertEqual(info.market, MarketType.HK_STOCK)

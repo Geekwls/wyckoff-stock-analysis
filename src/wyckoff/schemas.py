@@ -79,6 +79,8 @@ class TradingRangeModel(BaseModel):
     volume_trend: str = Field(default="neutral", description="成交量趋势")
     position: float = Field(description="当前价格在区间中的位置")
     current_price: float = Field(description="当前价格")
+    range_start_idx: Optional[int] = Field(default=None, description="当前TR窗口在数据中的起始索引")
+    range_start_date: Optional[Any] = Field(default=None, description="当前TR窗口起始日期")
 
 
 class ClimaxModel(BaseModel):

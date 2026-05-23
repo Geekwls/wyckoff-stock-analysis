@@ -15,6 +15,7 @@ from ..core.recommendation_engine import RecommendationEngine
 from ..core.enums import MarketEnvironment
 from ..core.utils import PhaseAdapter
 from ..core.cache_service import IndexDataCache
+from ..core.signal_extractor import set_cached_phase_result
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,7 @@ class ScreenerService:
             
             # 从 identify_phase 结果中提取事件
             phase_res = analyzer.pattern_detector.identify_phase()
+            set_cached_phase_result(analyzer.pattern_detector, phase_res)
             events = phase_res.get('events_detected', {})
             
             phase_str = (phase_res.get('phase') or 'Unknown') if isinstance(phase_res, dict) else str(phase_res)

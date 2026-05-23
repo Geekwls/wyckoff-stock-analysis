@@ -231,9 +231,12 @@ class PointAndFigureCalculator:
             return {'count': 0, 'targets': {}}
         
         if known_tr_high is not None and known_tr_low is not None:
+            tr_col_start = kwargs.get('tr_col_start_idx', 0)
+            # 仅统计 TR 形成后的 P&F 列，排除历史同价位旧列对因果目标的干扰
             accumulation_columns_with_idx = [
                 (col, i) for i, col in enumerate(columns)
                 if col['low'] <= known_tr_high and col['high'] >= known_tr_low
+                and col.get('start_idx', 0) >= tr_col_start
             ]
             if not accumulation_columns_with_idx:
                 accumulation_columns_with_idx = [(col, i) for i, col in enumerate(columns[-20:])]
@@ -327,9 +330,12 @@ class PointAndFigureCalculator:
         breakout_direction = 'up' if last_column and last_column['direction'] == 'up' else 'down'
         
         # 关键修复：根据阶段调整目标方向
-        # 派发期的"因"触发向下的"果"
-        # 吸筹期的"因"触发向上的"果"
+        # 派发期的"因"触发向下的"果"；Markup/再吸筹归入吸筹侧，目标向上
         is_distribution = 'distribution' in phase.lower() or '派发' in phase
+        is_accumulation = (
+            not is_distribution
+            and any(k in phase.lower() for k in ('accumulation', 'reaccumulation', '吸筹', 'markup', '上涨'))
+        )
         
         if is_distribution:
             # 派发期：目标从已知TR下沿或积累区下沿开始投射
@@ -343,28 +349,37 @@ class PointAndFigureCalculator:
             base_price = dist_base
             breakout_direction = 'down'
             direction_note = '派发期因果法则：水平准备触发下跌目标'
+        elif is_accumulation:
+            acc_base = known_tr_high if known_tr_high is not None else accumulation_high
+            targets = {
+                'target_1': self._round_by_step(acc_base + base_effect * 1.0, box_size),
+                'target_2': self._round_by_step(acc_base + base_effect * 1.618, box_size),
+                'target_3': self._round_by_step(acc_base + base_effect * 2.618, box_size),
+                'full_target': self._round_by_step(acc_base + base_effect * 3.0, box_size)
+            }
+            base_price = acc_base
+            breakout_direction = 'up'
+            direction_note = '吸筹期因果法则：水平准备触发上涨目标'
+        elif breakout_direction == 'up':
+            acc_base = known_tr_high if known_tr_high is not None else accumulation_high
+            targets = {
+                'target_1': self._round_by_step(acc_base + base_effect * 1.0, box_size),
+                'target_2': self._round_by_step(acc_base + base_effect * 1.618, box_size),
+                'target_3': self._round_by_step(acc_base + base_effect * 2.618, box_size),
+                'full_target': self._round_by_step(acc_base + base_effect * 3.0, box_size)
+            }
+            base_price = acc_base
+            direction_note = '突破方向向上：水平准备触发上涨目标'
         else:
-            # 吸筹期或上涨趋势：使用原始方向
-            if breakout_direction == 'up':
-                acc_base = known_tr_high if known_tr_high is not None else accumulation_high
-                targets = {
-                    'target_1': self._round_by_step(acc_base + base_effect * 1.0, box_size),
-                    'target_2': self._round_by_step(acc_base + base_effect * 1.618, box_size),
-                    'target_3': self._round_by_step(acc_base + base_effect * 2.618, box_size),
-                    'full_target': self._round_by_step(acc_base + base_effect * 3.0, box_size)
-                }
-                base_price = acc_base
-                direction_note = '吸筹期因果法则：水平准备触发上涨目标'
-            else:
-                dist_base = known_tr_low if known_tr_low is not None else accumulation_low
-                targets = {
-                    'target_1': self._round_by_step(dist_base - base_effect * 1.0, box_size),
-                    'target_2': self._round_by_step(dist_base - base_effect * 1.618, box_size),
-                    'target_3': self._round_by_step(dist_base - base_effect * 2.618, box_size),
-                    'full_target': self._round_by_step(dist_base - base_effect * 3.0, box_size)
-                }
-                base_price = dist_base
-                direction_note = '吸筹期因果法则：水平准备触发下跌目标'
+            dist_base = known_tr_low if known_tr_low is not None else accumulation_low
+            targets = {
+                'target_1': self._round_by_step(dist_base - base_effect * 1.0, box_size),
+                'target_2': self._round_by_step(dist_base - base_effect * 1.618, box_size),
+                'target_3': self._round_by_step(dist_base - base_effect * 2.618, box_size),
+                'full_target': self._round_by_step(dist_base - base_effect * 3.0, box_size)
+            }
+            base_price = dist_base
+            direction_note = '突破方向向下：水平准备触发下跌目标'
         
         return {
             'horizontal_count': horizontal_count,
@@ -466,7 +481,8 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
                                     reversal_boxes: int = 3,
                                     phase: str = '',
                                     known_tr_high: float = None,
-                                    known_tr_low: float = None) -> Dict:
+                                    known_tr_low: float = None,
+                                    tr_col_start_idx: int = None) -> Dict:
     """
     基于点数图计算威科夫因果效应（便捷函数）
 
@@ -491,11 +507,16 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
     dynamic_threshold = calculator.get_dynamic_pnf_threshold(data)
 
     pnf_data = calculator.calculate_pnf(data)
+    count_kwargs: Dict = {
+        'data': data,
+        'dynamic_threshold': dynamic_threshold,
+    }
+    if tr_col_start_idx is not None:
+        count_kwargs['tr_col_start_idx'] = int(tr_col_start_idx)
     result = calculator.calculate_horizontal_count(
         pnf_data, phase=phase,
         known_tr_high=known_tr_high, known_tr_low=known_tr_low,
-        data=data,  # 传入原始 DataFrame
-        dynamic_threshold=dynamic_threshold  # 传入动态阈值
+        **count_kwargs,
     )
     
     pnf_method = result.get('_pnf_method', 'auto_detect')

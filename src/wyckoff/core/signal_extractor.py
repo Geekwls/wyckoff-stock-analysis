@@ -2,12 +2,61 @@
 信号提取工具类
 用于从事件检测结果中提取和验证信号
 """
-from typing import Dict, Any, Optional, List
+import logging
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import numpy as np
 from ..config.settings import WyckoffThresholds
 from .enums import WyckoffPhase
 from .utils import PhaseAdapter
+
+logger = logging.getLogger(__name__)
+
+
+# ── 单一事实源（Single Source of Truth）辅助函数 ─────────────────────
+# 报告 / 三大定律 / 轻量 JSON / 批量筛选 均通过以下工具读取
+# PhaseCoordinator.collect_all_events() → identify_phase()['events_detected']，
+# 禁止在下游重复调用 detect_spring / detect_sos 等独立检测路径。
+
+
+def event_to_dict(obj: Any, default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """将 Pydantic 模型或 dict 统一转为 dict，供报告/定律层读取。"""
+    if obj is None:
+        return default if default is not None else {'detected': False}
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, 'model_dump'):
+        return obj.model_dump()
+    if hasattr(obj, 'dict'):
+        return obj.dict()
+    return default if default is not None else {'detected': False}
+
+
+def get_events_from_phase(phase_result: Any) -> Any:
+    """从 identify_phase() 结果中提取 EventsModel（或兼容 dict）。"""
+    if phase_result is None:
+        return None
+    if isinstance(phase_result, dict):
+        return phase_result.get('events_detected')
+    return getattr(phase_result, 'events_detected', None)
+
+
+def get_cached_phase_result(pattern_detector: Any) -> Any:
+    """读取 pattern_detector 上缓存的 identify_phase 结果，避免定律/报告重复检测。"""
+    if pattern_detector is None:
+        return None
+    cached = getattr(pattern_detector, '_cached_phase_result', None)
+    if cached is not None:
+        return cached
+    result = pattern_detector.identify_phase()
+    pattern_detector._cached_phase_result = result
+    return result
+
+
+def set_cached_phase_result(pattern_detector: Any, phase_result: Any) -> None:
+    """报告主链写入 phase 缓存，供三大定律等下游复用。"""
+    if pattern_detector is not None:
+        pattern_detector._cached_phase_result = phase_result
 
 
 class SignalExtractor:
@@ -283,3 +332,258 @@ class SignalExtractor:
     def is_late_stage(phase_enum: WyckoffPhase) -> bool:
         """判断是否为后期阶段 (C/D)"""
         return PhaseAdapter.is_late_stage(phase_enum)
+
+    @classmethod
+    def get_event(cls, events: Any, key: str, default: Any = None) -> Any:
+        """从 EventsModel 或 dict 读取单个事件字段。"""
+        if events is None:
+            return default
+        return cls._get(events, key, default)
+
+    @classmethod
+    def get_event_dict(cls, events: Any, key: str) -> Dict[str, Any]:
+        """读取事件并转为 dict 视图；将 latest/latest_spring 字段提升到顶层供报告/评分读取。"""
+        event_dict = event_to_dict(cls.get_event(events, key))
+        # P0 契约修复：SOS/SOW/Spring 模型化后核心字段在 latest 内，需扁平化避免评分/报告读空
+        latest = cls._latest(event_dict)
+        if isinstance(latest, dict):
+            for field, value in latest.items():
+                event_dict.setdefault(field, value)
+        return event_dict
+
+    @classmethod
+    def build_report_context(cls, phase_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        从 identify_phase() 一次性构建报告/JSON 所需事件上下文。
+        所有核心威科夫事件均来自 events_detected，避免重复 detect。
+        """
+        events = get_events_from_phase(phase_result)
+        trading_range = cls.get_event_dict(events, 'trading_range')
+
+        ctx = {
+            'phase_result': phase_result,
+            'events': events,
+            'trading_range': trading_range,
+            'spring': cls.get_event_dict(events, 'spring'),
+            'upthrust': cls.get_event_dict(events, 'upthrust'),
+            'sos': cls.get_event_dict(events, 'sos'),
+            'sow': cls.get_event_dict(events, 'sow'),
+            'lps': cls.get_event_dict(events, 'lps'),
+            'lpsy': cls.get_event_dict(events, 'lpsy'),
+            'joc': cls.get_event_dict(events, 'joc'),
+            'fti': cls.get_event_dict(events, 'fti'),
+            'ps': cls.get_event_dict(events, 'preliminary_support'),
+            'psy': cls.get_event_dict(events, 'preliminary_supply'),
+            'boring_res': cls.get_event_dict(events, 'boring_zone'),
+            'arbitration_result': event_to_dict(cls.get_event(events, 'arbitration_result'), default=None),
+            'breakout_analysis': event_to_dict(cls.get_event(events, 'breakout_analysis'), default=None),
+        }
+        if ctx['arbitration_result'] is None:
+            ctx['arbitration_result'] = None
+        if ctx['breakout_analysis'] is None:
+            ctx['breakout_analysis'] = None
+        return ctx
+
+    @classmethod
+    def suppress_bullish_signals(cls, ctx: Dict[str, Any]) -> None:
+        """派发阶段屏蔽做多信号（就地修改 ctx 中的 dict 视图）。"""
+        for key in ('joc', 'lps', 'spring'):
+            obj = ctx.get(key)
+            if isinstance(obj, dict):
+                obj['detected'] = False
+
+    @classmethod
+    def apply_distribution_suppression(
+        cls,
+        ctx: Dict[str, Any],
+        phase_result: Optional[Dict[str, Any]] = None,
+        *,
+        symbol: Optional[str] = None,
+    ) -> bool:
+        """
+        派发阶段屏蔽做多信号；若已有效向上突破（非 UT）则保留 override。
+        返回 True 表示已执行 suppression。
+        """
+        phase_result = phase_result or ctx.get('phase_result') or {}
+        is_distribution = 'Distribution' in phase_result.get('phase', '')
+        ctx['should_suppress_bullish'] = is_distribution
+
+        breakout_analysis = ctx.get('breakout_analysis')
+        trading_range = ctx.get('trading_range') or {}
+        if is_distribution and breakout_analysis:
+            ba = breakout_analysis if isinstance(breakout_analysis, dict) else event_to_dict(breakout_analysis)
+            is_broken = trading_range.get('is_broken', False)
+            direction = ba.get('direction', '')
+            is_upthrust = ba.get('is_upthrust', False)
+            if is_broken and direction == 'up' and not is_upthrust:
+                ctx['should_suppress_bullish'] = False
+                if symbol:
+                    logger.info(
+                        "Breakout override: upward breakout detected, NOT suppressing bullish signals "
+                        "despite Distribution phase for %s",
+                        symbol,
+                    )
+
+        if ctx['should_suppress_bullish']:
+            cls.suppress_bullish_signals(ctx)
+            if symbol:
+                logger.warning(
+                    "Detection contradiction: Distribution phase detected. "
+                    "Bullish signals (JOC/LPS/Spring) suppressed for %s.",
+                    symbol,
+                )
+            return True
+        return False
+
+    @classmethod
+    def build_scoring_payload(cls, phase_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        构建报告 / orchestrator 共用的评分与交易计划输入。
+        events_detected 经派发 suppression 后与报告展示一致。
+        """
+        ctx = cls.build_report_context(phase_result)
+        cls.apply_distribution_suppression(ctx, phase_result)
+        payload = cls.build_patterns_payload(ctx)
+
+        result: Dict[str, Any] = dict(phase_result)
+        result.update(payload)
+        result['should_suppress_bullish'] = ctx.get('should_suppress_bullish', False)
+        for key in (
+            'joc', 'fti', 'spring', 'upthrust', 'sos', 'sow', 'lps', 'lpsy', 'trading_range',
+        ):
+            if key in ctx:
+                result[key] = ctx[key]
+        return result
+
+    @staticmethod
+    def normalize_confidence(value: Any, default: float = 0.5) -> float:
+        """统一置信度到 0–1（检测器可能返回 0–100 或 total_score）。"""
+        num = SignalExtractor._num(value, default)
+        if num > 1.0:
+            num = num / 100.0
+        return max(0.0, min(1.0, num))
+
+    @classmethod
+    def normalize_event_confidence(cls, event: Any, default: float = 0.5) -> float:
+        """从事件 dict/model 读取并归一化 confidence（含 total_score 回退）。"""
+        if event is None:
+            return default
+        for source in (event, cls._latest(event)):
+            if not source:
+                continue
+            for key in ('confidence', 'total_score'):
+                raw = cls._get(source, key)
+                if raw is not None:
+                    return cls.normalize_confidence(raw, default)
+        return default
+
+    @classmethod
+    def build_patterns_payload(cls, ctx: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        构建与报告展示一致的 patterns_payload。
+        将 ctx 中经 suppression 修改后的事件 dict 覆盖回 events_detected，供评分/交易计划使用。
+        """
+        phase_result = ctx.get('phase_result') or {}
+        events = ctx.get('events')
+        if events is not None and hasattr(events, 'model_dump'):
+            events_dict = events.model_dump()
+        elif isinstance(events, dict):
+            events_dict = dict(events)
+        else:
+            events_dict = {}
+
+        overlay_map = {
+            'spring': 'spring',
+            'upthrust': 'upthrust',
+            'sos': 'sos',
+            'sow': 'sow',
+            'lps': 'lps',
+            'lpsy': 'lpsy',
+            'joc': 'joc',
+            'fti': 'fti',
+            'trading_range': 'trading_range',
+            'boring_res': 'boring_zone',
+        }
+        for ctx_key, events_key in overlay_map.items():
+            val = ctx.get(ctx_key)
+            if isinstance(val, dict):
+                events_dict[events_key] = val
+
+        payload: Dict[str, Any] = {
+            'events_detected': events_dict,
+            'phase': phase_result.get('phase'),
+            'sequence_validation': phase_result.get('sequence_validation'),
+            'boring_zone': ctx.get('boring_res'),
+            'dead_corner_breakout': ctx.get('dead_corner'),
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    @classmethod
+    def resolve_primary_signal(cls, pattern_results: Any) -> Tuple[str, str]:
+        """从 patterns_payload / phase_info 解析主信号类型与方向。"""
+        events = None
+        if isinstance(pattern_results, dict):
+            events = pattern_results.get('events_detected') or pattern_results
+        else:
+            events = pattern_results
+
+        long_chain = ('joc', 'spring', 'sos', 'lps')
+        short_chain = ('fti', 'upthrust', 'sow', 'lpsy')
+
+        for key in long_chain:
+            event = cls.get_event_dict(events, key) if events else {}
+            if not event and isinstance(pattern_results, dict):
+                event = pattern_results.get(key) or {}
+            if cls._detected(event):
+                return key, 'long'
+
+        for key in short_chain:
+            event = cls.get_event_dict(events, key) if events else {}
+            if not event and isinstance(pattern_results, dict):
+                event = pattern_results.get(key) or {}
+            if cls._detected(event):
+                return key, 'short'
+
+        return 'none', 'neutral'
+
+    @classmethod
+    def extract_entry_anchor(cls, pattern_results: Any, direction: str) -> Dict[str, Any]:
+        """
+        从 events_detected 提取小时线/入场锚点（LPS/Creek/LPSY/Ice）。
+        孟氏原则：做多锚定 LPS/JOC Creek，做空锚定 LPSY/FTI 冰层。
+        """
+        events = get_events_from_phase(pattern_results) if isinstance(pattern_results, dict) else pattern_results
+        if events is None and isinstance(pattern_results, dict):
+            events = pattern_results.get('events_detected') or pattern_results
+
+        long_chain = (
+            ('lps', ('support_level', 'price')),
+            ('joc', ('creek_level',)),
+            ('sos', ('breakthrough_level',)),
+        )
+        short_chain = (
+            ('lpsy', ('resistance_level', 'price')),
+            ('fti', ('ice_level',)),
+            ('sow', ('breakdown_level',)),
+        )
+        chain = long_chain if direction == 'long' else short_chain
+
+        for key, fields in chain:
+            event = cls.get_event_dict(events, key) if events else {}
+            if not event and isinstance(pattern_results, dict):
+                event = pattern_results.get(key) or {}
+            if not cls._detected(event):
+                continue
+            latest = cls._latest(event) or event
+            for field in fields:
+                raw = cls._get(latest, field) or cls._get(event, field)
+                level = cls._num(raw, 0.0)
+                if level > 0:
+                    return {
+                        'level': level,
+                        'source': key.upper(),
+                        'field': field,
+                    }
+        return {}

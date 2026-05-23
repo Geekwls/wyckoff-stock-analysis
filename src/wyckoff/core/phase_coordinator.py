@@ -49,9 +49,41 @@ def _normalize_signal_event(data: Dict, required_fields: Tuple[str, ...]) -> Dic
         return normalized
 
     signal = {k: normalized.get(k) for k in required_fields if k in normalized}
-    if all(k in signal and signal[k] is not None for k in required_fields):
+    core = ('date', 'price', 'volume_ratio')
+    # 放宽校验：模型化后 SOS/SOW 可能缺 price_change 等扩展字段，但 latest 核心三元组齐全即可入库
+    if normalized.get('detected') and all(signal.get(k) is not None for k in core if k in required_fields):
         normalized['signals'] = [signal]
         normalized['latest'] = signal
+    return normalized
+
+def _normalize_spring_event(data: Dict) -> Dict:
+    """孟氏 Spring 使用 latest_spring，统一补全 signals/latest_spring。"""
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    signals = list(normalized.get('signals') or [])
+    latest = normalized.get('latest_spring') or normalized.get('latest')
+    if latest and not normalized.get('latest_spring'):
+        normalized['latest_spring'] = latest
+    if signals and not normalized.get('latest_spring'):
+        normalized['latest_spring'] = signals[-1]
+    elif latest and not signals:
+        normalized['signals'] = [latest]
+    return normalized
+
+def _normalize_upthrust_event(data: Dict) -> Dict:
+    """Upthrust 使用 latest_upthrust，统一补全 signals/latest_upthrust。"""
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    signals = list(normalized.get('signals') or [])
+    latest = normalized.get('latest_upthrust') or normalized.get('latest')
+    if latest and not normalized.get('latest_upthrust'):
+        normalized['latest_upthrust'] = latest
+    if signals and not normalized.get('latest_upthrust'):
+        normalized['latest_upthrust'] = signals[-1]
+    elif latest and not signals:
+        normalized['signals'] = [latest]
     return normalized
 
 def _normalize_sos_event(data: Dict) -> Dict:
@@ -137,6 +169,9 @@ class PhaseCoordinator:
 
         boring_zone_res = self.detector.detect_boring_zone()
         choch_res = self.detector.detect_choch()
+
+        spring_res = _normalize_spring_event(spring_res)
+        upthrust_res = _normalize_upthrust_event(upthrust_res) if upthrust_res.get('detected') else upthrust_res
 
         # P1 修复：存储完整Phase A事件(PS→SC/BC→AR→ST)到detector
         phase_a_events = {

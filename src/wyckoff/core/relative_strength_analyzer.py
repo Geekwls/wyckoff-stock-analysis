@@ -30,15 +30,30 @@ class RelativeStrengthAnalyzer:
             rs_ma20 = rs.rolling(20).mean()
             rs_ma50 = rs.rolling(50).mean()
 
+            n = len(common_dates)
             current_rs_ma20 = rs_ma20.iloc[-1]
-            current_rs_ma50 = rs_ma50.iloc[-1]
 
-            if current_rs_ma20 > current_rs_ma50:
-                rs_trend = 'rising'
-            elif current_rs_ma20 < current_rs_ma50:
-                rs_trend = 'falling'
+            if n < 50:
+                if rs_ma20.dropna().shape[0] >= 5:
+                    slope = rs_ma20.iloc[-1] - rs_ma20.iloc[-5]
+                    if slope > 0.001:
+                        rs_trend = 'rising'
+                    elif slope < -0.001:
+                        rs_trend = 'falling'
+                    else:
+                        rs_trend = 'flat'
+                else:
+                    rs_trend = 'insufficient_data'
+                rs_ma_basis = f'ma20_slope (n={n}, insufficient for ma50)'
             else:
-                rs_trend = 'flat'
+                current_rs_ma50 = rs_ma50.iloc[-1]
+                if current_rs_ma20 > current_rs_ma50:
+                    rs_trend = 'rising'
+                elif current_rs_ma20 < current_rs_ma50:
+                    rs_trend = 'falling'
+                else:
+                    rs_trend = 'flat'
+                rs_ma_basis = 'ma20_vs_ma50'
 
             rs_change_20d = (rs.iloc[-1] / rs.iloc[-20] - 1) * 100 if len(rs) >= 20 else 0
 
@@ -60,14 +75,23 @@ class RelativeStrengthAnalyzer:
             divergence_flag = rs_change_20d < -3
             market_confirmed_weak = (b_data['Close'].iloc[-1] / b_data['Close'].iloc[-20] - 1) * 100 < -2
 
+            rs_trend_labels = {
+                'rising': '走强',
+                'falling': '走弱',
+                'flat': '持平',
+                'insufficient_data': '数据不足',
+            }
+            trend_label = rs_trend_labels.get(rs_trend, '未知')
+
             result = {
                 'rs_trend': rs_trend,
                 'rs_value': round(rs.iloc[-1], 6),
                 'rs_change_20d': round(rs_change_20d, 2),
+                'rs_ma_basis': rs_ma_basis,
                 'is_outperforming': rs_trend == 'rising',
                 'divergence_alert': divergence_flag,
                 'short_priority_adjustment': 'decrease' if divergence_flag and not market_confirmed_weak else 'increase' if market_confirmed_weak and rs_trend == 'falling' else 'neutral',
-                'description': f"相对强度{ '走强' if rs_trend == 'rising' else '走弱'}，20日相对涨幅 {round(rs_change_20d, 2)}%"
+                'description': f"相对强度{trend_label}，20日相对涨幅 {round(rs_change_20d, 2)}%"
             }
 
             # 添加异常警告（如果有）

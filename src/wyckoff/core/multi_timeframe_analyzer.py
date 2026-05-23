@@ -2,6 +2,7 @@ import pandas as pd
 from typing import Dict, Optional, Any
 import logging
 from .pattern_detector import WyckoffPatternDetector
+from .signal_extractor import SignalExtractor, get_events_from_phase
 from ..exceptions import PatternDetectionError
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ class MultiTimeframeAnalyzer:
             return 'bearish'
         return 'neutral'
 
-    def analyze_resonance(self) -> Dict:
+    def analyze_resonance(self, phase_result: Optional[Dict] = None) -> Dict:
         """
         🔧 v1.3增强：增强的多时间框架共振分析
 
@@ -99,12 +100,16 @@ class MultiTimeframeAnalyzer:
         3. 量能共振检测
         4. 交易建议生成
         """
-        try:
-            daily_analysis = self.pattern_detector.identify_phase()
-        except Exception as e:
-            logger.warning(f'Failed to identify daily phase for resonance, fallback to unknown: {e}')
-            daily_analysis = {'phase': 'unknown', 'events_detected': {}}
-        daily_events = daily_analysis.get('events_detected', {}) or {}
+        if phase_result is None:
+            try:
+                daily_analysis = self.pattern_detector.identify_phase()
+            except Exception as e:
+                logger.warning(f'Failed to identify daily phase for resonance, fallback to unknown: {e}')
+                daily_analysis = {'phase': 'unknown', 'events_detected': {}}
+        else:
+            daily_analysis = phase_result
+
+        events = get_events_from_phase(daily_analysis) or {}
 
         weekly_resonance = self._check_signal_resonance('weekly')
         monthly_resonance = self._check_signal_resonance('monthly')
@@ -112,25 +117,37 @@ class MultiTimeframeAnalyzer:
         resonance_strength = 0
         resonance_signals = []
 
-        # Spring共振（权重调整）
-        spring_upthrust = daily_events.get('spring_upthrust') if isinstance(daily_events, dict) else getattr(daily_events, 'spring_upthrust', None)
-        spring_type = spring_upthrust.get('_type') if isinstance(spring_upthrust, dict) else getattr(spring_upthrust, 'type_', None)
-        if spring_type == 'spring':
+        # Spring 共振
+        spring = SignalExtractor.get_event_dict(events, 'spring')
+        if SignalExtractor._detected(spring):
             resonance_strength += 1
             resonance_signals.append('daily_spring')
+        else:
+            spring_upthrust = SignalExtractor._get(events, 'spring_upthrust')
+            su_type = SignalExtractor._get(spring_upthrust, '_type') or SignalExtractor._get(spring_upthrust, 'type_')
+            if su_type == 'spring' and SignalExtractor._detected(SignalExtractor._get(spring_upthrust, 'data')):
+                resonance_strength += 1
+                resonance_signals.append('daily_spring')
+
         if weekly_resonance.get('has_spring'):
-            resonance_strength += 2  # 周线Spring权重更高
+            resonance_strength += 2
             resonance_signals.append('weekly_spring')
         if monthly_resonance.get('has_spring'):
-            resonance_strength += 3  # 月线Spring权重最高
+            resonance_strength += 3
             resonance_signals.append('monthly_spring')
 
-        # SOS共振
-        sos_sow = daily_events.get('sos_sow') if isinstance(daily_events, dict) else getattr(daily_events, 'sos_sow', None)
-        sos_type = sos_sow.get('_type') if isinstance(sos_sow, dict) else getattr(sos_sow, 'type_', None)
-        if sos_type == 'sos':
+        # SOS 共振
+        sos = SignalExtractor.get_event_dict(events, 'sos')
+        if SignalExtractor._detected(sos):
             resonance_strength += 1
             resonance_signals.append('daily_sos')
+        else:
+            sos_sow = SignalExtractor._get(events, 'sos_sow')
+            ss_type = SignalExtractor._get(sos_sow, '_type') or SignalExtractor._get(sos_sow, 'type_')
+            if ss_type == 'sos' and SignalExtractor._detected(SignalExtractor._get(sos_sow, 'data')):
+                resonance_strength += 1
+                resonance_signals.append('daily_sos')
+
         if weekly_resonance.get('has_sos'):
             resonance_strength += 2
             resonance_signals.append('weekly_sos')
@@ -138,14 +155,19 @@ class MultiTimeframeAnalyzer:
             resonance_strength += 3
             resonance_signals.append('monthly_sos')
 
-        # JOC共振（新增）
-        joc_result = self.pattern_detector.detect_joc()
-        if joc_result.get('detected'):
+        # JOC 共振（与主链 events_detected 同源，不再独立 detect_joc）
+        joc = SignalExtractor.get_event_dict(events, 'joc')
+        if SignalExtractor._detected(joc):
             resonance_strength += 1
             resonance_signals.append('daily_joc')
 
         weekly_trend = self.get_weekly_trend()
         monthly_trend = self.get_monthly_trend()
+        # 供报告判断周/月趋势是否冲突（trend_agreement=False 时提示多周期分歧）
+        trend_agreement = (
+            weekly_trend == monthly_trend
+            and weekly_trend in ('bullish', 'bearish')
+        )
 
         #  v1.3增强：更精确的趋势一致性计算
         trend_alignment_score = self._calculate_trend_alignment_enhanced(
@@ -188,9 +210,10 @@ class MultiTimeframeAnalyzer:
             'resonance_level': resonance_level,
             'resonance_strength': round(resonance_strength, 2),
             'resonance_signals': resonance_signals,
-            'daily_phase': daily_analysis.get('phase', 'unknown'),
+            'daily_phase': daily_analysis.get('phase', 'unknown') if isinstance(daily_analysis, dict) else 'unknown',
             'weekly_trend': weekly_trend,
             'monthly_trend': monthly_trend,
+            'trend_agreement': trend_agreement,
             'trend_alignment_score': round(trend_alignment_score, 3),
             'volume_resonance': round(volume_resonance, 3),
             'trading_implication': trading_implication,

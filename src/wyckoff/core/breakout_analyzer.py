@@ -29,6 +29,29 @@ class BreakoutAnalyzer:
         """
         self.data = data
 
+    def _get_tr_scoped_data(self, tr: Dict) -> pd.DataFrame:
+        """仅在当前 TR 窗口形成之后搜索突破，避免全历史同价位误匹配。"""
+        if self.data is None or self.data.empty:
+            return self.data
+
+        start_idx = tr.get('range_start_idx')
+        if start_idx is not None:
+            return self.data.iloc[int(start_idx):]
+
+        start_date = tr.get('range_start_date')
+        if start_date is not None:
+            try:
+                return self.data.loc[start_date:]
+            except (KeyError, TypeError):
+                pass
+
+        duration = tr.get('duration_days') or tr.get('consolidation_duration_days') or 60
+        try:
+            duration = int(duration)
+        except (TypeError, ValueError):
+            duration = 60
+        return self.data.tail(max(duration, 1))
+
     def analyze_breakout(self, trading_range: Dict) -> Dict:
         """
         分析突破质量
@@ -71,9 +94,10 @@ class BreakoutAnalyzer:
         tr_high = tr.get('high', 0)
         tr_low = tr.get('low', 0)
         current_price = tr.get('current_price', 0)
+        scoped = self._get_tr_scoped_data(tr)
 
-        # 找到突破点（首次收盘价高于区间上沿）
-        breakout_data = self.data[self.data['Close'] > tr_high]
+        # 找到突破点（TR 窗口内首次收盘价高于区间上沿）
+        breakout_data = scoped[scoped['Close'] > tr_high]
         if len(breakout_data) == 0:
             return {
                 'is_breakout': True,
@@ -131,9 +155,10 @@ class BreakoutAnalyzer:
         """分析向下突破"""
         tr_low = tr.get('low', 0)
         current_price = tr.get('current_price', 0)
+        scoped = self._get_tr_scoped_data(tr)
 
-        # 找到突破点（首次收盘价低于区间下沿）
-        breakout_data = self.data[self.data['Close'] < tr_low]
+        # 找到突破点（TR 窗口内首次收盘价低于区间下沿）
+        breakout_data = scoped[scoped['Close'] < tr_low]
         if len(breakout_data) == 0:
             return {
                 'is_breakout': True,
@@ -340,7 +365,8 @@ class BreakoutAnalyzer:
         post_breakout_analysis: Dict
     ) -> Dict:
         """计算向上突破的质量评分"""
-        score = 50  # 基础分
+        # P2 修复：从 0 起计分，避免旧版 50 分基底导致弱突破也被判为「中等质量」
+        score = 0
 
         # 成交量贡献（0-30分）
         if vol_analysis['strength'] == 'very_strong':
@@ -443,7 +469,8 @@ class BreakoutAnalyzer:
         rally_test: Dict
     ) -> Dict:
         """计算向下突破的质量评分"""
-        score = 50
+        # P2 修复：与向上突破一致，取消 50 分起步，按实际量能/跟进逐项加分
+        score = 0
 
         # 向下突破时放量是好的（恐慌抛售）
         if vol_analysis['signal'] == 'bearish':

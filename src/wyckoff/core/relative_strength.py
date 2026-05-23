@@ -55,12 +55,14 @@ class RelativeStrengthEngine:
             out_df['idx_high'] = idx_sub['high'].values
             out_df['idx_low'] = idx_sub['low'].values
         else:
-            out_df['idx_close'] = index_df.loc[common_idx, 'close']
-            out_df['idx_vol'] = index_df.loc[common_idx, 'volume']
-            out_df['idx_high'] = index_df.loc[common_idx, 'high']
-            out_df['idx_low'] = index_df.loc[common_idx, 'low']
+            out_df = out_df.loc[common_idx].copy()
+            idx_aligned = index_df.loc[common_idx]
+            out_df['idx_close'] = idx_aligned['close'].values
+            out_df['idx_vol'] = idx_aligned['volume'].values
+            out_df['idx_high'] = idx_aligned['high'].values
+            out_df['idx_low'] = idx_aligned['low'].values
 
-        out_df = out_df.ffill().bfill()
+        out_df = out_df.ffill()
 
         # 2. 计算大盘与个股的对数收益率
         out_df['idx_log_return'] = np.log(out_df['idx_close'] / out_df['idx_close'].shift(1)).fillna(0.0)

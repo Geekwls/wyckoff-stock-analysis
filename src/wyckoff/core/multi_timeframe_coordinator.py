@@ -41,6 +41,39 @@ class MultiTimeframeCoordinator:
             'hourly': None,
         }
 
+    @classmethod
+    def build_from_daily(
+        cls,
+        daily_data: pd.DataFrame,
+        weekly_data: Optional[pd.DataFrame] = None,
+        hourly_data: Optional[pd.DataFrame] = None,
+    ) -> 'MultiTimeframeCoordinator':
+        """从日线数据构建协调器（可选注入周线/小时线）。"""
+        coord = cls()
+        coord.set_timeframe_data('daily', daily_data)
+
+        if weekly_data is not None and len(weekly_data) > 0:
+            coord.set_timeframe_data('weekly', weekly_data)
+        elif daily_data is not None and len(daily_data) >= 40:
+            try:
+                # 无外部周线数据时由日线重采样，保证 Coordinator 三级共振可运行
+                weekly = daily_data.resample('W-FRI').agg({
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
+                    'Close': 'last',
+                    'Volume': 'sum',
+                }).dropna()
+                if len(weekly) >= 20:
+                    coord.set_timeframe_data('weekly', weekly)
+            except Exception as exc:
+                logger.debug(f"周线重采样失败: {exc}")
+
+        if hourly_data is not None and len(hourly_data) > 0:
+            coord.set_timeframe_data('hourly', hourly_data)
+
+        return coord
+
     def set_timeframe_data(self, timeframe: str, data: pd.DataFrame) -> None:
         """
         设置指定时间框架的数据
@@ -54,6 +87,34 @@ class MultiTimeframeCoordinator:
 
         self.timeframes[timeframe] = data
         logger.info(f"多时间框架协调器: 已设置 {timeframe} 数据 ({len(data)} 条)")
+
+    def no_signal_resonance(self) -> Dict:
+        """无明确日线威科夫信号时的共振占位结果。"""
+        weekly_analysis = self._analyze_weekly_trend()
+        return {
+            'has_resonance': False,
+            'resonance_level': 'none',
+            'weekly_trend': weekly_analysis,
+            'daily_signal': {
+                'has_signal': False,
+                'signal_type': 'none',
+                'direction': 'neutral',
+                'signal_quality': 'none',
+                'confidence': 0.0,
+                'note': '无明确日线威科夫信号',
+            },
+            'hourly_entry': {
+                'has_entry': False,
+                'entry_quality': 'none',
+                'note': '跳过小时线入场分析',
+            },
+            'resonance_checks': {
+                'weekly_daily_aligned': False,
+                'daily_hourly_aligned': False,
+                'all_aligned': False,
+            },
+            'recommendation': '无明确日线威科夫信号，跳过三级共振验证。',
+        }
 
     def verify_signal_resonance(self, signal_type: str, direction: str, pattern_results: Optional[Dict] = None) -> Dict:
         """
@@ -79,14 +140,19 @@ class MultiTimeframeCoordinator:
                 'recommendation': str,
             }
         """
+        if signal_type in (None, '', 'none') or direction in (None, '', 'neutral'):
+            return self.no_signal_resonance()
+
         # 获取各时间框架的分析结果
         weekly_analysis = self._analyze_weekly_trend()
         daily_analysis = self._analyze_daily_signal(signal_type, direction, pattern_results)
-        hourly_analysis = self._analyze_hourly_entry(direction)
+        hourly_analysis = self._analyze_hourly_entry(direction, pattern_results)
 
         # 验证共振
         resonance_checks = {
-            'weekly_daily_aligned': self._check_weekly_daily_alignment(weekly_analysis, daily_analysis),
+            'weekly_daily_aligned': self._check_weekly_daily_alignment(
+                weekly_analysis, daily_analysis, direction=direction
+            ),
             'daily_hourly_aligned': self._check_daily_hourly_alignment(daily_analysis, hourly_analysis),
             'all_aligned': False,
         }
@@ -101,7 +167,7 @@ class MultiTimeframeCoordinator:
 
         # 生成建议
         recommendation = self._generate_resonance_recommendation(
-            resonance_level, weekly_analysis, daily_analysis, hourly_analysis
+            resonance_level, weekly_analysis, daily_analysis, hourly_analysis, direction=direction
         )
 
         return {
@@ -254,16 +320,15 @@ class MultiTimeframeCoordinator:
                         break
 
         signal_quality = 'medium'
-        confidence = 50.0
+        confidence_pct = 50.0
         if has_signal and detail:
-            if isinstance(detail, dict):
-                confidence = detail.get('confidence', 50.0)
-            else:
-                confidence = getattr(detail, 'confidence', 50.0)
-            
-            if confidence >= 80:
+            from .signal_extractor import SignalExtractor
+            # 统一 0–100 与 0–1 置信度，避免 MTF 共振档位误判
+            conf_norm = SignalExtractor.normalize_event_confidence(detail)
+            confidence_pct = round(conf_norm * 100, 1)
+            if conf_norm >= 0.8:
                 signal_quality = 'strong'
-            elif confidence >= 50:
+            elif conf_norm >= 0.5:
                 signal_quality = 'medium'
             else:
                 signal_quality = 'weak'
@@ -272,17 +337,29 @@ class MultiTimeframeCoordinator:
         if self.timeframes['daily'] is not None and len(self.timeframes['daily']) > 0:
             current_price = self.timeframes['daily']['Close'].iloc[-1]
 
+        bullish_types = {'joc', 'spring', 'sos', 'lps'}
+        bearish_types = {'fti', 'upthrust', 'sow', 'lpsy'}
+        signal_direction = (
+            'long' if signal_type in bullish_types else
+            'short' if signal_type in bearish_types else direction
+        )
+
         return {
             'has_signal': has_signal,
             'signal_quality': signal_quality,
             'signal_type': signal_type,
+            'direction': signal_direction,
             'current_price': round(current_price, 2),
-            'confidence': confidence,
-            'note': f'日线信号确认: {signal_type.upper()} ({signal_quality}, 置信度:{confidence}%)' if has_signal else '日线信号未确认'
+            'confidence': confidence_pct,
+            'note': f'日线信号确认: {signal_type.upper()} ({signal_quality}, 置信度:{confidence_pct}%)' if has_signal else '日线信号未确认'
         }
 
-    def _analyze_hourly_entry(self, direction: str) -> Dict:
-        """分析小时线入场点"""
+    def _analyze_hourly_entry(
+        self,
+        direction: str,
+        pattern_results: Optional[Dict] = None,
+    ) -> Dict:
+        """分析小时线入场点 — 优先对接日线 LPS/LPSY/JOC/FTI 锚点。"""
         if self.timeframes['hourly'] is None or len(self.timeframes['hourly']) < 24:
             return {
                 'has_entry': False,
@@ -290,50 +367,92 @@ class MultiTimeframeCoordinator:
                 'note': '小时线数据不足'
             }
 
+        from .signal_extractor import SignalExtractor
+
         df = self.timeframes['hourly'].tail(24).copy()
+        current_price = float(df['Close'].iloc[-1])
+        vol_ma = float(df['Volume'].rolling(12).mean().iloc[-1])
+        current_vol = float(df['Volume'].iloc[-1])
+        vol_ratio = current_vol / vol_ma if vol_ma > 0 else 1.0
+        low_volume = vol_ratio < 0.85
 
-        # 检查是否有好的入场点
-        current_price = df['Close'].iloc[-1]
-        recent_low = df['Low'].tail(12).min()
-        recent_high = df['High'].tail(12).max()
-        vol_ma = df['Volume'].rolling(12).mean().iloc[-1]
-        current_vol = df['Volume'].iloc[-1]
+        # 小时线入场优先对接日线威科夫锚点（LPS/Creek/LPSY/Ice），而非纯 MA 回踩
+        anchor = SignalExtractor.extract_entry_anchor(pattern_results, direction) if pattern_results else {}
+        anchor_level = anchor.get('level')
+        anchor_source = anchor.get('source')
 
+        if anchor_level and anchor_level > 0:
+            tolerance = max(anchor_level * 0.015, 0.01)
+            if direction == 'long':
+                near_anchor = abs(current_price - anchor_level) <= tolerance or current_price <= anchor_level * 1.01
+                anchor_note = f'回踩{anchor_source}@{anchor_level:.2f}'
+            else:
+                near_anchor = abs(current_price - anchor_level) <= tolerance or current_price >= anchor_level * 0.99
+                anchor_note = f'反抽{anchor_source}@{anchor_level:.2f}'
+            has_entry = near_anchor and low_volume
+            if has_entry:
+                entry_quality = 'excellent'
+            elif near_anchor:
+                entry_quality = 'good'
+            else:
+                entry_quality = 'fair'
+            return {
+                'has_entry': has_entry,
+                'entry_quality': entry_quality,
+                'current_price': round(current_price, 2),
+                'anchor_level': round(anchor_level, 2),
+                'anchor_source': anchor_source,
+                'volume_ratio': round(vol_ratio, 2),
+                'note': f'小时线{anchor_note}，量比{vol_ratio:.2f}x' + (' ✓ 威科夫入场' if has_entry else '，等待缩量确认'),
+            }
+
+        # 回退：无日线锚点时用近期高低点 + 缩量
+        recent_low = float(df['Low'].tail(12).min())
+        recent_high = float(df['High'].tail(12).max())
         if direction == 'long':
-            # 做多入场点：价格接近支撑且缩量
-            near_support = current_price < recent_low * 1.01
-            low_volume = current_vol < vol_ma * 0.9
+            near_support = current_price <= recent_low * 1.01
             has_entry = near_support and low_volume
-            entry_quality = 'excellent' if has_entry else 'fair'
         else:
-            # 做空入场点：价格接近阻力且缩量
-            near_resistance = current_price > recent_high * 0.99
-            low_volume = current_vol < vol_ma * 0.9
+            near_resistance = current_price >= recent_high * 0.99
             has_entry = near_resistance and low_volume
-            entry_quality = 'excellent' if has_entry else 'fair'
-
+        entry_quality = 'fair' if has_entry else 'unknown'
         return {
             'has_entry': has_entry,
             'entry_quality': entry_quality,
             'current_price': round(current_price, 2),
             'recent_low': round(recent_low, 2),
             'recent_high': round(recent_high, 2),
-            'volume_ratio': round(current_vol / vol_ma, 2) if vol_ma > 0 else 1,
-            'note': f'小时线入场: {entry_quality}' if has_entry else '等待更好的入场点'
+            'volume_ratio': round(vol_ratio, 2),
+            'note': '小时线通用缩量入场' if has_entry else '等待更好的入场点（无日线LPS/LPSY锚点）',
         }
 
-    def _check_weekly_daily_alignment(self, weekly: Dict, daily: Dict) -> bool:
-        """检查周线和日线是否对齐"""
+    def _check_weekly_daily_alignment(
+        self,
+        weekly: Dict,
+        daily: Dict,
+        direction: Optional[str] = None,
+    ) -> bool:
+        """检查周线和日线是否对齐（含方向一致性）。"""
         weekly_dir = weekly.get('direction', 'neutral')
         daily_has_signal = daily.get('has_signal', False)
+        # 除「有信号」外，还要求周线方向与交易方向一致，防止逆大势共振
+        daily_dir = daily.get('direction', direction)
 
         if weekly_dir == 'neutral':
             return daily_has_signal
 
-        return daily_has_signal and (
-            (weekly_dir == 'long' and daily.get('signal_quality') in ['strong', 'medium']) or
-            (weekly_dir == 'short' and daily.get('signal_quality') in ['strong', 'medium'])
-        )
+        if not daily_has_signal:
+            return False
+
+        if weekly_dir in ('long', 'short') and daily_dir in ('long', 'short'):
+            if weekly_dir != daily_dir:
+                return False
+
+        if direction in ('long', 'short') and daily_dir in ('long', 'short'):
+            if direction != daily_dir:
+                return False
+
+        return daily.get('signal_quality') in ['strong', 'medium']
 
     def _check_daily_hourly_alignment(self, daily: Dict, hourly: Dict) -> bool:
         """检查日线和小时线是否对齐"""
@@ -356,7 +475,8 @@ class MultiTimeframeCoordinator:
         level: str,
         weekly: Dict,
         daily: Dict,
-        hourly: Dict
+        hourly: Dict,
+        direction: Optional[str] = None,
     ) -> str:
         """生成基于共振的交易建议"""
         if level == 'strong':
@@ -366,7 +486,7 @@ class MultiTimeframeCoordinator:
             )
         elif level == 'medium':
             missing = []
-            if not self._check_weekly_daily_alignment(weekly, daily):
+            if not self._check_weekly_daily_alignment(weekly, daily, direction=direction):
                 missing.append("周线日线对齐")
             if not self._check_daily_hourly_alignment(daily, hourly):
                 missing.append("日线小时线对齐")

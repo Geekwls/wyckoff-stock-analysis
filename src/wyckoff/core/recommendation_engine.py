@@ -311,7 +311,12 @@ class RecommendationEngine:
                     quality_factor += weights['volume_ratio']
                     reasons.append(f"{key.upper()} 成交量强力确认")
 
-            conf = self._get_signal_attr(info, 'confidence', 0.5)
+            from .signal_extractor import SignalExtractor
+            # P0 修复：confidence 可能是 0–100 分，需归一化后再参与 quality_factor
+            raw_conf = self._get_signal_attr(info, 'confidence', None)
+            if raw_conf is None:
+                raw_conf = self._get_signal_attr(info, 'total_score', 0.5)
+            conf = SignalExtractor.normalize_confidence(raw_conf, 0.5)
             quality_factor += (conf - 0.5) * weights['confidence']
 
             sig_date = self._get_signal_attr(info, 'date')

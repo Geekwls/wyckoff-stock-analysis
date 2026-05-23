@@ -69,6 +69,7 @@ class WyckoffThresholds(BaseModel):
     JOC_CLOSE_POSITION: Annotated[float, Field(description="突破日收盘位置下限（0=最低，1=最高）")] = 0.75
     JOC_TEST_BAND: Annotated[float, Field(description="回测允许偏离小溪位的比例 (±2%)")] = 0.02
     JOC_TEST_VOL_RATIO: Annotated[float, Field(description="回测日量能萎缩阈值（< 均量85%）")] = 0.85
+    JOC_TEST_MIN_SCORE: Annotated[float, Field(description="回测最低质量分，低于此分不计入 test_detected")] = 60.0
     JOC_EXCELLENT_VOLUME_RATIO: Annotated[float, Field(description="优秀量能阈值，用于置信度评分")] = 2.5
     JOC_EXCELLENT_CLOSE_POSITION: Annotated[float, Field(description="优秀收盘位置阈值，用于置信度评分")] = 0.9
     JOC_GOOD_CLOSE_POSITION: Annotated[float, Field(description="良好收盘位置阈值，用于置信度评分")] = 0.8

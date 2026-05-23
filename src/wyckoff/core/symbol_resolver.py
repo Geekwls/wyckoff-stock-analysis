@@ -1,11 +1,15 @@
 import os
 import json
 import logging
+import re
 from enum import Enum
 from typing import Optional, Dict, Any, Tuple
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+_US_HYPHEN_TICKER = re.compile(r'^[A-Z]{1,5}-[A-Z]$')
+_CRYPTO_QUOTE_CURRENCIES = frozenset({'USD', 'USDT', 'USDC', 'BTC', 'ETH', 'EUR', 'GBP', 'JPY'})
 
 class MarketType(str, Enum):
     A_SHARE = "A_SHARE"
@@ -109,15 +113,51 @@ class SymbolResolver:
                 source='yfinance',
                 is_st=is_st
             )
-            
-        # 加密货币逻辑 (如 BTC-USD, ETH/USDT)
-        if '-' in symbol_upper or '/' in symbol_upper or symbol_upper in ['BTC', 'ETH', 'SOL']:
+
+        # 带连字符的美股（如 BRK-B、BF-B）优先于 crypto 判定
+        if _US_HYPHEN_TICKER.match(symbol_upper):
+            return SymbolInfo(
+                original=original,
+                normalized=symbol_upper,
+                market=MarketType.US_STOCK,
+                source='yfinance',
+                is_st=is_st
+            )
+
+        # 加密货币 (如 BTC-USD, ETH/USDT)
+        if '/' in symbol_upper:
             normalized = symbol_upper.replace('/', '-')
-            if '-' not in normalized:
-                normalized += "-USD"
             return SymbolInfo(
                 original=original,
                 normalized=normalized,
+                market=MarketType.CRYPTO,
+                source='yfinance',
+                is_st=is_st
+            )
+
+        if '-' in symbol_upper:
+            parts = symbol_upper.split('-', 1)
+            if len(parts) == 2 and parts[1] in _CRYPTO_QUOTE_CURRENCIES:
+                return SymbolInfo(
+                    original=original,
+                    normalized=symbol_upper,
+                    market=MarketType.CRYPTO,
+                    source='yfinance',
+                    is_st=is_st
+                )
+            if _US_HYPHEN_TICKER.match(symbol_upper):
+                return SymbolInfo(
+                    original=original,
+                    normalized=symbol_upper,
+                    market=MarketType.US_STOCK,
+                    source='yfinance',
+                    is_st=is_st
+                )
+
+        if symbol_upper in ['BTC', 'ETH', 'SOL']:
+            return SymbolInfo(
+                original=original,
+                normalized=f"{symbol_upper}-USD",
                 market=MarketType.CRYPTO,
                 source='yfinance',
                 is_st=is_st

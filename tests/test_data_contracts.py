@@ -130,18 +130,22 @@ class TestSOSContract:
     }
     
     def test_sos_signal_has_required_fields(self):
-        """验证SOS信号包含所有必需字段"""
-        df = _make_test_df()
-        config = WyckoffConfig()
-        thresholds = WyckoffThresholds()
-        detector = StrengthWeaknessDetector(df, config, thresholds)
-        
-        result = detector.detect_sos()
-        
-        if result.get('detected'):
-            actual_fields = set(result.keys())
-            missing_fields = self.REQUIRED_FIELDS - actual_fields
-            assert not missing_fields, f"SOS信号缺少字段: {missing_fields}"
+        """验证SOS 经 normalize 后 signals/latest 保留契约字段"""
+        from src.wyckoff.core.phase_coordinator import _normalize_sos_event
+
+        raw = {
+            'detected': True,
+            'date': '2024-06-01',
+            'price': 105.0,
+            'volume_ratio': 1.8,
+            'price_change': 0.03,
+            'breakthrough_level': {'value': 104.0},
+        }
+        result = _normalize_sos_event(raw)
+        assert result.get('latest') is not None
+        latest = result['latest']
+        missing = self.REQUIRED_FIELDS - set(latest.keys())
+        assert not missing, f"SOS latest 缺少字段: {missing}"
 
 
 class TestSOWContract:
@@ -156,18 +160,22 @@ class TestSOWContract:
     }
     
     def test_sow_signal_has_required_fields(self):
-        """验证SOW信号包含所有必需字段"""
-        df = _make_test_df()
-        config = WyckoffConfig()
-        thresholds = WyckoffThresholds()
-        detector = StrengthWeaknessDetector(df, config, thresholds)
-        
-        result = detector.detect_sow()
-        
-        if result.get('detected'):
-            actual_fields = set(result.keys())
-            missing_fields = self.REQUIRED_FIELDS - actual_fields
-            assert not missing_fields, f"SOW信号缺少字段: {missing_fields}"
+        """验证SOW 经 normalize 后 signals/latest 保留契约字段"""
+        from src.wyckoff.core.phase_coordinator import _normalize_sow_event
+
+        raw = {
+            'detected': True,
+            'date': '2024-06-01',
+            'price': 95.0,
+            'volume_ratio': 1.6,
+            'price_change': -0.04,
+            'breakdown_level': {'value': 96.0},
+        }
+        result = _normalize_sow_event(raw)
+        assert result.get('latest') is not None
+        latest = result['latest']
+        missing = self.REQUIRED_FIELDS - set(latest.keys())
+        assert not missing, f"SOW latest 缺少字段: {missing}"
 
 
 class TestVSAContract:

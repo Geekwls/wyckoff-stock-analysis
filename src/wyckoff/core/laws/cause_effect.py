@@ -4,12 +4,30 @@ from typing import Dict, Optional, Tuple
 from ...exceptions import InsufficientDataError, LawAnalysisError
 from ..point_and_figure import calculate_cause_effect_from_pnf
 from ..weis_wave import WeisWaveGenerator
+from ..signal_extractor import SignalExtractor, get_events_from_phase, get_cached_phase_result
 
 logger = logging.getLogger(__name__)
 
 
 class CauseEffectMixin:
     """第三定律：因果定律"""
+
+    def _pnf_tr_col_start_idx(self) -> int:
+        """P&F 水平计数时限制为当前 TR 窗口内的列。"""
+        try:
+            if not self.pattern_detector:
+                return 0
+            phase_result = get_cached_phase_result(self.pattern_detector)
+            events = get_events_from_phase(phase_result)
+            tr = SignalExtractor.get_event_dict(events, 'trading_range')
+            if tr.get('range_start_idx') is not None:
+                return int(tr['range_start_idx'])
+            tr = self.pattern_detector.detect_trading_range()
+            if tr.get('range_start_idx') is not None:
+                return int(tr['range_start_idx'])
+        except Exception:
+            pass
+        return 0
 
     def analyze_cause_effect_law_enhanced(self) -> dict:
         if self.data is None or len(self.data) < 60:
@@ -182,6 +200,7 @@ class CauseEffectMixin:
         pnf_result = calculate_cause_effect_from_pnf(
             self.data, box_size_pct=1.0, reversal_boxes=3, phase=phase,
             known_tr_high=range_high, known_tr_low=range_low,
+            tr_col_start_idx=self._pnf_tr_col_start_idx(),
         )
         if pnf_result.get('horizontal_count', 0) >= 3:
             targets = pnf_result.get('targets', {})
@@ -317,8 +336,12 @@ class CauseEffectMixin:
         close = recent['Close'].iloc[-1]
         broke_down = close < low
         downside_target_1 = low - width if broke_down else None
-        upthrust = self.pattern_detector.detect_upthrust() if self.pattern_detector and hasattr(self.pattern_detector, 'detect_upthrust') else {}
-        spring = self.pattern_detector.detect_spring() if self.pattern_detector and hasattr(self.pattern_detector, 'detect_spring') else {}
+        # 因果监控路径：读缓存 phase，避免与 identify_phase 结论不一致
+        events = get_events_from_phase(
+            get_cached_phase_result(self.pattern_detector) if self.pattern_detector else None
+        )
+        upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
+        spring = SignalExtractor.get_event_dict(events, 'spring')
         rebound_vol = recent['Volume'].tail(10).mean()
         base_vol = recent['Volume'].head(40).mean()
         weak_rebound = rebound_vol < base_vol * 0.9
@@ -426,6 +449,7 @@ class CauseEffectMixin:
                 pnf_result = calculate_cause_effect_from_pnf(
                     self.data, box_size_pct=1.0, reversal_boxes=3, phase=phase,
                     known_tr_high=trading_range_high, known_tr_low=trading_range_low,
+                    tr_col_start_idx=self._pnf_tr_col_start_idx(),
                 )
                 if pnf_result.get('horizontal_count', 0) >= 3:
                     return {

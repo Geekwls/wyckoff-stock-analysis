@@ -212,6 +212,21 @@ class EventArbitrator:
 
         return signals
 
+    def _signal_confidence(self, sig: Any, default: float = 0.7) -> float:
+        """统一 SOS/SOW 置信度量纲：检测器可能返回 0–100 分或仅给 volume_ratio。"""
+        from .signal_extractor import SignalExtractor
+        raw = self._get_signal_field(sig, 'confidence')
+        if raw is not None:
+            return SignalExtractor.normalize_confidence(raw, default)
+        vol = self._get_signal_field(sig, 'volume_ratio')
+        if vol is not None:
+            # 无量化 confidence 时，用 moderate 阈值 2.5x 作为满分参考回推 0–1
+            return min(float(vol) / 2.5, 1.0)
+        score = self._get_signal_field(sig, 'total_score')
+        if score is not None:
+            return SignalExtractor.normalize_confidence(score, default)
+        return default
+
     def _extract_sos_signals(self, sos: SosModel) -> List[ArbitrationSignal]:
         """提取SOS信号"""
         signals = []
@@ -221,7 +236,7 @@ class EventArbitrator:
                 signal_type='sos',
                 date=self._get_signal_field(sig, 'date'),
                 direction='bullish',
-                confidence=self._get_signal_field(sig, 'confidence', 0.7),
+                confidence=self._signal_confidence(sig, 0.7),
                 strength=self._get_signal_field(sig, 'volume_ratio'),
                 raw_data={'sos': self._dump_signal(sig)}
             ))
@@ -237,7 +252,7 @@ class EventArbitrator:
                 signal_type='sow',
                 date=self._get_signal_field(sig, 'date'),
                 direction='bearish',
-                confidence=self._get_signal_field(sig, 'confidence', 0.7),
+                confidence=self._signal_confidence(sig, 0.7),
                 strength=self._get_signal_field(sig, 'volume_ratio'),
                 raw_data={'sow': self._dump_signal(sig)}
             ))
