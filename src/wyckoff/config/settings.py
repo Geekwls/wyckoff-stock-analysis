@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
-from typing import Dict, Annotated
+from typing import Dict, Annotated, Optional
 
 class ScoringConfig(BaseModel):
     """评分表显式配置"""
@@ -143,6 +143,12 @@ class WyckoffThresholds(BaseModel):
     CLIMAX_SQUAT_CONFIDENCE_BONUS: Annotated[float, Field(description="蹲坐柱联动置信度加成")] = 1.15
     EVR_BREAKDOWN_CLV_THRESHOLD: Annotated[float, Field(description="溃败CLV阈值")] = -0.6
     EVR_BREAKDOWN_EFF_THRESHOLD: Annotated[float, Field(description="溃败效率阈值")] = 0.5
+
+    # ── Searchlight 仲裁阈值 ───────────────────────────────
+    SEARCHLIGHT_BULLISH_PROB_THRESHOLD: Annotated[float, Field(description="遗留派发阶段与 WIE 多头概率冲突阈值")] = 0.55
+    SEARCHLIGHT_BEARISH_PROB_THRESHOLD: Annotated[float, Field(description="遗留吸筹阶段与 WIE 空头概率冲突阈值")] = 0.55
+    SEARCHLIGHT_APS_ABSORPTION_THRESHOLD: Annotated[float, Field(description="遗留派发阶段 APS 吸收/需求主导冲突阈值")] = 8.0
+    WIE3_TRANSITION_MATRIX_PATH: Annotated[Optional[str], Field(description="WIE3 校准转移矩阵 JSON 路径（空则尝试 fixtures/wie3/transition_matrix_default.json）")] = None
 
     def get_volatility_threshold(self, threshold_type: str, volatility_class: str) -> float:
         """获取波动率阈值"""

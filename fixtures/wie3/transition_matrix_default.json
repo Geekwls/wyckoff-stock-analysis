@@ -1,0 +1,79 @@
+{
+  "version": "wie3-calibration-v1",
+  "states": [
+    "S0: Panic Liquidation (恐慌出清)",
+    "S1: Absorption (主力高密持续吸收)",
+    "S2: Neutral Compression (中性换手/时间磨底)",
+    "S3: Demand Emergence (需求萌芽/起跳突破)",
+    "S4: Markup (主升拉升展开)",
+    "S5: Distribution (高位派发)"
+  ],
+  "transition_matrix": {
+    "S0: Panic Liquidation (恐慌出清)": {
+      "S0: Panic Liquidation (恐慌出清)": 0.6507,
+      "S1: Absorption (主力高密持续吸收)": 0.0879,
+      "S2: Neutral Compression (中性换手/时间磨底)": 0.26,
+      "S3: Demand Emergence (需求萌芽/起跳突破)": 0.0004,
+      "S4: Markup (主升拉升展开)": 0.0004,
+      "S5: Distribution (高位派发)": 0.0004
+    },
+    "S1: Absorption (主力高密持续吸收)": {
+      "S0: Panic Liquidation (恐慌出清)": 0.1625,
+      "S1: Absorption (主力高密持续吸收)": 0.275,
+      "S2: Neutral Compression (中性换手/时间磨底)": 0.175,
+      "S3: Demand Emergence (需求萌芽/起跳突破)": 0.1375,
+      "S4: Markup (主升拉升展开)": 0.125,
+      "S5: Distribution (高位派发)": 0.125
+    },
+    "S2: Neutral Compression (中性换手/时间磨底)": {
+      "S0: Panic Liquidation (恐慌出清)": 0.219,
+      "S1: Absorption (主力高密持续吸收)": 0.0378,
+      "S2: Neutral Compression (中性换手/时间磨底)": 0.7046,
+      "S3: Demand Emergence (需求萌芽/起跳突破)": 0.0378,
+      "S4: Markup (主升拉升展开)": 0.0003,
+      "S5: Distribution (高位派发)": 0.0003
+    },
+    "S3: Demand Emergence (需求萌芽/起跳突破)": {
+      "S0: Panic Liquidation (恐慌出清)": 0.1375,
+      "S1: Absorption (主力高密持续吸收)": 0.15,
+      "S2: Neutral Compression (中性换手/时间磨底)": 0.175,
+      "S3: Demand Emergence (需求萌芽/起跳突破)": 0.225,
+      "S4: Markup (主升拉升展开)": 0.175,
+      "S5: Distribution (高位派发)": 0.1375
+    },
+    "S4: Markup (主升拉升展开)": {
+      "S0: Panic Liquidation (恐慌出清)": 0.125,
+      "S1: Absorption (主力高密持续吸收)": 0.125,
+      "S2: Neutral Compression (中性换手/时间磨底)": 0.1625,
+      "S3: Demand Emergence (需求萌芽/起跳突破)": 0.1625,
+      "S4: Markup (主升拉升展开)": 0.275,
+      "S5: Distribution (高位派发)": 0.15
+    },
+    "S5: Distribution (高位派发)": {
+      "S0: Panic Liquidation (恐慌出清)": 0.175,
+      "S1: Absorption (主力高密持续吸收)": 0.125,
+      "S2: Neutral Compression (中性换手/时间磨底)": 0.1625,
+      "S3: Demand Emergence (需求萌芽/起跳突破)": 0.1375,
+      "S4: Markup (主升拉升展开)": 0.15,
+      "S5: Distribution (高位派发)": 0.25
+    }
+  },
+  "meta": {
+    "symbols": [
+      "sh.600519",
+      "sz.000001",
+      "sh.600036",
+      "sz.300750"
+    ],
+    "period": "2y",
+    "label_count": 1936,
+    "per_symbol": {
+      "sh.600519": 484,
+      "sz.000001": 484,
+      "sh.600036": 484,
+      "sz.300750": 484
+    },
+    "smoothing": 0.5,
+    "blend_default": 0.25
+  }
+}

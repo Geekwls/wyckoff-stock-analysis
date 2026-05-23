@@ -13,14 +13,27 @@ class EventDrivenStateEngine:
     P1.2 重构：新增 batch_update() 向量化方法，避免逐行 Python 循环。
     """
     
-    def __init__(self, ema_alpha: float = 0.2, entropy_degraded_threshold: float = 1.55):
+    def __init__(
+        self,
+        ema_alpha: float = 0.2,
+        entropy_degraded_threshold: float = 1.55,
+        transition_matrix: Optional[Dict[str, Dict[str, float]]] = None,
+    ):
         self.entropy_degraded_threshold = entropy_degraded_threshold
         self.current_state: str = RegimeState.S0_PANIC_LIQUIDATION.value
         # 初始后验概率 (均匀分布)
         self.state_prob_posterior: Dict[str, float] = {s.value: 1.0/len(RegimeState) for s in RegimeState}
         
         # 威科夫非对称隐马尔可夫转移矩阵 P(S_t | S_{t-1})
-        self.transition_matrix = {
+        self.transition_matrix = self._build_default_transition_matrix()
+        if transition_matrix:
+            self.set_transition_matrix(transition_matrix)
+        
+        self._rebuild_numpy_transition_matrix()
+
+    @staticmethod
+    def _build_default_transition_matrix() -> Dict[str, Dict[str, float]]:
+        return {
             RegimeState.S0_PANIC_LIQUIDATION.value: {
                 RegimeState.S0_PANIC_LIQUIDATION.value: 0.60,
                 RegimeState.S1_ABSORPTION.value: 0.35,
@@ -70,13 +83,30 @@ class EventDrivenStateEngine:
                 RegimeState.S5_DISTRIBUTION.value: 0.50
             }
         }
-        
-        # P1.2: 构建 numpy 转移矩阵用于向量化运算
+
+    def set_transition_matrix(self, matrix: Dict[str, Dict[str, float]]) -> None:
+        """Replace transition matrix with a calibrated row-stochastic matrix."""
+        labels = [s.value for s in RegimeState]
+        normalized: Dict[str, Dict[str, float]] = {}
+        for from_label in labels:
+            row = matrix.get(from_label) or self.transition_matrix.get(from_label) or {}
+            values = [max(0.0, float(row.get(to_label, 0.0))) for to_label in labels]
+            total = sum(values)
+            if total <= 0:
+                normalized[from_label] = dict(self.transition_matrix[from_label])
+                continue
+            normalized[from_label] = {
+                to_label: values[i] / total for i, to_label in enumerate(labels)
+            }
+        self.transition_matrix = normalized
+        self._rebuild_numpy_transition_matrix()
+
+    def _rebuild_numpy_transition_matrix(self) -> None:
         self._state_labels = [s.value for s in RegimeState]
         self._n_states = len(self._state_labels)
         self._transition_matrix_np = np.zeros((self._n_states, self._n_states))
         self._label_to_idx = {label: i for i, label in enumerate(self._state_labels)}
-        
+
         for i, prev_label in enumerate(self._state_labels):
             for j, curr_label in enumerate(self._state_labels):
                 self._transition_matrix_np[i, j] = self.transition_matrix[prev_label][curr_label]

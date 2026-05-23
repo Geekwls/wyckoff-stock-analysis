@@ -6,7 +6,9 @@ from .pattern_detector import WyckoffPatternDetector
 from .recommendation_engine import RecommendationEngine
 from .point_and_figure import calculate_cause_effect_from_pnf
 from .signal_extractor import SignalExtractor, set_cached_phase_result
-from ..config.settings import WyckoffConfig
+from .searchlight_enrichment import enrich_patterns_with_searchlight
+from .wie3_market_state_service import WIE3MarketStateService
+from ..config.settings import WyckoffConfig, WyckoffThresholds
 from ..exceptions import WyckoffError, DataError, CalculationError
 from .enums import MarketEnvironment
 from .cache_service import CacheService
@@ -19,7 +21,7 @@ class WyckoffOrchestrator:
     负责驱动整个分析生命周期
     """
 
-    def __init__(self, config: WyckoffConfig = None):
+    def __init__(self, config: WyckoffConfig = None, wie3_service: Optional[WIE3MarketStateService] = None):
         self.config = config or WyckoffConfig()
         self.data_fetcher = WyckoffDataFetcher(self.config)
         self.rec_engine = RecommendationEngine(self.config)
@@ -28,6 +30,11 @@ class WyckoffOrchestrator:
             max_size=256,
             ttl_seconds=3600,
         )
+        self.thresholds = getattr(self.config, 'thresholds', None) or WyckoffThresholds()
+        if wie3_service is not None:
+            self._wie3_service = wie3_service
+        else:
+            self._wie3_service = WIE3MarketStateService(self.thresholds)
 
     def run_analysis(self, symbol: str, period: str = "1y") -> Dict[str, Any]:
         """
@@ -58,6 +65,7 @@ class WyckoffOrchestrator:
 
             patterns, detector = self._detect_patterns_and_phase(data)
             patterns = self._enrich_patterns_with_rs(resolved_symbol, period, data, patterns)
+            patterns = self._enrich_patterns_with_searchlight(resolved_symbol, period, data, patterns)
             patterns['symbol'] = resolved_symbol
             market_env = self._analyze_market_env(resolved_symbol, period)
             if isinstance(market_env, dict):
@@ -125,6 +133,37 @@ class WyckoffOrchestrator:
             logger.debug(f"RS enrichment skipped for {symbol}: {exc}")
         return patterns
 
+    def _enrich_patterns_with_searchlight(
+        self,
+        symbol: str,
+        period: str,
+        data: pd.DataFrame,
+        patterns: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Attach Searchlight/WIE arbitration to the orchestrator decision path."""
+        index_df = self._fetch_benchmark_data(symbol, period)
+        return enrich_patterns_with_searchlight(
+            patterns,
+            data,
+            self._wie3_service,
+            self.thresholds,
+            index_df=index_df,
+            resolve_index_df=lambda: self._fetch_benchmark_data(symbol, period),
+        )
+
+    def _fetch_benchmark_data(self, symbol: str, period: str) -> Optional[pd.DataFrame]:
+        try:
+            from .symbol_resolver import SymbolResolver
+
+            index_symbol = SymbolResolver().resolve_benchmark_index(symbol)
+            if not index_symbol:
+                return None
+            _, index_df = self.data_fetcher.fetch_data(index_symbol, period)
+            return index_df
+        except Exception as exc:
+            logger.debug(f"Benchmark fetch skipped for Searchlight ({symbol}): {exc}")
+            return None
+
     def _generate_recommendations(
         self, data: pd.DataFrame, patterns: Dict, market_env: Any, detector,
         mtf_coordinator: Optional[Any] = None
@@ -149,8 +188,20 @@ class WyckoffOrchestrator:
                         f"方向为 {detected_direction}，二者冲突。"
                     )
 
+        if resonance_result:
+            evr = resonance_result.get('evr_resonance') or {}
+            if isinstance(evr, dict):
+                patterns['mtf_evr_resonance'] = evr
+            hourly = resonance_result.get('hourly_entry') or {}
+            intraday = hourly.get('intraday_vsa')
+            if isinstance(intraday, dict) and intraday.get('available'):
+                patterns['intraday_vsa'] = intraday
+
         patterns['mtf_has_conflict'] = has_conflict
         patterns['mtf_conflict_details'] = conflict_details
+
+        symbol = patterns.get('symbol') if isinstance(patterns, dict) else None
+        self.rec_engine.begin_decision_audit(symbol)
 
         quality = self.rec_engine.calculate_signal_quality(data, patterns, market_env)
         targets = self._calculate_targets(detector, patterns)
@@ -166,6 +217,10 @@ class WyckoffOrchestrator:
 
         return quality, trading_plan, risk_advice, resonance_result
 
+    def get_decision_audit(self) -> Dict[str, Any]:
+        """Return strategy decision audit log from the recommendation engine."""
+        return self.rec_engine.get_decision_audit()
+
     def _assemble_result(
         self, symbol: str, data: pd.DataFrame, patterns: Dict,
         market_env: Any, quality: Dict, trading_plan: Dict, risk_advice: Dict,
@@ -178,7 +233,8 @@ class WyckoffOrchestrator:
             "market_env": market_env,
             "quality": quality,
             "trading_plan": trading_plan,
-            "risk_advice": risk_advice
+            "risk_advice": risk_advice,
+            "strategy_decision_audit": self.rec_engine.get_decision_audit(),
         }
         if resonance_result:
             res["resonance"] = resonance_result
@@ -218,6 +274,23 @@ class WyckoffOrchestrator:
         tr_high, tr_low = tr.get('high'), tr.get('low')
         if not tr_high or not tr_low:
             return {}
+
+        if tr.get('invalidated_tr'):
+            direction = tr.get('breakout_direction') or 'unknown'
+            return {
+                'method': 'invalidated_tr',
+                'direction': direction,
+                'target_1': 0.0,
+                'target_2': 0.0,
+                'target_3': 0.0,
+                'full_target': 0.0,
+                'horizontal_count': 0,
+                'base_effect': 0.0,
+                'description': (
+                    f"原TR({float(tr_low):.2f}-{float(tr_high):.2f})已被价格{direction}突破，"
+                    "旧因果目标暂停使用，需等待新交易区间重新形成。"
+                ),
+            }
 
         phase = patterns.get('phase', '')
         scoped = detector.data

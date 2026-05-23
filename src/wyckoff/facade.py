@@ -31,6 +31,7 @@ from .core.signal_extractor import SignalExtractor, get_events_from_phase
 from .core.point_and_figure import PointAndFigureCalculator, calculate_cause_effect_from_pnf
 from .core.sos_sow_analyzer import SOSSOWAnalyzer
 from .core.market_context_analyzer import MarketContextAnalyzer
+from .core.wie3_market_state_service import WIE3MarketStateService
 from .exceptions import (
     WyckoffError, DataError, CalculationError, PatternNotFoundError,
     DataFetchError, InsufficientDataError
@@ -88,8 +89,11 @@ class WyckoffAnalyzer:
             ttl_seconds=3600,
         )
 
-        # 核心编排器
-        self.orchestrator = WyckoffOrchestrator(self.config)
+        # 核心编排器（共享 WIE3 服务实例以复用 memoized 结果）
+        self._wie3_service = WIE3MarketStateService(self.thresholds)
+        self.orchestrator = WyckoffOrchestrator(self.config, wie3_service=self._wie3_service)
+        self.wie3_last_result = None
+        self.wie3_market_state = None  # 存储最新的市场状态
 
         # 运行时数据与探测器 (fetch_data 后初始化)
         self.data = None
@@ -97,15 +101,6 @@ class WyckoffAnalyzer:
         self.law_analyzer = None
         self.mtf_analyzer = None
         self.rs_analyzer = None
-
-        # WIE 3.0 MVP 微观结构引擎 (fetch_data 后初始化)
-        self.wie3_vsa_analyzer = None
-        self.wie3_efficiency_analyzer = None
-        self.wie3_aps_analyzer = None
-        self.wie3_regime_tracker = None
-        self.wie3_rs_engine = None
-        self.wie3_state_engine = None
-        self.wie3_market_state = None  # 存储最新的市场状态
 
         self._index_analyzer_cache: Optional[Union['WyckoffAnalyzer', '_IndexDataWrapper']] = None
 
@@ -122,6 +117,9 @@ class WyckoffAnalyzer:
 
     def fetch_data(self, frequency: str = "1d") -> pd.DataFrame:
         """获取数据并初始化所有探测器"""
+        self._wie3_service.clear_cache()
+        self.wie3_last_result = None
+        self.wie3_market_state = None
         self.symbol, self.data = self.orchestrator.data_fetcher.fetch_data(self.symbol, self.period, frequency=frequency)
         if self.data is not None:
             self.pattern_detector = WyckoffPatternDetector(self.data, self.config, self._analysis_cache)
@@ -131,47 +129,16 @@ class WyckoffAnalyzer:
 
         return self.data
 
-    def _init_wie3_mvp_engines(self):
-        """初始化 WIE 3.0 MVP 微观结构分析引擎"""
-        try:
-            from .core.vsa_analyzer import VSAAnalyzer
-            from .core.expansion_efficiency import ExpansionEfficiencyEngine
-            from .core.aps_engine import APSEngine
-            from .core.regime_tracker import RegimeTracker
-            from .core.relative_strength import RelativeStrengthEngine
-            from .core.state_engine import EventDrivenStateEngine
+    @property
+    def wie3_vsa_analyzer(self):
+        """Backward-compatible accessor for report VSA summary extraction."""
+        return self._wie3_service.vsa_analyzer
 
-            # 1. VSA 微观量价解构
-            self.wie3_vsa_analyzer = VSAAnalyzer()
-
-            # 2. 推动效率引擎 (修补奇点)
-            self.wie3_efficiency_analyzer = ExpansionEfficiencyEngine()
-
-            # 3. APS 吸收动力学引擎
-            self.wie3_aps_analyzer = APSEngine()
-
-            # 4. Regime 追踪与 VPOC 引擎
-            self.wie3_regime_tracker = RegimeTracker()
-
-            # 5. 相对强度引擎 (需要大盘数据)
-            self.wie3_rs_engine = RelativeStrengthEngine()
-
-            # 6. 事件驱动状态引擎
-            self.wie3_state_engine = EventDrivenStateEngine(
-                entropy_degraded_threshold=self.thresholds.STATE_ENTROPY_DEGRADED_THRESHOLD,
-            )
-
-            logger.info("[WIE 3.0 MVP] 微观结构引擎初始化完成")
-
-        except Exception as e:
-            logger.error(f"[WIE 3.0 MVP] 引擎初始化失败: {e}")
-            # 不影响主流程,继续运行
-            self.wie3_vsa_analyzer = None
-            self.wie3_efficiency_analyzer = None
-            self.wie3_aps_analyzer = None
-            self.wie3_regime_tracker = None
-            self.wie3_rs_engine = None
-            self.wie3_state_engine = None
+    def _resolve_wie3_index_df(self) -> Optional[pd.DataFrame]:
+        auto_idx = self._get_cached_index_analyzer()
+        if auto_idx is not None and hasattr(auto_idx, 'data') and auto_idx.data is not None:
+            return auto_idx.data
+        return None
 
     def analyze_wie3_mvp(self, index_df: pd.DataFrame = None) -> Optional['MarketState']:
         """
@@ -187,136 +154,15 @@ class WyckoffAnalyzer:
             logger.warning("[WIE 3.0 MVP] 数据未就绪,跳过微观结构分析")
             return None
 
-        # 惰性加载 (Lazy Initialization): 仅在实际调用时初始化引擎，节约基础扫描时的资源
-        if not self.wie3_vsa_analyzer:
-            self._init_wie3_mvp_engines()
-
-        if not self.wie3_vsa_analyzer:
-            logger.warning("[WIE 3.0 MVP] 引擎初始化失败,跳过微观结构分析")
-            return None
-
         try:
-            # 1. VSA 微观量价解构
-            df_vsa = self.wie3_vsa_analyzer.analyze(self.data)
-            logger.debug("[WIE 3.0 MVP] VSA 分析完成")
-
-            # 2. 推动效率分析
-            df_eff = self.wie3_efficiency_analyzer.analyze(df_vsa)
-            logger.debug("[WIE 3.0 MVP] 推动效率分析完成")
-
-            # 3. APS 吸收动力学分析
-            df_aps = self.wie3_aps_analyzer.analyze(df_eff)
-            logger.debug("[WIE 3.0 MVP] APS 吸收动力学分析完成")
-
-            # 4. Regime 追踪与 VPOC 计算
-            df_regime = self.wie3_regime_tracker.track(df_vsa, df_eff, df_aps)
-            logger.debug("[WIE 3.0 MVP] Regime 追踪与 VPOC 计算完成")
-
-            # 5. 相对强度分析 (如果提供了大盘数据)
-            has_index_data = index_df is not None and not index_df.empty
-            if has_index_data:
-                df_rs = self.wie3_rs_engine.analyze(df_regime, index_df)
-                logger.debug("[WIE 3.0 MVP] 相对强度分析完成")
-            else:
-                # ─────────────────────────────────────────────────────────────
-                # Wave 4 偏差三修正：RS 静默旁路 → 主动警告 + 后台自适应拉取
-                # 原来：无大盘数据时静默将 RS 置为 1.0，等于"雷达关闭但显示无敌机"
-                # 修正：先尝试自适应拉取对应市场的默认指数，再明确警告用户
-                # ─────────────────────────────────────────────────────────────
-                logger.warning(
-                    "[WIE 3.0 MVP] [Wave4-偏差三] 大盘基准数据缺失！"
-                    "RS 引擎正在尝试后台自适应拉取对应市场默认指数..."
-                )
-                # 尝试通过 _get_cached_index_analyzer 自适应拉取
-                auto_index_df = None
-                try:
-                    auto_idx = self._get_cached_index_analyzer()
-                    if auto_idx is not None and hasattr(auto_idx, 'data') and auto_idx.data is not None:
-                        auto_index_df = auto_idx.data
-                        logger.info(
-                            f"[WIE 3.0 MVP] [Wave4] RS 引擎：已自适应拉取大盘数据，"
-                            f"行数={len(auto_index_df)}，RS 分析正常激活。"
-                        )
-                except Exception as _auto_e:
-                    logger.warning(f"[WIE 3.0 MVP] [Wave4] RS 自适应拉取失败: {_auto_e}")
-
-                if auto_index_df is not None and not auto_index_df.empty:
-                    df_rs = self.wie3_rs_engine.analyze(df_regime, auto_index_df)
-                    df_rs['rs_bypass_warning'] = False
-                    logger.debug("[WIE 3.0 MVP] RS 分析（自适应大盘数据）完成")
-                else:
-                    # 自适应拉取仍然失败，进入旁路并设置显式警告标志
-                    logger.warning(
-                        "[WIE 3.0 MVP] [Wave4-偏差三] RS 引擎：大盘数据自适应拉取失败！"
-                        "相对强度分析已强制旁路，liquidity_retention 将置为中性 1.0。"
-                        "请检查网络连接或手动传入 index_df。"
-                    )
-                    df_rs = df_regime.copy()  # 修复 SettingWithCopyWarning 隐患
-                    # 添加默认的相对强度字段（中性兜底）
-                    if 'liquidity_retention' not in df_rs.columns:
-                        df_rs['liquidity_retention'] = 1.0
-                    if 'hidden_strength' not in df_rs.columns:
-                        df_rs['hidden_strength'] = False
-                    if 'hidden_weakness' not in df_rs.columns:
-                        df_rs['hidden_weakness'] = False
-                    # 添加默认字段以供 extract_summary 使用
-                    df_rs['idx_log_return'] = 0.0
-                    df_rs['asset_log_return'] = 0.0
-                    # 设置旁路警告标志，供 report_generator 渲染 [!WARNING]
-                    df_rs['rs_bypass_warning'] = True
-
-
-            # 6. 状态机推演 (P1.2: 向量化批量更新)
-            # 必须重置状态机，确保每次 analyze 都是从先验开始，而不是从上次的脏状态开始
-            from .core.state_engine import EventDrivenStateEngine
-            self.wie3_state_engine = EventDrivenStateEngine(
-                entropy_degraded_threshold=self.thresholds.STATE_ENTROPY_DEGRADED_THRESHOLD,
+            result = self._wie3_service.analyze(
+                self.data,
+                index_df=index_df,
+                resolve_index_df=self._resolve_wie3_index_df,
             )
-
-            n_rows = len(df_rs)
-            
-            # 准备向量化输入数组
-            closes = self.data['Close'].values if 'Close' in self.data.columns else df_rs['close'].values
-            aps_vals = df_aps['aps'].values if 'aps' in df_aps.columns else np.zeros(n_rows)
-            cds_vals = df_regime['cds'].values if 'cds' in df_regime.columns else np.zeros(n_rows)
-            lcs_vals = df_regime['lcs'].values if 'lcs' in df_regime.columns else np.zeros(n_rows)
-            vpocs = df_regime['vpoc_price'].values if 'vpoc_price' in df_regime.columns else np.zeros(n_rows)
-            exp_effs = df_vsa['expansion_efficiency'].values if 'expansion_efficiency' in df_vsa.columns else np.zeros(n_rows)
-            clvs = df_vsa['clv'].values if 'clv' in df_vsa.columns else np.zeros(n_rows)
-            retentions = df_rs['liquidity_retention'].values if 'liquidity_retention' in df_rs.columns else np.ones(n_rows)
-            hs = df_rs['hidden_strength'].values if 'hidden_strength' in df_rs.columns else np.zeros(n_rows, dtype=bool)
-            hw = df_rs['hidden_weakness'].values if 'hidden_weakness' in df_rs.columns else np.zeros(n_rows, dtype=bool)
-            
-            # 处理 event_flag
-            if 'event_flag' in df_regime.columns:
-                event_flags = df_regime['event_flag'].astype(str).tolist()
-            else:
-                event_flags = ['NORMAL'] * n_rows
-            
-            # 处理 timestamps
-            if hasattr(df_rs.index, 'strftime'):
-                timestamps = [str(idx) for idx in df_rs.index]
-            else:
-                timestamps = [str(i) for i in range(n_rows)]
-            
-            # 执行向量化批量更新
-            all_states = self.wie3_state_engine.batch_update(
-                closes, aps_vals, cds_vals, lcs_vals, vpocs,
-                exp_effs, clvs, retentions, hs, hw, event_flags, timestamps
-            )
-            
-            # 取最后一个状态作为最终结果
-            if all_states:
-                self.wie3_market_state = all_states[-1]
-
-            logger.info(
-                f"[WIE 3.0 MVP] 状态机序列推演完成: {self.wie3_market_state.regime} "
-                f"(APS={self.wie3_market_state.aps:.2f}, CDS={self.wie3_market_state.cds}, "
-                f"VPOC={self.wie3_market_state.vpoc_price:.2f}, Entropy={self.wie3_market_state.state_entropy:.4f})"
-            )
-
+            self.wie3_last_result = result
+            self.wie3_market_state = result.market_state if result else None
             return self.wie3_market_state
-
         except (DataError, CalculationError) as e:
             logger.error(f"[WIE 3.0 MVP] 微观结构分析失败: {e}", exc_info=True)
             if not self.config.silent_fail:

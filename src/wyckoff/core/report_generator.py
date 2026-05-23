@@ -11,6 +11,8 @@ from .reports.section_builders.conclusion_section import ConclusionSection
 from .recommendation_engine import RecommendationEngine
 from .enums import MarketEnvironment
 from .signal_extractor import SignalExtractor, set_cached_phase_result
+from ..config.settings import WyckoffThresholds
+from .searchlight_arbitrator import build_searchlight_arbitration
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,7 @@ class WyckoffReportGenerator:
         self.symbol = analyzer.symbol
         self.pattern_detector = getattr(analyzer, 'pattern_detector', None)
         self.rec_engine = getattr(analyzer, 'orchestrator', Any).rec_engine if hasattr(analyzer, 'orchestrator') else RecommendationEngine(self.config)
-        self.thresholds = getattr(analyzer, 'thresholds', None) or {}
+        self.thresholds = getattr(analyzer, 'thresholds', None) or WyckoffThresholds()
 
         # 初始化区块构建器
         self.header_builder = HeaderSection(self)
@@ -68,6 +70,16 @@ class WyckoffReportGenerator:
 
         return ctx
 
+    @classmethod
+    def _jsonable(cls, value: Any) -> Any:
+        if hasattr(value, 'model_dump'):
+            return cls._jsonable(value.model_dump())
+        if isinstance(value, dict):
+            return {key: cls._jsonable(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cls._jsonable(item) for item in value]
+        return value
+
     def _build_mtf_analysis(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         """
         多周期分析：趋势/共振评分（Analyzer）+ 威科夫信号三级共振（Coordinator）。
@@ -106,6 +118,73 @@ class WyckoffReportGenerator:
                 mtf['signal_resonance'] = None
 
         return mtf
+
+    def _targets_from_cause_effect(self, cause_effect: Dict[str, Any]) -> Dict[str, Any]:
+        pnf_targets = (cause_effect or {}).get('targets') or {}
+        return {
+            'target_1': pnf_targets.get('target_1', 0) or 0,
+            'target_2': pnf_targets.get('target_2', 0) or 0,
+        }
+
+    def _resolve_mtf_signal_conflict(self, patterns_payload: Dict[str, Any], mtf: Dict[str, Any]) -> tuple:
+        """Align report-path MTF conflict flags with orchestrator semantics."""
+        has_conflict = False
+        conflict_details = ''
+        signal_type, detected_direction = SignalExtractor.resolve_primary_signal(patterns_payload)
+        resonance = mtf.get('signal_resonance') or {}
+        weekly = resonance.get('weekly_trend') or {}
+        weekly_dir = weekly.get('direction', 'neutral') if isinstance(weekly, dict) else 'neutral'
+
+        if (
+            signal_type != 'none'
+            and detected_direction != 'neutral'
+            and weekly_dir not in ('neutral', 'unknown')
+            and weekly_dir != detected_direction
+        ):
+            has_conflict = True
+            conflict_details = (
+                f"周线趋势方向为 {weekly_dir}，但日线威科夫信号 {signal_type.upper()} "
+                f"方向为 {detected_direction}，二者冲突。"
+            )
+        return has_conflict, conflict_details
+
+    def _run_strategy_decision_pipeline(
+        self,
+        patterns_payload: Dict[str, Any],
+        market_env: Any,
+        mtf: Dict[str, Any],
+        cause_effect: Dict[str, Any],
+        phase_str: str,
+    ) -> Dict[str, Any]:
+        """Run scoring + trading plan + risk advice and collect audit log."""
+        has_conflict, conflict_details = self._resolve_mtf_signal_conflict(patterns_payload, mtf)
+        patterns_payload = dict(patterns_payload)
+        patterns_payload['symbol'] = self.symbol
+        patterns_payload['mtf_has_conflict'] = has_conflict
+        patterns_payload['mtf_conflict_details'] = conflict_details
+
+        self.rec_engine.begin_decision_audit(self.symbol)
+        quality = self.rec_engine.calculate_signal_quality(self.data, patterns_payload, market_env)
+        targets = self._targets_from_cause_effect(cause_effect)
+        trading_plan = self.rec_engine.generate_trading_plan(self.data, patterns_payload, targets)
+        risk_advice = self.rec_engine.generate_risk_advice(
+            quality,
+            trading_plan,
+            has_conflict=has_conflict,
+            conflict_details=conflict_details,
+            market_env=market_env,
+            data=self.data,
+            phase_str=phase_str,
+        )
+        audit = self.rec_engine.get_decision_audit()
+        return {
+            'quality': quality,
+            'trading_plan': trading_plan,
+            'risk_advice': risk_advice,
+            'strategy_decision_audit': audit,
+            'mtf_has_conflict': has_conflict,
+            'mtf_conflict_details': conflict_details,
+        }
 
     def generate_report(self) -> str:
         if self.data is None:
@@ -149,20 +228,13 @@ class WyckoffReportGenerator:
         events = ctx['events']
 
         # 集成 WIE 3.0 微观结构VSA摘要
-        if wie3_market_state and hasattr(self.analyzer, 'wie3_vsa_analyzer') and self.analyzer.wie3_vsa_analyzer:
+        if wie3_market_state:
             try:
-                # 重新获取VSA分析结果以提取摘要
-                from .vsa_analyzer import VSAAnalyzer
-                if not isinstance(self.analyzer.wie3_vsa_analyzer, VSAAnalyzer):
-                    # 如果不是VSAAnalyzer实例，创建一个新的来分析
-                    vsa_analyzer = VSAAnalyzer()
-                    df_vsa = vsa_analyzer.analyze(self.data)
-                    wie3_summary = vsa_analyzer.extract_latest_vsa_summary(df_vsa)
-                else:
-                    # 直接使用已有的analyzer
-                    df_vsa = self.analyzer.wie3_vsa_analyzer.analyze(self.data)
-                    wie3_summary = self.analyzer.wie3_vsa_analyzer.extract_latest_vsa_summary(df_vsa)
-                vsa['wie3_summary'] = wie3_summary
+                last_result = getattr(self.analyzer, 'wie3_last_result', None)
+                vsa_analyzer = getattr(self.analyzer, 'wie3_vsa_analyzer', None)
+                if last_result is not None and vsa_analyzer is not None:
+                    wie3_summary = vsa_analyzer.extract_latest_vsa_summary(last_result.df_vsa)
+                    vsa['wie3_summary'] = wie3_summary
             except Exception as e:
                 logger.debug(f"WIE 3.0 VSA摘要提取失败: {e}")
 
@@ -171,12 +243,21 @@ class WyckoffReportGenerator:
         market_env_res = getattr(self.analyzer, '_analyze_market_environment', lambda: {})()
         market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
 
-        patterns_payload = SignalExtractor.build_patterns_payload(ctx)
-        quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns_payload, market_env)
-
         effective_phase = SignalExtractor.get_effective_phase(phase_result)
         mtf = self._build_mtf_analysis(ctx)
         conflict = self._analyze_conflict(effective_phase, mtf)
+        searchlight = build_searchlight_arbitration(
+            effective_phase, wie3_market_state, self.thresholds
+        )
+
+        patterns_payload = SignalExtractor.build_patterns_payload(ctx, extra={
+            'searchlight_arbitration': searchlight,
+        })
+        decision = self._run_strategy_decision_pipeline(
+            patterns_payload, market_env, mtf, cause_effect, effective_phase
+        )
+        quality_data = decision['quality']
+        strategy_decision_audit = decision['strategy_decision_audit']
 
         report = self.header_builder.build(phase_result, trading_range)
         report += self.evidence_builder.build(phase_result)
@@ -187,7 +268,8 @@ class WyckoffReportGenerator:
             phase_result, trading_range, cause_effect, conflict, quality_data,
             joc, spring, sos, lps, fti, upthrust, sow, lpsy, mtf,
             boring_res, dead_corner, market_env_res, arbitration_result, breakout_analysis,
-            sos_sow_analysis, wie3_market_state  #  新增：传递SOS-SOW分析和WIE 3.0 MVP状态
+            sos_sow_analysis, wie3_market_state, searchlight_arbitration=searchlight,
+            strategy_decision_audit=strategy_decision_audit,
         )
 
         return report
@@ -233,12 +315,21 @@ class WyckoffReportGenerator:
         market_env_res = getattr(self.analyzer, '_analyze_market_environment', lambda: {})()
         market_env = market_env_res.get('environment', MarketEnvironment.UNKNOWN)
 
-        patterns_payload = SignalExtractor.build_patterns_payload(ctx)
-        quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns_payload, market_env)
-
         effective_phase = SignalExtractor.get_effective_phase(phase_result)
         mtf = self._build_mtf_analysis(ctx)
         conflict = self._analyze_conflict(effective_phase, mtf)
+        searchlight = build_searchlight_arbitration(
+            effective_phase, wie3_market_state, self.thresholds
+        )
+
+        patterns_payload = SignalExtractor.build_patterns_payload(ctx, extra={
+            'searchlight_arbitration': searchlight,
+        })
+        decision = self._run_strategy_decision_pipeline(
+            patterns_payload, market_env, mtf, cause_effect, effective_phase
+        )
+        quality_data = decision['quality']
+        strategy_decision_audit = decision['strategy_decision_audit']
 
         # 构建JSON结果
         result = {
@@ -260,6 +351,8 @@ class WyckoffReportGenerator:
                 'spring': spring,
                 'upthrust': upthrust,
                 'sos': sos,
+                'sow': sow,
+                'lps': lps,
                 'lpsy': lpsy,
                 'ps': ps,
                 'psy': psy,
@@ -276,15 +369,23 @@ class WyckoffReportGenerator:
                 'environment': str(market_env),
                 'details': market_env_res,
             },
-            'signal_quality': quality_data,
+            'signal_quality': self._jsonable(quality_data),
+            'trading_plan': self._jsonable(decision['trading_plan']),
+            'risk_advice': self._jsonable(decision['risk_advice']),
+            'strategy_decision_audit': strategy_decision_audit,
             'multi_timeframe': mtf,
+            'mtf_signal_conflict': {
+                'has_conflict': decision['mtf_has_conflict'],
+                'details': decision['mtf_conflict_details'],
+            },
             'conflict_analysis': conflict,
+            'searchlight_arbitration': searchlight,
             'arbitration_result': arbitration_result,
             'breakout_analysis': breakout_analysis,
             'microstructure_background': wie3_market_state.to_dict() if wie3_market_state else None,
         }
 
-        return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+        return json.dumps(self._jsonable(result), ensure_ascii=False, indent=2, default=str)
 
     def _analyze_conflict(self, phase, mtf) -> dict:
         weekly_trend = mtf.get('weekly_trend', 'unknown')

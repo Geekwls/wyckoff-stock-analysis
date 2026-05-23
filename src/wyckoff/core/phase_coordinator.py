@@ -287,6 +287,8 @@ class PhaseCoordinator:
         sow_res = _normalize_sow_event(sow_res)
 
         dead_corner_res = self._apply_dead_corner_joc_gate(dead_corner_res, joc_res)
+        boring_zone_res = self._apply_boring_joc_gate(boring_zone_res, joc_res, preliminary_phase)
+        boring_zone_res = self._apply_boring_fti_gate(boring_zone_res, fti_res, preliminary_phase)
 
         lps_res = self.detector.detect_lps(sos_res, spring_res, trading_range=tr_res, joc_result=joc_res)
         lpsy_res = self.detector.detect_lpsy(
@@ -536,6 +538,40 @@ class PhaseCoordinator:
             }
             dead_corner_res['joc_gate'] = 'pending'
         return dead_corner_res
+
+    @staticmethod
+    def _apply_boring_joc_gate(boring_res: Dict, joc_res: Dict, phase: str) -> Dict:
+        """Phase 28：吸筹侧枯燥区高能预警须 JOC 确认，否则降级 high_alert。"""
+        from .utils import PhaseAdapter
+
+        if not isinstance(boring_res, dict) or boring_res.get('score', 0) < 85:
+            return boring_res
+        if not (PhaseAdapter.is_accumulation(phase) or PhaseAdapter.is_markup(phase)):
+            return boring_res
+        if joc_res.get('detected'):
+            return boring_res
+        boring_res = dict(boring_res)
+        boring_res['high_alert'] = False
+        boring_res['joc_gate'] = 'pending'
+        boring_res['gate_note'] = '枯燥区高能预警待 JOC 小溪确认（孟氏 checklist）'
+        return boring_res
+
+    @staticmethod
+    def _apply_boring_fti_gate(boring_res: Dict, fti_res: Dict, phase: str) -> Dict:
+        """Phase 28：派发侧枯燥区高能预警须 FTI 确认（与 JOC 门控对称）。"""
+        from .utils import PhaseAdapter
+
+        if not isinstance(boring_res, dict) or boring_res.get('score', 0) < 85:
+            return boring_res
+        if not PhaseAdapter.is_distribution(phase):
+            return boring_res
+        if fti_res.get('detected'):
+            return boring_res
+        boring_res = dict(boring_res)
+        boring_res['high_alert'] = False
+        boring_res['fti_gate'] = 'pending'
+        boring_res['gate_note'] = '枯燥区高能预警待 FTI 冰层确认（派发对称门控）'
+        return boring_res
 
     def _recollect_strength_events(
         self,

@@ -1,0 +1,64 @@
+name: Golden Stock Regression
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  golden-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Phase 28–29 regression (offline)
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m pytest tests/test_phase28_optimizations.py tests/test_phase29_optimizations.py -q --tb=short
+
+      - name: WIE3 default matrix fixture present
+        run: test -f fixtures/wie3/transition_matrix_default.json
+
+  golden-live-ashare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Live A-share golden validate
+        env:
+          PYTHONPATH: src
+        run: |
+          python scripts/validate_real_stocks.py --ashare-only --golden-validate

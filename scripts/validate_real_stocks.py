@@ -194,7 +194,60 @@ def _parse_args():
         action="store_true",
         help="Yahoo 仅使用本地过期缓存（设 WYCKOFF_YF_CACHE_ONLY=1）",
     )
+    parser.add_argument(
+        "--golden-validate",
+        action="store_true",
+        help="对照 fixtures/golden/expectations.json 做离线金样本断言",
+    )
     return parser.parse_args()
+
+
+def _validate_golden(results: list, expectations_path: Path) -> int:
+    """Compare analyze results against golden expectations."""
+    if not expectations_path.is_file():
+        print(f"✗ 金样本期望文件不存在: {expectations_path}")
+        return 1
+
+    spec = json.loads(expectations_path.read_text(encoding="utf-8"))
+    tolerance = int(spec.get("score_tolerance") or 15)
+    samples = {s["symbol"]: s for s in spec.get("samples") or []}
+    failures = []
+
+    for row in results:
+        symbol = row.get("symbol")
+        sample = samples.get(symbol)
+        if not sample:
+            continue
+        exp = sample.get("expect") or {}
+        if exp.get("ok") and not row.get("ok"):
+            failures.append(f"{symbol}: expected ok=true, got error={row.get('error')}")
+            continue
+        phase = row.get("phase") or ""
+        if exp.get("phase_contains") and exp["phase_contains"] not in phase:
+            failures.append(f"{symbol}: phase '{phase}' missing '{exp['phase_contains']}'")
+        if exp.get("direction") and row.get("direction") != exp["direction"]:
+            failures.append(
+                f"{symbol}: direction expected {exp['direction']}, got {row.get('direction')}"
+            )
+        for flag in ("spring", "joc", "lps", "fti"):
+            if flag in exp and row.get(flag) != exp[flag]:
+                failures.append(f"{symbol}: {flag} expected {exp[flag]}, got {row.get(flag)}")
+        score = row.get("signal_score")
+        if score is not None:
+            if exp.get("score_min") is not None and score < exp["score_min"] - tolerance:
+                failures.append(f"{symbol}: score {score} below min {exp['score_min']} (tol {tolerance})")
+            if exp.get("score_max") is not None and score > exp["score_max"] + tolerance:
+                failures.append(f"{symbol}: score {score} above max {exp['score_max']} (tol {tolerance})")
+
+    if failures:
+        print("\n金样本断言失败:")
+        for msg in failures:
+            print(f"  ✗ {msg}")
+        return 1
+
+    matched = sum(1 for r in results if r.get("symbol") in samples)
+    print(f"\n金样本断言通过: {matched}/{len(samples)}")
+    return 0 if matched == len(samples) else 1
 
 
 def main():
@@ -261,6 +314,13 @@ def main():
     out_path = ROOT / "code-review" / "REAL_STOCK_VALIDATION.json"
     out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     print(f"\n详细结果已写入: {out_path}")
+
+    if args.golden_validate:
+        golden_path = ROOT / "fixtures" / "golden" / "expectations.json"
+        golden_rc = _validate_golden(results, golden_path)
+        if golden_rc != 0:
+            return golden_rc
+
     return 0 if ok_count == len(results) else 1
 
 

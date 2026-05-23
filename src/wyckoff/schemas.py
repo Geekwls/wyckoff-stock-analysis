@@ -70,6 +70,7 @@ class TradingRangeModel(BaseModel):
     """交易区间模型"""
     is_consolidation: bool = Field(description="是否为整理区间")
     is_broken: Optional[bool] = Field(default=False, description="区间是否已被突破失效")
+    invalidated_tr: Optional[bool] = Field(default=False, description="兼容字段：交易区间是否已失效")
     breakout_direction: Optional[str] = Field(default=None, description="突破方向")
     high: float = Field(description="区间高点")
     low: float = Field(description="区间低点")
@@ -346,12 +347,41 @@ class EventsModel(BaseModel):
 # 信号质量模型
 # ============================================================
 
+class StrategyDecisionEntryModel(BaseModel):
+    """策略决策审计单条记录"""
+    rule_id: str = Field(description="规则标识，便于回测聚合")
+    category: str = Field(description="score_penalty | score_cap | position_reduce | watch")
+    message: str = Field(description="人类可读说明")
+    stage: str = Field(description="决策阶段: scoring | trading_plan | risk_advice")
+    delta: Optional[float] = Field(default=None, description="评分变动量（压分）")
+    score_before: Optional[int] = Field(default=None, description="变动前得分")
+    score_after: Optional[int] = Field(default=None, description="变动后得分")
+    cap_value: Optional[int] = Field(default=None, description="评分上限值")
+    position_before: Optional[str] = Field(default=None, description="降仓前仓位描述")
+    position_after: Optional[str] = Field(default=None, description="降仓后仓位描述")
+    position_factor: Optional[float] = Field(default=None, description="仓位缩放系数")
+    direction_before: Optional[str] = Field(default=None, description="观望前方向")
+    direction_after: Optional[str] = Field(default=None, description="观望后方向")
+    context: Dict[str, Any] = Field(default_factory=dict, description="附加上下文")
+
+
+class StrategyDecisionAuditModel(BaseModel):
+    """策略决策审计日志"""
+    symbol: Optional[str] = Field(default=None, description="标的代码")
+    started_at: Optional[str] = Field(default=None, description="审计开始时间 (UTC ISO)")
+    summary: Dict[str, Any] = Field(default_factory=dict, description="按类别/阶段汇总")
+    entries: List[StrategyDecisionEntryModel] = Field(default_factory=list, description="触发明细")
+
+
 class SignalQualityModel(BaseModel):
     """信号质量评分"""
     score: int = Field(description="得分")
     max_score: int = Field(default=10, description="最高分")
     confidence: str = Field(description="信心级别")
     reasons: List[str] = Field(default_factory=list, description="评分原因")
+    structure_score: Optional[int] = Field(default=None, description="结构层得分（事件+序列，背景调节前）")
+    background_adjustment: Optional[int] = Field(default=None, description="背景层调节量（RS/MTF/Searchlight 等）")
+    primary_reason: Optional[str] = Field(default=None, description="最终评分首要原因")
 
     def __getitem__(self, item):
         return getattr(self, item)

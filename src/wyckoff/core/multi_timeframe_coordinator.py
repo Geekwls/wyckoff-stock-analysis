@@ -379,6 +379,7 @@ class MultiTimeframeCoordinator:
             }
 
         from .signal_extractor import SignalExtractor
+        from .intraday_vsa import IntradayVSAService
 
         df = self.timeframes['hourly'].tail(24).copy()
         current_price = float(df['Close'].iloc[-1])
@@ -392,6 +393,12 @@ class MultiTimeframeCoordinator:
         anchor_level = anchor.get('level')
         anchor_source = anchor.get('source')
 
+        intraday = IntradayVSAService().analyze_entry_quality(
+            self.timeframes['hourly'],
+            direction=direction,
+            anchor_level=anchor_level,
+        )
+
         if anchor_level and anchor_level > 0:
             tolerance = max(anchor_level * 0.015, 0.01)
             if direction == 'long':
@@ -403,6 +410,14 @@ class MultiTimeframeCoordinator:
             has_entry = near_anchor and low_volume
             if has_entry:
                 entry_quality = 'excellent'
+            elif intraday.get('available') and intraday.get('entry_quality') == 'excellent':
+                has_entry = True
+                entry_quality = 'excellent'
+            elif intraday.get('available') and intraday.get('entry_quality') == 'good':
+                entry_quality = 'good'
+                has_entry = near_anchor and (
+                    low_volume or intraday.get('no_supply') or intraday.get('no_demand')
+                )
             elif near_anchor:
                 entry_quality = 'good'
             else:
@@ -414,7 +429,10 @@ class MultiTimeframeCoordinator:
                 'anchor_level': round(anchor_level, 2),
                 'anchor_source': anchor_source,
                 'volume_ratio': round(vol_ratio, 2),
-                'note': f'小时线{anchor_note}，量比{vol_ratio:.2f}x' + (' ✓ 威科夫入场' if has_entry else '，等待缩量确认'),
+                'intraday_vsa': intraday,
+                'note': intraday.get('note') or (
+                    f'小时线{anchor_note}，量比{vol_ratio:.2f}x' + (' ✓ 威科夫入场' if has_entry else '，等待缩量确认')
+                ),
             }
 
         # 回退：无日线锚点时用近期高低点 + 缩量
@@ -426,7 +444,16 @@ class MultiTimeframeCoordinator:
         else:
             near_resistance = current_price >= recent_high * 0.99
             has_entry = near_resistance and low_volume
-        entry_quality = 'fair' if has_entry else 'unknown'
+        intraday_fallback = IntradayVSAService().analyze_entry_quality(
+            self.timeframes['hourly'],
+            direction=direction,
+            anchor_level=recent_low if direction == 'long' else recent_high,
+        )
+        if intraday_fallback.get('entry_quality') == 'excellent':
+            has_entry = True
+            entry_quality = 'excellent'
+        elif intraday_fallback.get('entry_quality') == 'good' and entry_quality == 'unknown':
+            entry_quality = 'good'
         return {
             'has_entry': has_entry,
             'entry_quality': entry_quality,
@@ -434,7 +461,10 @@ class MultiTimeframeCoordinator:
             'recent_low': round(recent_low, 2),
             'recent_high': round(recent_high, 2),
             'volume_ratio': round(vol_ratio, 2),
-            'note': '小时线通用缩量入场' if has_entry else '等待更好的入场点（无日线LPS/LPSY锚点）',
+            'intraday_vsa': intraday_fallback,
+            'note': intraday_fallback.get('note') or (
+                '小时线通用缩量入场' if has_entry else '等待更好的入场点（无日线LPS/LPSY锚点）'
+            ),
         }
 
     def _check_weekly_daily_alignment(

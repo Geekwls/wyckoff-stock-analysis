@@ -44,7 +44,8 @@ class ConclusionSection(BaseSectionBuilder):
               upthrust: dict, sow: dict, lpsy: dict, mtf: dict, boring_res: dict,
               dead_corner: dict, market_env: dict, arbitration_result: dict = None,
               breakout_analysis: dict = None, sos_sow_analysis: dict = None,
-              wie3_market_state = None) -> str:
+              wie3_market_state = None, searchlight_arbitration: dict = None,
+              strategy_decision_audit: dict = None) -> str:
 
         phase_str = SignalExtractor.get_effective_phase(phase_result)
         phase_conf = phase_result.get('confidence', 0.0)
@@ -56,6 +57,9 @@ class ConclusionSection(BaseSectionBuilder):
         # === WIE 3.0 MVP 机构级微观结构状态 ===
         if wie3_market_state:
             report += self._build_wie3_mvp_section(wie3_market_state)
+
+        if searchlight_arbitration:
+            report += self._build_searchlight_arbitration_section(searchlight_arbitration)
 
         #  新增：计算健康回测区间（用于后续推荐）
         retest_zone = None
@@ -332,7 +336,14 @@ class ConclusionSection(BaseSectionBuilder):
         # Falsification
         report += self._build_falsification(phase_str, trading_range)
 
+        if strategy_decision_audit:
+            report += self._build_strategy_decision_audit_section(strategy_decision_audit)
+
         return report
+
+    def _build_strategy_decision_audit_section(self, audit: Dict[str, Any]) -> str:
+        from ...strategy_decision_audit import format_audit_markdown
+        return format_audit_markdown(audit)
 
     def _build_breakout_decision(
         self,
@@ -1313,3 +1324,42 @@ class ConclusionSection(BaseSectionBuilder):
         report += "\n" + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + "\n\n"
 
         return report
+
+    def _build_searchlight_arbitration_section(self, searchlight: Dict[str, Any]) -> str:
+        """构建 Searchlight/WIE 仲裁解释段落。"""
+        if not searchlight.get('available'):
+            return ""
+
+        has_contradiction = bool(searchlight.get('has_contradiction'))
+        entropy_degraded = bool(searchlight.get('entropy_degraded'))
+        if not has_contradiction and not entropy_degraded:
+            return ""
+
+        bullish_prob = self._num(searchlight.get('bullish_probability'), 0.0)
+        bearish_prob = self._num(searchlight.get('bearish_probability'), 0.0)
+        aps = self._num(searchlight.get('aps'), 0.0)
+        bias = searchlight.get('bias', 'neutral')
+        legacy_phase = searchlight.get('legacy_phase', 'Unknown')
+        regime = searchlight.get('microstructure_regime', 'Unknown')
+
+        if has_contradiction:
+            action = "交易结论降级：等待阶段与微观结构重新共振"
+            if bias == 'bearish_microstructure':
+                diagnosis = "传统阶段偏吸筹/上涨，但 WIE3 显示恐慌、派发或隐藏弱势占优。"
+            elif bias == 'bullish_microstructure':
+                diagnosis = "传统阶段偏派发/下跌，但 WIE3 显示吸收、需求或隐藏强势占优。"
+            else:
+                diagnosis = "传统阶段与微观结构状态不一致。"
+        else:
+            action = "仓位降级：保留方向但降低仓位，等待熵值回落"
+            diagnosis = "WIE3 高熵降级，说明状态概率分散，当前微观结构置信度不足。"
+
+        return f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【Searchlight/WIE3 仲裁】
+   传统阶段: {legacy_phase}
+   微观状态: {regime} | 多头概率: {bullish_prob:.0%} | 空头概率: {bearish_prob:.0%} | APS: {aps:.2f}
+   诊断: {diagnosis}
+   动作: {action}
+"""

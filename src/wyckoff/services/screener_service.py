@@ -11,11 +11,18 @@ import pandas as pd
 from ..facade import WyckoffAnalyzer
 from ..config.settings import WyckoffConfig
 from ..exceptions import AnalysisError, DataError, CalculationError, PatternNotFoundError
+from ..config.settings import WyckoffThresholds
 from ..core.recommendation_engine import RecommendationEngine
 from ..core.enums import MarketEnvironment
 from ..core.utils import PhaseAdapter
 from ..core.cache_service import IndexDataCache
 from ..core.signal_extractor import SignalExtractor, set_cached_phase_result
+from ..core.searchlight_enrichment import (
+    enrich_patterns_with_searchlight,
+    searchlight_scan_fields,
+)
+from ..core.strategy_decision_audit import audit_summary_fields
+from ..core.wie3_market_state_service import WIE3MarketStateService
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +44,10 @@ class ScreenerService:
             config: 威科夫配置
         """
         self.config = config or WyckoffConfig()
+        self.thresholds = getattr(self.config, 'thresholds', None) or WyckoffThresholds()
         self._analyzers: Dict[str, WyckoffAnalyzer] = {}
         self._index_cache = IndexDataCache()  # P1.1: 全局指数数据缓存
+        self._wie3_service = WIE3MarketStateService(self.thresholds)
         self.rec_engine = RecommendationEngine(self.config)
     
     def quick_scan(self, symbols: List[str], period: str = "1y",
@@ -68,6 +77,8 @@ class ScreenerService:
         
         if show_progress:
             print(f"[PARALLEL] 开始并行扫描 {len(symbols)} 只股票 (使用 {max_workers} 线程)...")
+
+        self._prefetch_common_benchmarks(period)
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
@@ -116,7 +127,7 @@ class ScreenerService:
         Returns:
             筛选结果列表
         """
-        # 加载所有股票数据
+        self._prefetch_common_benchmarks(period)
         self._load_stocks(symbols, period)
         
         # 根据类型执行筛选
@@ -152,25 +163,31 @@ class ScreenerService:
             if data is None or data.empty:
                 return {'symbol': symbol, 'error': 'data_fetch_failed', 'strength': 0}
             
-            # 从 identify_phase 结果中提取事件
             phase_res = analyzer.pattern_detector.identify_phase()
             set_cached_phase_result(analyzer.pattern_detector, phase_res)
-            events = phase_res.get('events_detected', {})
-            
-            phase_str = SignalExtractor.get_effective_phase(phase_res) if isinstance(phase_res, dict) else str(phase_res)
-            
-            # 提取信号 (使用新引擎)
-            strength = RecommendationEngine.calculate_signal_strength(phase_res)
-            # 注意：此处 market_env 为占位，未来可通过 orchestrator 获取
-            quality = self.rec_engine.calculate_signal_quality(data, phase_res, MarketEnvironment.UNKNOWN)
-            
+            patterns = self._prepare_scoring_payload(
+                phase_res, data, resolve_index_df=analyzer._resolve_wie3_index_df
+            )
+            phase_str = SignalExtractor.get_effective_phase(patterns)
+
+            strength = RecommendationEngine.calculate_signal_strength(patterns)
+            self.rec_engine.begin_decision_audit(symbol)
+            quality = self.rec_engine.calculate_signal_quality(
+                data, patterns, MarketEnvironment.UNKNOWN
+            )
+
             return {
                 'symbol': symbol,
                 'phase': phase_str,
-                'confidence': round((phase_res.get('confidence') or 0.0) if isinstance(phase_res, dict) else 0.0, 2),
+                'confidence': round(
+                    (phase_res.get('confidence') or 0.0) if isinstance(phase_res, dict) else 0.0,
+                    2,
+                ),
                 'strength': strength,
                 'weighted_score': quality.score,
-                'is_late_stage': PhaseAdapter.is_late_stage(phase_res.get('phase_enum'))
+                'is_late_stage': PhaseAdapter.is_late_stage(phase_res.get('phase_enum')),
+                **searchlight_scan_fields(patterns),
+                **audit_summary_fields(self.rec_engine.get_decision_audit()),
             }
             
         except (DataError, CalculationError) as exc:
@@ -201,6 +218,78 @@ class ScreenerService:
             except Exception as e:
                 logger.warning("加载 %s 失败: %s", symbol, e)
 
+    def _prepare_scoring_payload(
+        self,
+        phase_res: Dict[str, Any],
+        data: pd.DataFrame,
+        resolve_index_df=None,
+    ) -> Dict[str, Any]:
+        """Build scoring payload and apply Searchlight/WIE3 enrichment (orchestrator parity)."""
+        patterns = SignalExtractor.build_scoring_payload(phase_res)
+        return enrich_patterns_with_searchlight(
+            patterns,
+            data,
+            self._wie3_service,
+            self.thresholds,
+            resolve_index_df=resolve_index_df,
+        )
+
+    def _prefetch_common_benchmarks(self, period: str) -> None:
+        """Preload common A-share benchmarks for batch Searchlight RS."""
+        for index_symbol in ("sh.000001", "sz.399001", "sz.399006", "sh.000688"):
+            self._prefetch_index_if_needed(index_symbol, period)
+
+    def _resolve_benchmark_df(self, symbol: str, period: str) -> Optional[pd.DataFrame]:
+        """Resolve benchmark OHLCV for RS/Searchlight (cache → prefetch → akshare)."""
+        from ..core.symbol_resolver import SymbolResolver
+
+        index_symbol = SymbolResolver().resolve_benchmark_index(symbol)
+        if not index_symbol:
+            return None
+
+        cached = self._index_cache.get_index_data(index_symbol, period)
+        if cached is not None and not cached.empty:
+            return cached
+
+        try:
+            from ..core.strategies.akshare_strategy import AkShareStrategy
+            from ..core.data_fetcher import prepare_data
+
+            ak_strategy = AkShareStrategy(self.config)
+            raw = ak_strategy.fetch(index_symbol, period)
+            if raw is None or raw.empty:
+                return None
+            df = prepare_data(raw, self.config)
+            self._index_cache.set_index_data(index_symbol, period, df)
+            return df
+        except Exception as exc:
+            logger.debug("Benchmark fetch skipped for %s: %s", symbol, exc)
+            return None
+
+    def _build_spring_searchlight_context(
+        self,
+        symbol: str,
+        period: str,
+        data: pd.DataFrame,
+        pattern_detector,
+    ) -> Dict[str, Any]:
+        """Phase + weighted score + Searchlight fields for Spring scan rows."""
+        phase_res = pattern_detector.identify_phase()
+        set_cached_phase_result(pattern_detector, phase_res)
+        patterns = self._prepare_scoring_payload(
+            phase_res,
+            data,
+            resolve_index_df=lambda: self._resolve_benchmark_df(symbol, period),
+        )
+        quality = self.rec_engine.calculate_signal_quality(
+            data, patterns, MarketEnvironment.UNKNOWN
+        )
+        return {
+            'phase': SignalExtractor.get_effective_phase(patterns),
+            'weighted_score': quality.score,
+            **searchlight_scan_fields(patterns),
+        }
+
     def _prefetch_index_if_needed(self, index_symbol: str, period: str):
         """预加载指数数据（如果缓存中不存在）"""
         if self._index_cache.get_index_data(index_symbol, period) is None:
@@ -226,26 +315,27 @@ class ScreenerService:
             if not PhaseAdapter.is_accumulation(phase_str):
                 continue
             
-            # 个股加权分
+            patterns = self._prepare_scoring_payload(
+                phase_res, analyzer.data, resolve_index_df=analyzer._resolve_wie3_index_df
+            )
             market_data = analyzer.get_market_regime()
-            quality = self.rec_engine.calculate_signal_quality(analyzer.data, phase_res, market_data['regime'])
+            quality = self.rec_engine.calculate_signal_quality(
+                analyzer.data, patterns, market_data['regime']
+            )
             stock_score = quality.score
-            
-            # 市场门控
+
             industry_mult = analyzer.get_industry_multiplier()
             final_score = stock_score * market_data['multiplier'] * industry_mult
-            
-            # 过滤
+
             is_late_stage = PhaseAdapter.is_late_stage(phase_enum or phase_str)
             if final_score < 40 and not is_late_stage:
                 continue
-                
-            # 计算可执行性得分
+
             tr = analyzer.pattern_detector.detect_trading_range()
             exec_score = RecommendationEngine.get_execution_score(
                 analyzer.data['Close'].iloc[-1], tr['low'], tr['high'], "做多"
             )
-            
+
             results.append({
                 'symbol': symbol,
                 'phase': phase_str,
@@ -257,7 +347,8 @@ class ScreenerService:
                 'execution_score': exec_score,
                 'trading_range': tr,
                 'current_price': analyzer.data['Close'].iloc[-1],
-                'confidence': phase_res.get('confidence', 0)
+                'confidence': phase_res.get('confidence', 0),
+                **searchlight_scan_fields(patterns),
             })
         
         # 按最终得分 * 可执行性综合排序
@@ -276,25 +367,27 @@ class ScreenerService:
             if not PhaseAdapter.is_distribution(phase_str):
                 continue
             
-            # 个股加权分
+            patterns = self._prepare_scoring_payload(
+                phase_res, analyzer.data, resolve_index_df=analyzer._resolve_wie3_index_df
+            )
             market_data = analyzer.get_market_regime()
-            quality = self.rec_engine.calculate_signal_quality(analyzer.data, phase_res, market_data['regime'])
+            quality = self.rec_engine.calculate_signal_quality(
+                analyzer.data, patterns, market_data['regime']
+            )
             stock_score = quality.score
-            
-            # 市场门控
+
             multiplier = 1.2 if market_data['regime'] == 'risk-off' else 0.8 if market_data['regime'] == 'risk-on' else 1.0
             final_score = stock_score * multiplier
-            
-            # 过滤
+
             is_late_stage = PhaseAdapter.is_late_stage(phase_enum or phase_str)
             if final_score < 40 and not is_late_stage:
                 continue
-            
+
             tr = analyzer.pattern_detector.detect_trading_range()
             exec_score = RecommendationEngine.get_execution_score(
                 analyzer.data['Close'].iloc[-1], tr['low'], tr['high'], "做空"
             )
-            
+
             results.append({
                 'symbol': symbol,
                 'phase': phase_str,
@@ -304,7 +397,8 @@ class ScreenerService:
                 'is_late_stage': is_late_stage,
                 'execution_score': exec_score,
                 'trading_range': tr,
-                'current_price': analyzer.data['Close'].iloc[-1]
+                'current_price': analyzer.data['Close'].iloc[-1],
+                **searchlight_scan_fields(patterns),
             })
         
         results.sort(key=lambda x: x['final_score'], reverse=True)
@@ -457,6 +551,9 @@ class ScreenerService:
         signal_count = sum(1 for r in results if r.get('strength', 0) >= 1)
         late_stage_count = sum(1 for r in results if r.get('is_late_stage', False))
         high_score_count = sum(1 for r in results if r.get('weighted_score', 0) >= 60)
+        searchlight_contradiction_count = sum(
+            1 for r in results if r.get('searchlight_contradiction')
+        )
 
         # 找出顶级机会（按评分排序）
         top_picks = sorted(
@@ -479,6 +576,7 @@ class ScreenerService:
             "entry_count": signal_count,  # 保持对旧客户端及测试代码的向后兼容性
             "late_stage_count": late_stage_count,
             "high_score_count": high_score_count,
+            "searchlight_contradiction_count": searchlight_contradiction_count,
             "failed_count": len(failed),
             "phase_distribution": {k: len(v) for k, v in phase_groups.items()}
         }
@@ -532,7 +630,9 @@ class ScreenerService:
         
         if show_progress:
             print(f"[Spring 筛选] 开始扫描 {len(symbols)} 只股票...")
-        
+
+        self._prefetch_common_benchmarks(period)
+
         # 3. 并行扫描
         results = []
         failed = []
@@ -558,12 +658,17 @@ class ScreenerService:
                 except Exception as e:
                     failed.append(str(e))
         
-        # 4. 按确认状态和置信度排序
+        # 4. Searchlight 矛盾置后，再按确认状态与综合评分排序
         results.sort(key=lambda x: (
+            1 if x.get('searchlight_contradiction') else 0,
             0 if x.get('confirmation') == 'confirmed' else 1,
-            -x.get('confidence', 0)
+            -x.get('weighted_score', x.get('confidence', 0)),
         ))
-        
+
+        searchlight_contradiction_count = sum(
+            1 for r in results if r.get('searchlight_contradiction')
+        )
+
         # 5. 显示统计信息
         if show_progress:
             confirmed = sum(1 for r in results if r.get('confirmation') == 'confirmed')
@@ -573,6 +678,7 @@ class ScreenerService:
             print(f"  发现 Spring: {len(results)}")
             print(f"  已确认: {confirmed}")
             print(f"  待确认: {pending}")
+            print(f"  Searchlight 矛盾: {searchlight_contradiction_count}")
             print(f"  失败: {len(failed)}")
         
         return {
@@ -586,6 +692,7 @@ class ScreenerService:
                 'pending_count': sum(
                     1 for r in results if r.get('confirmation') == 'pending'
                 ),
+                'searchlight_contradiction_count': searchlight_contradiction_count,
                 'failed_count': len(failed)
             }
         }
@@ -638,9 +745,11 @@ class ScreenerService:
                 latest, data
             )
             
-            # 计算 RS 强度
-            rs_data = self._calculate_rs_from_data(symbol, data)
-            
+            rs_data = self._calculate_rs_from_data(symbol, data, period=period)
+            sl_context = self._build_spring_searchlight_context(
+                symbol, period, data, pattern_detector
+            )
+
             return {
                 'symbol': symbol,
                 'name': info.get('name', ''),
@@ -663,7 +772,8 @@ class ScreenerService:
                 'current_price': data['Close'].iloc[-1],
                 'distance_to_support': self._calc_distance_to_support(
                     data['Close'].iloc[-1], latest.get('support_level', 0)
-                )
+                ),
+                **sl_context,
             }
         except Exception as e:
             logger.warning(f"扫描 {symbol} Spring 失败: {e}")
@@ -710,28 +820,18 @@ class ScreenerService:
             logger.warning(f"检查 Spring 确认状态失败: {e}")
             return {'status': 'unknown', 'reason': str(e)}
     
-    def _calculate_rs_from_data(self, symbol: str, data: pd.DataFrame) -> Dict:
-        """计算 RS 强度（直接使用数据）"""
+    def _calculate_rs_from_data(
+        self, symbol: str, data: pd.DataFrame, period: str = "1y"
+    ) -> Dict:
+        """计算 RS 强度（直接使用数据，复用指数缓存）"""
         try:
             from ..core.relative_strength_analyzer import RelativeStrengthAnalyzer
-            from ..facade import WyckoffAnalyzer
-            
-            # 获取基准指数
-            temp_analyzer = WyckoffAnalyzer.__new__(WyckoffAnalyzer)
-            temp_analyzer.symbol = symbol
-            temp_analyzer.config = self.config
-            idx_symbol = temp_analyzer._get_baseline_index_symbol()
-            
-            # 用 akshare 获取基准数据
-            from ..core.strategies.akshare_strategy import AkShareStrategy
-            from ..core.data_fetcher import prepare_data
-            ak_strategy = AkShareStrategy(self.config)
-            idx_raw = ak_strategy.fetch(idx_symbol, "1y")
-            idx_data = prepare_data(idx_raw, self.config)
-            
-            rs_analyzer = RelativeStrengthAnalyzer(data, symbol)
-            rs_data = rs_analyzer.calculate_rs(idx_data)
-            return rs_data
+
+            idx_data = self._resolve_benchmark_df(symbol, period)
+            if idx_data is None or idx_data.empty:
+                return {'rs_trend': 'unknown', 'rs_change_20d': 0}
+
+            return RelativeStrengthAnalyzer(data, symbol).calculate_rs(idx_data)
         except Exception as e:
             logger.warning(f"计算 RS 失败: {e}")
             return {'rs_trend': 'unknown', 'rs_change_20d': 0}
@@ -753,7 +853,7 @@ def format_spring_results_table(results: List[Dict], max_rows: int = 50) -> str:
     header = (
         f"{'代码':<10} {'名称':<8} {'行业':<8} {'市值(亿)':>8} "
         f"{'RS强度':>6} {'支撑位':>8} {'当前价':>8} {'距支撑%':>8} "
-        f"{'量比':>6} {'置信度':>6} {'确认':>4}"
+        f"{'量比':>6} {'评分':>5} {'SL':>3} {'确认':>4}"
     )
     separator = "=" * 100
     
@@ -772,15 +872,16 @@ def format_spring_results_table(results: List[Dict], max_rows: int = 50) -> str:
         current = f"{r.get('current_price', 0):.2f}"
         distance = f"{r.get('distance_to_support', 0):.1f}%"
         vol_ratio = f"{r.get('volume_ratio', 0):.2f}"
-        confidence = f"{r.get('confidence', 0):.0f}%"
-        
+        weighted = f"{r.get('weighted_score', 0):.0f}"
+        sl_mark = '⚠' if r.get('searchlight_contradiction') else 'OK'
+
         confirmation = r.get('confirmation', 'unknown')
         conf_mark = '✅' if confirmation == 'confirmed' else '⏳' if confirmation == 'pending' else '❌'
         
         line = (
             f"{symbol:<10} {name:<8} {industry:<8} {market_cap:>8} "
             f"{rs_mark:>4} {support:>8} {current:>8} {distance:>8} "
-            f"{vol_ratio:>6} {confidence:>6} {conf_mark:>4}"
+            f"{vol_ratio:>6} {weighted:>5} {sl_mark:>3} {conf_mark:>4}"
         )
         lines.append(line)
     
