@@ -136,6 +136,36 @@ class RecommendationEngine:
         return getattr(obj, key, default)
 
     @staticmethod
+    def _get_latest_detail(event_obj: Any):
+        """获取事件的最新子信号，兼容 latest/latest_spring/latest_upthrust/signals。"""
+        for key in ('latest', 'latest_spring', 'latest_upthrust'):
+            latest = RecommendationEngine._get_attr(event_obj, key, None)
+            if latest:
+                return latest
+        signals = RecommendationEngine._get_attr(event_obj, 'signals', []) or []
+        return signals[-1] if signals else None
+
+    @staticmethod
+    def _get_signal_attr(event_obj: Any, key: str, default=None):
+        """优先读事件顶层，缺失时读取 latest/signals[-1]。"""
+        value = RecommendationEngine._get_attr(event_obj, key, None)
+        if value is not None:
+            return value
+        latest = RecommendationEngine._get_latest_detail(event_obj)
+        return RecommendationEngine._get_attr(latest, key, default) if latest else default
+
+    @staticmethod
+    def _get_numeric(value: Any, default: float = 0.0) -> float:
+        if isinstance(value, dict):
+            value = value.get('value', default)
+        elif hasattr(value, 'value'):
+            value = getattr(value, 'value')
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
     def _is_bearish_signal_absorbed(signal_type: str, signal_info: Any, data: Any) -> bool:
         """
         检查看空信号是否已被价格吸收（失效）
@@ -153,7 +183,9 @@ class RecommendationEngine:
         """
         try:
             # 获取信号价格
-            signal_price = RecommendationEngine._get_attr(signal_info, 'price', 0)
+            signal_price = RecommendationEngine._get_numeric(
+                RecommendationEngine._get_signal_attr(signal_info, 'price', 0)
+            )
             if signal_price <= 0:
                 return False
 
@@ -247,7 +279,7 @@ class RecommendationEngine:
             if key in ['joc', 'spring', 'sos', 'lps', 'automatic_reaction']:
                 bullish_count += 1
             elif key in ['fti', 'upthrust', 'sow', 'lpsy', 'secondary_test', 'utad']:
-                phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
+                phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
                 if 'Distribution' in phase_str or '派发' in phase_str:
                     bearish_count += 1
                 elif 'Accumulation' in phase_str or '吸筹' in phase_str:
@@ -274,15 +306,15 @@ class RecommendationEngine:
                     quality_factor += 0.15
                     reasons.append(f"AR自然回落充分（{decline_pct*100:.1f}%）")
             else:
-                vol_ratio = self._get_attr(info, 'volume_ratio', 1.0)
+                vol_ratio = self._get_signal_attr(info, 'volume_ratio', 1.0)
                 if vol_ratio > 1.5:
                     quality_factor += weights['volume_ratio']
                     reasons.append(f"{key.upper()} 成交量强力确认")
 
-            conf = self._get_attr(info, 'confidence', 0.5)
+            conf = self._get_signal_attr(info, 'confidence', 0.5)
             quality_factor += (conf - 0.5) * weights['confidence']
 
-            sig_date = self._get_attr(info, 'date')
+            sig_date = self._get_signal_attr(info, 'date')
             if sig_date:
                 if isinstance(sig_date, str):
                     try:
@@ -365,7 +397,7 @@ class RecommendationEngine:
             # Boring Zone 联动加权 (P2 #3.1)
             if boring_score > 85:
                 for key in ['spring', 'joc']:
-                    info = getattr(events, key, None)
+                    info = RecommendationEngine._get_attr(events, key, None)
                     if info and self._get_attr(info, 'detected'):
                         base_score += 15 # 高质量枯燥区后的突破极具爆发力
                         reasons.append(f"🔥 高价值突破：{key.upper()} 紧随高质量枯燥区出现，爆发潜力极大")
@@ -375,7 +407,7 @@ class RecommendationEngine:
 
         dead_corner = RecommendationEngine._get_attr(events, 'dead_corner_breakout') or {}
         skip_conflict_penalty = False
-        if dead_corner.get('detected'):
+        if self._get_attr(dead_corner, 'detected'):
             base_score += 25
             skip_conflict_penalty = True
             reasons.append("🎯 发现“死角突破”信号！从枯燥区放量跃起，极具爆发力，豁免历史冲突惩罚")
@@ -403,7 +435,7 @@ class RecommendationEngine:
 
         # --- 冲突惩罚 (v2.1校准) ---
         if bullish_count > 0 and bearish_count > 0 and not skip_conflict_penalty:
-            phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
+            phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
 
             # Phase E/Markup中SOW是正常回调，不应惩罚
             is_phase_e = ('Phase E' in phase_str or 'Markup' in phase_str or 'Markdown' in phase_str)
@@ -424,7 +456,7 @@ class RecommendationEngine:
                 reasons.append(f"检测到多空信号冲突 (惩罚 -{self.thresholds.CONFLICT_PENALTY}分)")
 
         # --- 市场环境加成 (v2.1校准：仅极端不匹配扣分) ---
-        phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
+        phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
         current_side = PhaseAdapter.get_market_side(phase_str)
         is_market_strong_bullish = market_env == MarketEnvironment.STRONG_BULL
         is_market_strong_bearish = market_env == MarketEnvironment.STRONG_BEAR
@@ -469,17 +501,17 @@ class RecommendationEngine:
 
         if final_score < 10 and seq_rating in ['A', 'B'] and not has_primary_entry:
             missing_signals = []
-            phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
+            phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
 
             if 'Accumulation' in phase_str or '吸筹' in phase_str:
-                if not self._get_attr(events.spring, 'detected'):
+                if not self._get_attr(RecommendationEngine._get_attr(events, 'spring'), 'detected'):
                     missing_signals.append('Spring震仓')
-                if not self._get_attr(events.sos, 'detected'):
+                if not self._get_attr(RecommendationEngine._get_attr(events, 'sos'), 'detected'):
                     missing_signals.append('SOS强势信号')
             elif 'Distribution' in phase_str or '派发' in phase_str:
-                if not self._get_attr(events.sow, 'detected'):
+                if not self._get_attr(RecommendationEngine._get_attr(events, 'sow'), 'detected'):
                     missing_signals.append('SOW弱势信号')
-                if not self._get_attr(events.lpsy, 'detected'):
+                if not self._get_attr(RecommendationEngine._get_attr(events, 'lpsy'), 'detected'):
                     missing_signals.append('LPSY最后支撑')
 
             if missing_signals:
@@ -489,7 +521,7 @@ class RecommendationEngine:
             final_score = 85
             reasons.append("触发高能预警阈值，综合评分上调至 85 (死角突破临界)")
             
-        if dead_corner.get('detected') and final_score < 85:
+        if self._get_attr(dead_corner, 'detected') and final_score < 85:
             final_score = 85
             reasons.append("🎯 死角突破确立，综合评分强制托底至 85 (极高置信度)")
 
@@ -507,10 +539,10 @@ class RecommendationEngine:
     @staticmethod
     def calculate_signal_strength(pattern_results: Dict[str, Any]) -> int:
         """计算基础信号强度 (简单计数，仅为兼容性保留)"""
-        events = pattern_results  # EventsModel — 直接使用属性访问
+        events = RecommendationEngine._get_attr(pattern_results, 'events_detected', None) or pattern_results
         count = 0
         for key in ['joc', 'spring', 'sos', 'lps', 'upthrust', 'sow', 'lpsy', 'fti']:
-            event = getattr(events, key, None)
+            event = RecommendationEngine._get_attr(events, key, None)
             if event and RecommendationEngine._get_attr(event, 'detected'):
                 count += 1
         return count
@@ -555,34 +587,33 @@ class RecommendationEngine:
             return float(data['High'].tail(window).max())
 
         def _get_spring_low(sp_obj) -> float:
-            if not sp_obj:
-                return 0.0
-            latest = getattr(sp_obj, 'latest_spring', None)
+            if not sp_obj: return 0.0
+            latest = RecommendationEngine._get_attr(sp_obj, 'latest_spring', None)
             if not latest:
-                signals = getattr(sp_obj, 'signals', [])
+                signals = RecommendationEngine._get_attr(sp_obj, 'signals', []) or []
                 latest = signals[-1] if signals else None
-            if not latest:
-                return 0.0
-            return float(getattr(latest, 'breakdown_price', None) or getattr(latest, 'price', 0))
+            if not latest: return 0.0
+            return _as_float(
+                RecommendationEngine._get_attr(latest, 'breakdown_price', None) or
+                RecommendationEngine._get_attr(latest, 'price', 0)
+            )
 
         def _get_upthrust_high(ut_obj) -> float:
-            if not ut_obj:
-                return 0.0
-            latest = getattr(ut_obj, 'latest_upthrust', None)
+            if not ut_obj: return 0.0
+            latest = RecommendationEngine._get_attr(ut_obj, 'latest_upthrust', None)
             if not latest:
-                signals = getattr(ut_obj, 'upthrusts', [])
+                signals = RecommendationEngine._get_attr(ut_obj, 'upthrusts', []) or []
                 latest = signals[-1] if signals else None
-            if not latest:
-                return 0.0
-            return float(getattr(latest, 'breakout_price', None) or getattr(latest, 'price', 0))
+            if not latest: return 0.0
+            return _as_float(
+                RecommendationEngine._get_attr(latest, 'breakout_price', None) or
+                RecommendationEngine._get_attr(latest, 'price', 0)
+            )
 
         direction = "观望"
         zone = "等待形态确认"
         stop = StopLossModel(conservative=0.0, aggressive=0.0)
-        if isinstance(pattern_results, dict):
-            phase_str = pattern_results.get('phase') or 'Unknown'
-        else:
-            phase_str = getattr(pattern_results, 'phase', None) or 'Unknown'
+        phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
 
         def _get_lps_low(window: int = 15) -> float:
             return float(data['Low'].tail(window).min())
@@ -590,10 +621,49 @@ class RecommendationEngine:
         def _get_lpsy_high(window: int = 15) -> float:
             return float(data['High'].tail(window).max())
 
+        def _event_get(event_obj, key: str, default=None):
+            return RecommendationEngine._get_attr(event_obj, key, default)
+
+        def _event_detected(event_obj) -> bool:
+            return bool(_event_get(event_obj, 'detected', False))
+
+        def _event_latest(event_obj):
+            latest = _event_get(event_obj, 'latest')
+            if latest:
+                return latest
+            latest = _event_get(event_obj, 'latest_spring')
+            if latest:
+                return latest
+            latest = _event_get(event_obj, 'latest_upthrust')
+            if latest:
+                return latest
+            signals = _event_get(event_obj, 'signals', []) or []
+            return signals[-1] if signals else None
+
+        def _as_float(value, default: float = 0.0) -> float:
+            if isinstance(value, dict) and 'value' in value:
+                value = value.get('value')
+            elif hasattr(value, 'value'):
+                value = getattr(value, 'value')
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _event_price(event_obj, default: float) -> float:
+            price = _event_get(event_obj, 'price', None)
+            if price is None:
+                latest = _event_latest(event_obj)
+                price = _event_get(latest, 'price', default) if latest else default
+            return _as_float(price, default)
+
+        def _event_level(event_obj, key: str, default: float) -> float:
+            return _as_float(_event_get(event_obj, key, default), default)
+
         # ── 方向判断 (结构导向刚性止损) ──
-        if joc.get('detected'):
+        if _event_detected(joc):
             direction = "做多"
-            creek = joc.get('creek_level', current_price)
+            creek = _event_level(joc, 'creek_level', current_price)
             zone = f"{creek:.2f} 附近 (JOC突破)"
             lps_low = _get_lps_low(15)
             # 刚性锚定 Creek 下沿或 LPS 支撑低点
@@ -603,7 +673,7 @@ class RecommendationEngine:
                 aggressive=round(creek * 0.995, 2), # 紧贴小溪下沿，一旦漏水立刻止损
                 atr_dynamic_stop=round(cons_stop - atr_val * 0.5, 2),
             )
-        elif spring.get('detected'):
+        elif _event_detected(spring):
             direction = "做多"
             spring_low = _get_spring_low(spring)
             if spring_low <= 0:
@@ -615,9 +685,9 @@ class RecommendationEngine:
                 aggressive=round(spring_low * 0.995, 2),
                 atr_dynamic_stop=round(spring_low - atr_val * 0.5, 2),
             )
-        elif sos.get('detected') and not joc.get('detected') and not spring.get('detected'):
+        elif _event_detected(sos) and not _event_detected(joc) and not _event_detected(spring):
             direction = "做多"
-            sos_price = getattr(sos, 'price', current_price) or current_price
+            sos_price = _event_price(sos, current_price)
             zone = f"{sos_price:.2f} 附近 (SOS突破)"
             lps_low = _get_lps_low(15)
             cons_stop = min(lps_low, sos_price * 0.99)
@@ -626,9 +696,9 @@ class RecommendationEngine:
                 aggressive=round(sos_price * 0.995, 2),
                 atr_dynamic_stop=round(cons_stop - atr_val * 0.5, 2),
             )
-        elif fti.get('detected'):
+        elif _event_detected(fti):
             direction = "做空"
-            ice = fti.get('ice_level', current_price)
+            ice = _event_level(fti, 'ice_level', current_price)
             zone = f"{ice:.2f} 附近 (FTI跌破)"
             lpsy_high = _get_lpsy_high(15)
             cons_stop = max(lpsy_high, ice * 1.01)
@@ -637,7 +707,7 @@ class RecommendationEngine:
                 aggressive=round(ice * 1.005, 2), # 紧贴冰层上沿，一旦涨回立刻止损
                 atr_dynamic_stop=round(cons_stop + atr_val * 0.5, 2),
             )
-        elif upthrust.get('detected'):
+        elif _event_detected(upthrust):
             direction = "做空"
             ut_high = _get_upthrust_high(upthrust)
             if ut_high <= 0:
@@ -649,9 +719,9 @@ class RecommendationEngine:
                 aggressive=round(ut_high * 1.005, 2),
                 atr_dynamic_stop=round(ut_high + atr_val * 0.5, 2),
             )
-        elif sow.get('detected') and not fti.get('detected') and not upthrust.get('detected'):
+        elif _event_detected(sow) and not _event_detected(fti) and not _event_detected(upthrust):
             direction = "做空"
-            sow_price = getattr(sow, 'price', current_price) or current_price
+            sow_price = _event_price(sow, current_price)
             zone = f"{sow_price:.2f} 附近 (SOW跌破)"
             lpsy_high = _get_lpsy_high(15)
             cons_stop = max(lpsy_high, sow_price * 1.01)
@@ -708,12 +778,12 @@ class RecommendationEngine:
 
         # UTAD ST 证伪/风控保护拦截
         is_utad_falsified = False
-        if utad.get('detected') and not utad.get('st_confirmed', True):
+        if _event_detected(utad) and not _event_get(utad, 'st_confirmed', True):
             is_utad_falsified = True
             direction = "做多"
             zone = "UTAD 二次测试放量或价格稳健未跌回，诱多证伪，实为强势筹码突破，建议顺势做多。"
-            utad_high = utad.get('breakout_price', current_price)
-            res_level = utad.get('resistance_level', current_price * 0.95)
+            utad_high = _event_level(utad, 'breakout_price', current_price)
+            res_level = _event_level(utad, 'resistance_level', current_price * 0.95)
             cons_stop = min(res_level, current_price * 0.92)
             stop = StopLossModel(
                 conservative=round(cons_stop, 2),

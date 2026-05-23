@@ -64,8 +64,9 @@ class WyckoffReportGenerator:
         sos = self.pattern_detector.detect_sos()
         #  修复：传递trading_range参数给SOW检测
         sow = self.pattern_detector.detect_sow(trading_range=trading_range)
-        lps = self.pattern_detector.detect_lps()
-        lpsy = self.pattern_detector.detect_lpsy()
+        joc = self.pattern_detector.detect_joc_menhongtao()
+        lps = self.pattern_detector.detect_lps(sos, spring, trading_range=trading_range, joc_result=joc)
+        lpsy = self.pattern_detector.detect_lpsy(trading_range=trading_range)
         ps = self.pattern_detector.detect_preliminary_support()
         psy = self.pattern_detector.detect_preliminary_supply()
 
@@ -80,7 +81,6 @@ class WyckoffReportGenerator:
             )
 
         # 高级信号
-        joc = self.pattern_detector.detect_joc_menhongtao()
         fti = self.pattern_detector.detect_fti()
         vsa = self.pattern_detector.detect_vsa_menhongtao()
         boring_res = self.pattern_detector.detect_boring_zone()
@@ -211,14 +211,14 @@ class WyckoffReportGenerator:
         sos = self.pattern_detector.detect_sos()
         #  修复：传递trading_range参数给SOW检测
         sow = self.pattern_detector.detect_sow(trading_range=trading_range)
-        lps = self.pattern_detector.detect_lps()
-        lpsy = self.pattern_detector.detect_lpsy()
+        joc = self.pattern_detector.detect_joc_menhongtao()
+        lps = self.pattern_detector.detect_lps(sos, spring, trading_range=trading_range, joc_result=joc)
+        lpsy = self.pattern_detector.detect_lpsy(trading_range=trading_range)
         ps = self.pattern_detector.detect_preliminary_support()
         psy = self.pattern_detector.detect_preliminary_supply()
 
 
         # 高级信号
-        joc = self.pattern_detector.detect_joc_menhongtao()
         fti = self.pattern_detector.detect_fti()
         vsa = self.pattern_detector.detect_vsa_menhongtao()
         boring_res = self.pattern_detector.detect_boring_zone()

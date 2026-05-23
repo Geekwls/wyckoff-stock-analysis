@@ -46,10 +46,38 @@ class SequenceValidator:
         if not obj:
             return None
         for k in keys:
-            v = getattr(obj, k, None)
+            v = obj.get(k) if isinstance(obj, dict) else getattr(obj, k, None)
             if v is not None:
                 return v
         return None
+
+    @staticmethod
+    def _get_attr(obj: Any, key: str, default=None) -> Any:
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @classmethod
+    def _latest_detail(cls, obj: Any, latest_key: str = 'latest') -> Any:
+        latest = cls._get_attr(obj, latest_key)
+        if latest:
+            return latest
+        signals = cls._get_attr(obj, 'signals', []) or []
+        return signals[-1] if signals else None
+
+    @staticmethod
+    def _num(value: Any, default: float = 0.0) -> float:
+        if isinstance(value, dict):
+            value = value.get('value', default)
+        elif hasattr(value, 'value'):
+            value = getattr(value, 'value')
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     @staticmethod
     def _to_ts(v: Any) -> Any:
         """统一日期解析 — 委托至共享 TypeConverter"""
@@ -116,19 +144,14 @@ class SequenceValidator:
                     notes.append("[经典吸筹模型确认] 检测到 Phase B 弱势出现后接 Phase C 终极震仓，因果链高度吻合，吸筹置信度极高！")
                 else:
                     # SOW 发生在 Spring 之后，进行无量测试与位置破位校验
-                    sow_low = getattr(sow.latest, 'price', 0) if sow.latest else 0
-                    if not sow_low and hasattr(sow, 'signals') and sow.signals:
-                        sow_low = getattr(sow.signals[-1], 'price', 0)
+                    sow_latest = self._latest_detail(sow)
+                    sow_low = self._num(self._get_attr(sow_latest, 'price', 0))
                     
-                    sl = getattr(spring, 'latest_spring', None)
-                    if sl is None and hasattr(spring, 'signals') and spring.signals:
-                        sl = spring.signals[-1]
-                    spring_low = getattr(sl, 'breakdown_price', 0) if sl else 0
+                    sl = self._latest_detail(spring, 'latest_spring')
+                    spring_low = self._num(self._get_attr(sl, 'breakdown_price', 0)) if sl else 0
                     
                     # 缩量校验
-                    sow_vol_ratio = getattr(sow.latest, 'volume_ratio', 1.0) if sow.latest else 1.0
-                    if not sow_vol_ratio and hasattr(sow, 'signals') and sow.signals:
-                        sow_vol_ratio = getattr(sow.signals[-1], 'volume_ratio', 1.0)
+                    sow_vol_ratio = self._num(self._get_attr(sow_latest, 'volume_ratio', 1.0), 1.0)
                         
                     if spring_low > 0 and sow_low > 0:
                         if sow_low >= spring_low * 0.98:
@@ -222,10 +245,9 @@ class SequenceValidator:
         if not getattr(lps, 'detected', False):
             return {"valid": False, "reason": "no_lps"}
 
-        signals = getattr(lps, 'signals', [])
-        latest = getattr(lps, 'latest', signals[-1] if signals else None)
-        lps_price = getattr(latest, "price", 0) if latest else 0
-        lps_date = self._to_ts(getattr(latest, "date", None)) if latest else None
+        latest = self._latest_detail(lps)
+        lps_price = self._num(self._get_attr(latest, "price", 0)) if latest else 0
+        lps_date = self._to_ts(self._get_attr(latest, "date", None)) if latest else None
 
         spring = self.e.spring
         sos = self.e.sos
@@ -236,10 +258,9 @@ class SequenceValidator:
         # Rule 1: LPS low > Spring low
         spring_break = None
         if getattr(spring, 'detected', False):
-            s_signals = getattr(spring, 'signals', [])
-            sl = getattr(spring, 'latest_spring', s_signals[-1] if s_signals else None)
-            spring_low = getattr(sl, "breakdown_price", 0) if sl else 0
-            spring_date = self._to_ts(getattr(sl, "date", getattr(sl, "breakdown_date", None))) if sl else None
+            sl = self._latest_detail(spring, 'latest_spring')
+            spring_low = self._num(self._get_attr(sl, "breakdown_price", 0)) if sl else 0
+            spring_date = self._to_ts(self._get_attr(sl, "date", self._get_attr(sl, "breakdown_date", None))) if sl else None
             spring_break = spring_low
 
             if spring_low > 0 and lps_price > spring_low:
@@ -413,18 +434,13 @@ class SequenceValidator:
                     pass
                 else:
                     # SOW after Spring - Check breakdown and volume
-                    sow_low = getattr(sow.latest, 'price', 0) if sow.latest else 0
-                    if not sow_low and hasattr(sow, 'signals') and sow.signals:
-                        sow_low = getattr(sow.signals[-1], 'price', 0)
+                    sow_latest = self._latest_detail(sow)
+                    sow_low = self._num(self._get_attr(sow_latest, 'price', 0))
                     
-                    sl = getattr(spring, 'latest_spring', None)
-                    if sl is None and hasattr(spring, 'signals') and spring.signals:
-                        sl = spring.signals[-1]
-                    spring_low = getattr(sl, 'breakdown_price', 0) if sl else 0
+                    sl = self._latest_detail(spring, 'latest_spring')
+                    spring_low = self._num(self._get_attr(sl, 'breakdown_price', 0)) if sl else 0
 
-                    sow_vol_ratio = getattr(sow.latest, 'volume_ratio', 1.0) if sow.latest else 1.0
-                    if not sow_vol_ratio and hasattr(sow, 'signals') and sow.signals:
-                        sow_vol_ratio = getattr(sow.signals[-1], 'volume_ratio', 1.0)
+                    sow_vol_ratio = self._num(self._get_attr(sow_latest, 'volume_ratio', 1.0), 1.0)
 
                     if spring_low > 0 and sow_low > 0:
                         if sow_low < spring_low * 0.98:

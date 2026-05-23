@@ -4,6 +4,40 @@ class SignalSection(BaseSectionBuilder):
     """构建新威科夫高级信号区块 (JOC, FTI, VSA, 枯燥区)"""
     def build(self, joc: dict, fti: dict, vsa: dict, boring_res: dict, dead_corner: dict) -> str:
         report = ""
+        vsa = vsa or {}
+        boring_res = boring_res or {}
+        dead_corner = dead_corner or {}
+
+        def _get(obj, key, default=None):
+            if obj is None:
+                return default
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+
+        def _detected(obj):
+            return bool(_get(obj, 'detected', False))
+
+        def _latest(obj):
+            for key in ('latest', 'latest_spring', 'latest_upthrust'):
+                val = _get(obj, key)
+                if val:
+                    return val
+            signals = _get(obj, 'signals', []) or []
+            return signals[-1] if signals else None
+
+        def _date_str(value):
+            return value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else str(value)
+
+        def _num(value, default=0.0):
+            if isinstance(value, dict):
+                value = value.get('value', default)
+            elif hasattr(value, 'value'):
+                value = getattr(value, 'value')
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
         
         # Boring Zone Warning
         if boring_res.get('detected') or boring_res.get('score', 0) >= 70:
@@ -26,100 +60,73 @@ class SignalSection(BaseSectionBuilder):
 
         # Advanced Signals (JOC, FTI, VSA)
         # 安全地检查FTI和JOC
-        joc_detected = False
-        if joc is not None:
-            if hasattr(joc, 'detected'):
-                joc_detected = joc.detected
-            elif isinstance(joc, dict):
-                joc_detected = joc.get('detected', False)
-
-        fti_detected = False
-        if fti is not None:
-            if hasattr(fti, 'detected'):
-                fti_detected = fti.detected
-            elif isinstance(fti, dict):
-                fti_detected = fti.get('detected', False)
+        joc_detected = _detected(joc)
+        fti_detected = _detected(fti)
 
         has_advanced = joc_detected or fti_detected or any(
-            vsa.get(k, {}).get('detected') for k in ('no_supply', 'no_demand', 'stopping_vol')
+            _detected(vsa.get(k, {})) for k in ('no_supply', 'no_demand', 'stopping_vol')
         )
         if has_advanced:
             report += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n【新威科夫信号（孟洪涛）】\n"
 
         # 安全地获取JOC信息
         if joc is not None:
-            if hasattr(joc, 'detected'):
-                joc_detected = joc.detected
-            else:
-                joc_detected = joc.get('detected', False) if isinstance(joc, dict) else False
-
-            if joc_detected:
-                # 从模型对象或dict中获取数据
-                if hasattr(joc, 'date'):
-                    joc_data = joc
-                else:
-                    joc_data = joc
-
-                joc_date = joc_data['date'].strftime('%Y-%m-%d') if hasattr(joc_data['date'], 'strftime') else str(joc_data['date'])
+            if _detected(joc):
+                joc_data = _latest(joc) or joc
+                joc_date = _date_str(_get(joc_data, 'date', 'N/A'))
                 test_info = ""
-                if joc_data.get('test_detected') and joc_data.get('test_date') is not None:
-                    td = joc_data['test_date'].strftime('%Y-%m-%d') if hasattr(joc_data['test_date'], 'strftime') else str(joc_data['test_date'])
-                    test_info = f"\n   回测确认: {td}（缩量{joc_data.get('test_vol_ratio', 0):.2f}x） ✓"
+                if _get(joc_data, 'test_detected') and _get(joc_data, 'test_date') is not None:
+                    td = _date_str(_get(joc_data, 'test_date'))
+                    test_info = f"\n   回测确认: {td}（缩量{_num(_get(joc_data, 'test_vol_ratio')):.2f}x） ✓"
                 else:
                     test_info = "\n   回测确认: 等待回测（Test of JOC）中"
 
-                confidence = joc_data.get('confidence', 0) * 100 if isinstance(joc_data.get('confidence'), (int, float)) else 75
+                confidence = _num(_get(joc_data, 'confidence'), 0.75) * 100
                 report += f"""
 🚀 检测到JOC（跃过小溪 / Jump Across the Creek）:
    日期: {joc_date}
-   小溪阻力位: {joc_data['creek_level']:.2f}
-   突破收盘: {joc_data['close_price']:.2f} (+{joc_data['breakout_pct']:.1f}%)
-   成交量: {joc_data['volume_ratio']:.1f}x 均量{test_info}
-   回测质量: {joc_data.get('test_quality', 'N/A')} ({joc_data.get('test_score', 0):.0f}分)
+   小溪阻力位: {_num(_get(joc_data, 'creek_level')):.2f}
+   突破收盘: {_num(_get(joc_data, 'close_price')):.2f} (+{_num(_get(joc_data, 'breakout_pct')):.1f}%)
+   成交量: {_num(_get(joc_data, 'volume_ratio')):.1f}x 均量{test_info}
+   回测质量: {_get(joc_data, 'test_quality', 'N/A')} ({_num(_get(joc_data, 'test_score')):.0f}分)
    置信度: {confidence:.0f}%
-   操作建议: {'🎯 质量极佳，可在回测确认后积极入场。' if joc_data.get('test_quality')=='HIGH' else '趋势跟踪买入信号（等待缩量回测 JOC 位入场）。'}
+   操作建议: {'🎯 质量极佳，可在回测确认后积极入场。' if _get(joc_data, 'test_quality')=='HIGH' else '趋势跟踪买入信号（等待缩量回测 JOC 位入场）。'}
 """
 
         # 安全地获取FTI信息
         if fti is not None:
-            if hasattr(fti, 'detected'):
-                fti_detected = fti.detected
-            else:
-                fti_detected = fti.get('detected', False) if isinstance(fti, dict) else False
-
-            if fti_detected:
-                # 从模型对象或dict中获取数据
-                if hasattr(fti, 'date'):
-                    fti_data = fti
-                else:
-                    fti_data = fti
-
-                fti_date = fti_data['date'].strftime('%Y-%m-%d') if hasattr(fti_data['date'], 'strftime') else str(fti_data['date'])
+            if _detected(fti):
+                fti_data = _latest(fti) or fti
+                fti_date = _date_str(_get(fti_data, 'date', 'N/A'))
                 test_info = ""
-                if fti_data.get('test_detected') and fti_data.get('test_date') is not None:
-                    td = fti_data['test_date'].strftime('%Y-%m-%d') if hasattr(fti_data['test_date'], 'strftime') else str(fti_data['test_date'])
-                    test_info = f"\n   回测确认: {td}（无需求反弹 {fti_data.get('test_vol_ratio', 0):.2f}x） ✓ 最佳做空点"
+                if _get(fti_data, 'test_detected') and _get(fti_data, 'test_date') is not None:
+                    td = _date_str(_get(fti_data, 'test_date'))
+                    test_info = f"\n   回测确认: {td}（无需求反弹 {_num(_get(fti_data, 'test_vol_ratio')):.2f}x） ✓ 最佳做空点"
                 else:
                     test_info = "\n   回测确认: 等待无需求反弹（Test of Ice）中"
                 report += f"""
 🔻 检测到FTI（跌破冰层 / Fall Through the Ice）:
    日期: {fti_date}
-   冰层支撑位: {fti_data['ice_level']:.2f}
-   跌破收盘: {fti_data['close_price']:.2f} ({fti_data['breakdown_pct']:.1f}%)
-   成交量: {fti_data['volume_ratio']:.1f}x 均量{test_info}
-   置信度: {fti_data['confidence']*100:.0f}%
+   冰层支撑位: {_num(_get(fti_data, 'ice_level')):.2f}
+   跌破收盘: {_num(_get(fti_data, 'close_price')):.2f} ({_num(_get(fti_data, 'breakdown_pct')):.1f}%)
+   成交量: {_num(_get(fti_data, 'volume_ratio')):.1f}x 均量{test_info}
+   置信度: {_num(_get(fti_data, 'confidence'))*100:.0f}%
    做空警示信号（等待缩量回测冰层位入场）
 """
 
         vsa_lines = []
         for k, icon, label in [('no_supply', '[OK]', 'No Supply（无供应）'), ('no_demand', '[ERR]', 'No Demand（无需求）'), ('stopping_vol', '[WARN]', 'Stopping Volume（停止行为）')]:
             sig = vsa.get(k, {})
-            if sig.get('detected'):
-                d = sig['date'].strftime('%Y-%m-%d') if hasattr(sig.get('date'), 'strftime') else str(sig.get('date', ''))
-                quality_note = f" [{sig.get('quality', 'neutral').upper()}]" if sig.get('quality') else ""
-                vsa_lines.append(f"   {icon} {label}: {d} 量比{sig.get('vol_ratio', 0):.2f}x{quality_note}")
-                if sig.get('note'):
-                    vsa_lines.append(f"      └─ {sig['note']}")
+            if _detected(sig):
+                sig_detail = _latest(sig) or sig
+                d = _date_str(_get(sig_detail, 'date', ''))
+                quality = _get(sig, 'quality') or _get(sig_detail, 'quality')
+                note = _get(sig, 'note') or _get(sig_detail, 'note')
+                vol_ratio = _get(sig_detail, 'vol_ratio', _get(sig_detail, 'volume_ratio', _get(sig, 'vol_ratio', 0)))
+                quality_note = f" [{quality.upper()}]" if quality else ""
+                vsa_lines.append(f"   {icon} {label}: {d} 量比{_num(vol_ratio):.2f}x{quality_note}")
+                if note:
+                    vsa_lines.append(f"      └─ {note}")
 
         # Bag Holding (接盘) 信号
         bag = vsa.get('bag_holding', {})

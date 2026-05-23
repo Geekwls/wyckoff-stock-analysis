@@ -366,11 +366,22 @@ class WyckoffPatternDetector:
             trading_range = self.detect_trading_range()
         return self.sw_detector.detect_sow(trading_range=trading_range)
 
-    def detect_lps(self, sos_result: Optional[Dict] = None, spring_res: Optional[Dict] = None, trading_range: Optional[Dict] = None) -> Dict:
+    def detect_lps(
+        self,
+        sos_result: Dict = None,
+        spring_res: Dict = None,
+        trading_range: Dict = None,
+        joc_result: Dict = None,
+    ) -> Dict:
         """检测 LPS (Last Point of Support)"""
         if trading_range is None:
             trading_range = self.detect_trading_range()
-        return self.sw_detector.detect_lps(spring_res=spring_res, trading_range=trading_range, sos_result=sos_result)
+        return self.sw_detector.detect_lps(
+            spring_res=spring_res,
+            trading_range=trading_range,
+            sos_result=sos_result,
+            joc_result=joc_result,
+        )
 
     def detect_lpsy(self, sow_result: Optional[Dict] = None, trading_range: Optional[Dict] = None) -> Dict:
         """检测 LPSY (Last Point of Supply)"""

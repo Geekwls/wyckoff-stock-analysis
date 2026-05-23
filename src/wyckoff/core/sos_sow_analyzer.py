@@ -22,6 +22,33 @@ class SOSSOWAnalyzer:
     """
 
     @staticmethod
+    def _get(obj: Any, key: str, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @classmethod
+    def _latest(cls, obj: Any):
+        latest = cls._get(obj, 'latest')
+        if latest:
+            return latest
+        signals = cls._get(obj, 'signals', []) or []
+        return signals[-1] if signals else None
+
+    @staticmethod
+    def _num(value: Any, default: float = 0.0) -> float:
+        if isinstance(value, dict):
+            value = value.get('value', default)
+        elif hasattr(value, 'value'):
+            value = getattr(value, 'value')
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
     def analyze_sos_sow_conflict(
         sos: Dict[str, Any],
         sow: Dict[str, Any],
@@ -57,14 +84,17 @@ class SOSSOWAnalyzer:
         }
 
         # 检查SOS和SOW是否都存在
-        if not sos.get('detected') or not sow.get('detected'):
+        if not SOSSOWAnalyzer._get(sos, 'detected') or not SOSSOWAnalyzer._get(sow, 'detected'):
             result['interpretation'] = 'no_conflict'
             result['reasons'].append('SOS或SOW信号缺失，无矛盾')
             return result
 
+        sos_latest = SOSSOWAnalyzer._latest(sos) or sos
+        sow_latest = SOSSOWAnalyzer._latest(sow) or sow
+
         # 获取SOS和SOW的日期
-        sos_date_str = sos.get('date', '')
-        sow_date_str = sow.get('date', '')
+        sos_date_str = SOSSOWAnalyzer._get(sos_latest, 'date', SOSSOWAnalyzer._get(sos, 'date', ''))
+        sow_date_str = SOSSOWAnalyzer._get(sow_latest, 'date', SOSSOWAnalyzer._get(sow, 'date', ''))
 
         if not sos_date_str or not sow_date_str:
             result['interpretation'] = 'no_conflict'
@@ -85,18 +115,24 @@ class SOSSOWAnalyzer:
         days_diff = (sow_date - sos_date).days
 
         # 获取量比
-        sos_vol_ratio = sos.get('volume_ratio', sos.get('vol_ratio', 1.0))
-        sow_vol_ratio = sow.get('volume_ratio', sow.get('vol_ratio', 1.0))
+        sos_vol_ratio = SOSSOWAnalyzer._num(
+            SOSSOWAnalyzer._get(sos_latest, 'volume_ratio', SOSSOWAnalyzer._get(sos_latest, 'vol_ratio', SOSSOWAnalyzer._get(sos, 'volume_ratio', 1.0))),
+            1.0
+        )
+        sow_vol_ratio = SOSSOWAnalyzer._num(
+            SOSSOWAnalyzer._get(sow_latest, 'volume_ratio', SOSSOWAnalyzer._get(sow_latest, 'vol_ratio', SOSSOWAnalyzer._get(sow, 'volume_ratio', 1.0))),
+            1.0
+        )
 
         # 获取SOW的信号类型
-        sow_signal_type = sow.get('signal_type', '')
-        sow_price = sow.get('price', current_price)
-        sos_price = sos.get('price', current_price)
-        sow_low = sow.get('low', current_price)
+        sow_signal_type = SOSSOWAnalyzer._get(sow_latest, 'signal_type', SOSSOWAnalyzer._get(sow, 'signal_type', ''))
+        sow_price = SOSSOWAnalyzer._num(SOSSOWAnalyzer._get(sow_latest, 'price', SOSSOWAnalyzer._get(sow, 'price', current_price)), current_price)
+        sos_price = SOSSOWAnalyzer._num(SOSSOWAnalyzer._get(sos_latest, 'price', SOSSOWAnalyzer._get(sos, 'price', current_price)), current_price)
+        sow_low = SOSSOWAnalyzer._num(SOSSOWAnalyzer._get(sow_latest, 'low', SOSSOWAnalyzer._get(sow, 'low', sow_price)), sow_price)
 
         # 获取交易区间信息
-        tr_high = trading_range.get('high', 0) if trading_range else 0
-        tr_low = trading_range.get('low', 0) if trading_range else 0
+        tr_high = SOSSOWAnalyzer._num(SOSSOWAnalyzer._get(trading_range, 'high', 0)) if trading_range else 0
+        tr_low = SOSSOWAnalyzer._num(SOSSOWAnalyzer._get(trading_range, 'low', 0)) if trading_range else 0
 
         # 核心判断逻辑
         shakeout_score = 0  # 震仓得分（越高越可能是震仓）

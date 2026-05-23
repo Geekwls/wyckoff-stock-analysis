@@ -24,10 +24,13 @@ class HoldingDiagnostic:
 
         tr = self.pd.detect_trading_range()
         phase_res = self.pd.identify_phase()
-        spring = self.pd.detect_spring().get('detected', False)
-        sos = self.pd.detect_sos().get('detected', False)
-        lps_res = self.pd.detect_lps()
-        lpsy_res = self.pd.detect_lpsy()
+        spring_res = self.pd.detect_spring()
+        sos_res = self.pd.detect_sos()
+        joc_res = self.pd.detect_joc_menhongtao()
+        spring = spring_res.get('detected', False)
+        sos = sos_res.get('detected', False)
+        lps_res = self.pd.detect_lps(sos_res, spring_res, trading_range=tr, joc_result=joc_res)
+        lpsy_res = self.pd.detect_lpsy(trading_range=tr)
 
         ma20 = self.analyzer.data['MA20'].iloc[-1] if 'MA20' in self.analyzer.data.columns else None
         ma50 = self.analyzer.data['MA50'].iloc[-1] if 'MA50' in self.analyzer.data.columns else None

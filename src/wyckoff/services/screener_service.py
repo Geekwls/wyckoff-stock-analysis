@@ -313,7 +313,16 @@ class ScreenerService:
         results = []
         
         for symbol, analyzer in self._analyzers.items():
-            lps = analyzer.pattern_detector.detect_lps()
+            trading_range = analyzer.pattern_detector.detect_trading_range()
+            spring = analyzer.pattern_detector.detect_spring_menhongtao()
+            sos = analyzer.pattern_detector.detect_sos()
+            joc = analyzer.pattern_detector.detect_joc_menhongtao()
+            lps = analyzer.pattern_detector.detect_lps(
+                sos,
+                spring,
+                trading_range=trading_range,
+                joc_result=joc,
+            )
             if not lps.get('detected'):
                 continue
             

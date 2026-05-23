@@ -208,6 +208,22 @@ class MultiTimeframeCoordinator:
                 val = events.get(key)
             elif not val and events:
                 val = getattr(events, key, None)
+
+            # 新 EventsModel 中 spring/sos/sow 等核心事件是单字段存放，
+            # 旧调用可能传 spring_upthrust / sos_sow / lps_lpsy 聚合键。
+            if not val and events:
+                if key == 'spring':
+                    val = getattr(events, 'spring', None) if not isinstance(events, dict) else events.get('spring')
+                elif key == 'upthrust':
+                    val = getattr(events, 'upthrust', None) if not isinstance(events, dict) else events.get('upthrust')
+                elif key == 'sos':
+                    val = getattr(events, 'sos', None) if not isinstance(events, dict) else events.get('sos')
+                elif key == 'sow':
+                    val = getattr(events, 'sow', None) if not isinstance(events, dict) else events.get('sow')
+                elif key == 'lps':
+                    val = getattr(events, 'lps', None) if not isinstance(events, dict) else events.get('lps')
+                elif key == 'lpsy':
+                    val = getattr(events, 'lpsy', None) if not isinstance(events, dict) else events.get('lpsy')
             
             detected = False
             if isinstance(val, dict):
