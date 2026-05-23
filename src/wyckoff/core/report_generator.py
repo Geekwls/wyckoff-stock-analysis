@@ -47,12 +47,8 @@ class WyckoffReportGenerator:
         events = ctx.get('events')
         vsa = SignalExtractor.get_event_dict(events, 'vsa_menhongtao') if events else {}
         dead_corner = SignalExtractor.get_event_dict(events, 'dead_corner_breakout') if events else {}
-        if not vsa:
-            vsa = self.pattern_detector.detect_vsa_menhongtao()
-        if not dead_corner:
-            dead_corner = self.pattern_detector.detect_dead_corner_breakout()
-        ctx['vsa'] = vsa
-        ctx['dead_corner'] = dead_corner
+        ctx['vsa'] = vsa or {}
+        ctx['dead_corner'] = dead_corner or {}
 
         market_idx_analyzer = getattr(self.analyzer, '_get_cached_index_analyzer', lambda: None)()
         market_df = market_idx_analyzer.data if market_idx_analyzer else None

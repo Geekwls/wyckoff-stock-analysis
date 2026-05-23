@@ -182,13 +182,21 @@ class PhaseIdentifier(BaseDetector):
         has_ar = self._safe_check_detected(ar)
         has_st = self._safe_check_detected(st)
         has_ps = self._safe_check_detected(ps)
+        psy = self._get_event(events, 'preliminary_supply')
+        has_psy = self._safe_check_detected(psy)
+        climax_type = getattr(climax, 'type', None) if climax and has_climax else (
+            climax.get('type') if isinstance(climax, dict) and has_climax else None
+        )
 
-        # 威科夫理论：正式 Phase A 须 Climax + AR + ST（孟氏 PS→SC→AR→ST）
-        has_complete_structure = has_climax and has_ar and has_st
+        has_complete_structure = PhaseAdapter.is_phase_a_structure_complete(events)
 
         # 记录详细的缺失警告
         if has_climax and not has_complete_structure:
             missing = []
+            if climax_type == 'selling_climax' and not has_ps:
+                missing.append("PS(初次支撑)")
+            if climax_type == 'buying_climax' and not has_psy:
+                missing.append("PSY(初次供应)")
             if not has_ar:
                 missing.append("AR(自动反弹/回落)")
             if not has_st:
@@ -217,18 +225,21 @@ class PhaseIdentifier(BaseDetector):
         ar = self._get_event(events, 'automatic_reaction')
         st = self._get_event(events, 'secondary_test')
         ps = self._get_event(events, 'preliminary_support')
+        psy = self._get_event(events, 'preliminary_supply')
 
         has_climax = self._safe_check_detected(climax)
         has_ar = self._safe_check_detected(ar)
         has_st = self._safe_check_detected(st)
         has_ps = self._safe_check_detected(ps)
+        has_psy = self._safe_check_detected(psy)
 
         status = {
             "has_preliminary_support": has_ps,
+            "has_preliminary_supply": has_psy,
             "has_climax": has_climax,
             "has_automatic_reaction": has_ar,
             "has_secondary_test": has_st,
-            "is_complete": has_climax and has_ar and has_st,
+            "is_complete": PhaseAdapter.is_phase_a_structure_complete(events),
             "completeness_score": 0,
             "missing_elements": [],
             "warnings": []
@@ -237,6 +248,7 @@ class PhaseIdentifier(BaseDetector):
         # 计算完整性得分（满分4分）
         score = sum([
             has_ps,
+            has_psy,
             has_climax,
             has_ar,
             has_st
@@ -246,6 +258,7 @@ class PhaseIdentifier(BaseDetector):
         # 记录缺失元素
         required_elements = {
             'has_preliminary_support': 'PS',
+            'has_preliminary_supply': 'PSY',
             'has_climax': 'Climax',
             'has_automatic_reaction': 'AR',
             'has_secondary_test': 'ST'

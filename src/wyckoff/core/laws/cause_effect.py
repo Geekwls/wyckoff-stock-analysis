@@ -438,19 +438,50 @@ class CauseEffectMixin:
             "note": "基于突破波段质量(降级至单K线)动态评估" if quality_score != 0 else "基于阶段常态评估"
         }
 
+    def _resolve_tr_bounds(
+        self,
+        known_tr_high: float = None,
+        known_tr_low: float = None,
+    ) -> Tuple[float, float, str]:
+        """优先使用 TR 检测器边界，避免 60 日高低点误算因果。"""
+        if known_tr_high is not None and known_tr_low is not None:
+            return known_tr_high, known_tr_low, 'known'
+
+        if self.pattern_detector:
+            try:
+                phase_result = get_cached_phase_result(self.pattern_detector)
+                events = get_events_from_phase(phase_result)
+                tr = SignalExtractor.get_event_dict(events, 'trading_range')
+                tr_high = tr.get('high')
+                tr_low = tr.get('low')
+                if tr_high and tr_low and float(tr_high) > float(tr_low):
+                    return float(tr_high), float(tr_low), 'events_trading_range'
+            except Exception:
+                pass
+            try:
+                tr = self.pattern_detector.detect_trading_range()
+                if tr.get('high') and tr.get('low') and float(tr['high']) > float(tr['low']):
+                    return float(tr['high']), float(tr['low']), 'detect_trading_range'
+            except Exception:
+                pass
+
+        recent_data = self.data.tail(60)
+        return (
+            float(recent_data['High'].max()),
+            float(recent_data['Low'].min()),
+            'recent_60d_fallback',
+        )
+
     def _calculate_breakout_probability(self, phase: str, direction: str) -> str:
         res = self._calculate_breakout_probability_enhanced(phase, direction)
         return res['label']
 
     def _basic_cause_effect_analysis(self, phase: str = '', known_tr_high: float = None, known_tr_low: float = None) -> dict:
         try:
+            trading_range_high, trading_range_low, tr_source = self._resolve_tr_bounds(
+                known_tr_high, known_tr_low
+            )
             recent_data = self.data.tail(60)
-            if known_tr_high is not None and known_tr_low is not None:
-                trading_range_high = known_tr_high
-                trading_range_low = known_tr_low
-            else:
-                trading_range_high = recent_data['High'].max()
-                trading_range_low = recent_data['Low'].min()
             cause_size = trading_range_high - trading_range_low
 
             try:
@@ -505,7 +536,7 @@ class CauseEffectMixin:
                     "target_3": round(breakout_point + potential * 1.618, 2)
                 }
                 description = f"基于波动率收缩{volatility_contraction*100:.1f}%和{duration}天积累"
-            return {
+            result = {
                 "method": "volatility_contraction",
                 "cause_size": cause_size,
                 "volatility_contraction": round(volatility_contraction * 100, 1),
@@ -516,8 +547,10 @@ class CauseEffectMixin:
                 "current_position": (self.data['Close'].iloc[-1] - trading_range_low) / cause_size if cause_size > 0 else 0,
                 "consolidation_duration_days": duration,
                 "description": description,
-                "theory": "威科夫因果法则：水平计数决定垂直目标" if not is_downside else "威科夫因果法则：派发期向下目标需破位激活"
+                "theory": "威科夫因果法则：水平计数决定垂直目标" if not is_downside else "威科夫因果法则：派发期向下目标需破位激活",
+                "tr_bounds_source": tr_source,
             }
+            return result
         except Exception as e:
             raise LawAnalysisError("因果分析", str(e)) from e
 

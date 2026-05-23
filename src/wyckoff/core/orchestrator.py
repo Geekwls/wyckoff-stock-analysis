@@ -57,6 +57,7 @@ class WyckoffOrchestrator:
             )
 
             patterns, detector = self._detect_patterns_and_phase(data)
+            patterns = self._enrich_patterns_with_rs(resolved_symbol, period, data, patterns)
             patterns['symbol'] = resolved_symbol
             market_env = self._analyze_market_env(resolved_symbol, period)
             if isinstance(market_env, dict):
@@ -99,6 +100,31 @@ class WyckoffOrchestrator:
         patterns = SignalExtractor.build_scoring_payload(phase_info)
         return patterns, detector
 
+    def _enrich_patterns_with_rs(
+        self,
+        symbol: str,
+        period: str,
+        data: pd.DataFrame,
+        patterns: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Phase 25：为 orchestrator 分析链附加相对强度（威科夫第二步）。"""
+        if patterns.get('relative_strength'):
+            return patterns
+        try:
+            from .symbol_resolver import SymbolResolver
+            from .relative_strength_analyzer import RelativeStrengthAnalyzer
+
+            index_symbol = SymbolResolver().resolve_benchmark_index(symbol)
+            if not index_symbol:
+                return patterns
+            _, index_df = self.data_fetcher.fetch_data(index_symbol, period)
+            patterns['relative_strength'] = RelativeStrengthAnalyzer(
+                data, symbol
+            ).calculate_rs(index_df)
+        except Exception as exc:
+            logger.debug(f"RS enrichment skipped for {symbol}: {exc}")
+        return patterns
+
     def _generate_recommendations(
         self, data: pd.DataFrame, patterns: Dict, market_env: Any, detector,
         mtf_coordinator: Optional[Any] = None
@@ -122,6 +148,9 @@ class WyckoffOrchestrator:
                         f"周线趋势方向为 {weekly_dir}，但日线威科夫信号 {signal_type.upper()} "
                         f"方向为 {detected_direction}，二者冲突。"
                     )
+
+        patterns['mtf_has_conflict'] = has_conflict
+        patterns['mtf_conflict_details'] = conflict_details
 
         quality = self.rec_engine.calculate_signal_quality(data, patterns, market_env)
         targets = self._calculate_targets(detector, patterns)

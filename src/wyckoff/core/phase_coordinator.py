@@ -1072,12 +1072,9 @@ class PhaseCoordinator:
 
 
     def _has_complete_phase_a(self, events: 'EventsModel') -> bool:
-        """检查是否有完整的Phase A结构（SC/AR + ST）"""
-        has_climax = getattr(events.climax, 'detected', False) if events.climax else False
-        has_ar = getattr(events.automatic_reaction, 'detected', False) if events.automatic_reaction else False
-        has_st = getattr(events.secondary_test, 'detected', False) if events.secondary_test else False
-
-        return has_climax and has_ar and has_st
+        """检查是否有完整的 Phase A 结构（孟氏 PS/PSY → SC/BC → AR → ST）。"""
+        from .utils import PhaseAdapter
+        return PhaseAdapter.is_phase_a_structure_complete(events)
 
     def _calculate_consolidation_duration(self, events: 'EventsModel') -> int:
         """计算震荡持续时间（从 ST 完成后开始计数）

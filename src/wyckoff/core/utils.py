@@ -87,6 +87,71 @@ class PhaseAdapter:
         return PhaseAdapter.is_phase_c(phase) or PhaseAdapter.is_phase_d(phase)
 
     @staticmethod
+    def _event_detected_flag(obj: Any) -> bool:
+        if obj is None:
+            return False
+        if isinstance(obj, dict):
+            return bool(obj.get('detected'))
+        return bool(getattr(obj, 'detected', False))
+
+    @staticmethod
+    def _climax_type(obj: Any) -> Optional[str]:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get('type')
+        return getattr(obj, 'type', None)
+
+    @staticmethod
+    def _phase_a_event(events: Any, *keys: str) -> Any:
+        for key in keys:
+            if isinstance(events, dict):
+                val = events.get(key)
+            else:
+                val = getattr(events, key, None)
+            if val is not None:
+                return val
+        return None
+
+    @staticmethod
+    def is_phase_a_structure_complete(events: Any) -> bool:
+        """
+        孟氏 Phase A 完整链条（Phase 24 硬门槛）：
+        - 吸筹：PS → SC → AR → ST
+        - 派发：PSY → BC → AR → ST
+        - 再吸筹/再派发：AR + ST（无 SC/BC 高潮）可豁免 PS/PSY
+        """
+        climax = PhaseAdapter._phase_a_event(events, 'climax')
+        ar = PhaseAdapter._phase_a_event(events, 'automatic_reaction', 'ar')
+        st = PhaseAdapter._phase_a_event(events, 'secondary_test', 'st')
+        ps = PhaseAdapter._phase_a_event(events, 'preliminary_support', 'ps')
+        psy = PhaseAdapter._phase_a_event(events, 'preliminary_supply', 'psy')
+
+        has_ar = PhaseAdapter._event_detected_flag(ar)
+        has_st = PhaseAdapter._event_detected_flag(st)
+        has_ps = PhaseAdapter._event_detected_flag(ps)
+        has_psy = PhaseAdapter._event_detected_flag(psy)
+        has_climax = PhaseAdapter._event_detected_flag(climax)
+        ctype = PhaseAdapter._climax_type(climax) if has_climax else None
+
+        if has_ar and has_st and not has_climax:
+            return True
+        if has_ar and has_st and ctype not in ('selling_climax', 'buying_climax'):
+            return True
+
+        if ctype == 'selling_climax':
+            return has_ps and has_climax and has_ar and has_st
+        if ctype == 'buying_climax':
+            return has_psy and has_climax and has_ar and has_st
+
+        if has_climax and has_ar and has_st:
+            if has_psy and not has_ps:
+                return has_psy and has_climax and has_ar and has_st
+            return has_ps and has_climax and has_ar and has_st
+
+        return False
+
+    @staticmethod
     def get_market_side(phase: Union[str, WyckoffPhase]) -> str:
         """返回买方(bullish)或卖方(bearish)市场侧"""
         # 优先级：Accumulation/Markup 为 Bullish

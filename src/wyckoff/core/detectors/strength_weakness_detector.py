@@ -762,28 +762,36 @@ class StrengthWeaknessDetector(BaseDetector):
             'sc_detected': False,
             'ar_detected': False,
             'st_detected': False,
+            'ps_detected': False,
             'structure_complete': False,
             'missing_events': []
         }
 
         if is_accumulation and phase_a_events:
-            # 只有在吸筹阶段才验证Phase A结构
+            from ..utils import PhaseAdapter
+            pa_view = {
+                'preliminary_support': phase_a_events.get('ps'),
+                'preliminary_supply': phase_a_events.get('psy'),
+                'climax': phase_a_events.get('climax'),
+                'automatic_reaction': phase_a_events.get('ar'),
+                'secondary_test': phase_a_events.get('st'),
+            }
+            climax = phase_a_events.get('climax') or {}
+            phase_a_validation['ps_detected'] = (phase_a_events.get('ps') or {}).get('detected', False)
             phase_a_validation['sc_detected'] = (
-                phase_a_events.get('climax', {}).get('type') == 'selling_climax' and
-                phase_a_events.get('climax', {}).get('detected', False)
+                climax.get('type') == 'selling_climax' and climax.get('detected', False)
             )
-            phase_a_validation['ar_detected'] = phase_a_events.get('ar', {}).get('detected', False)
-            phase_a_validation['st_detected'] = phase_a_events.get('st', {}).get('detected', False)
+            phase_a_validation['ar_detected'] = (phase_a_events.get('ar') or {}).get('detected', False)
+            phase_a_validation['st_detected'] = (phase_a_events.get('st') or {}).get('detected', False)
 
-            has_complete_phase_a_structure = (
-                phase_a_validation['sc_detected'] and
-                phase_a_validation['ar_detected'] and
-                phase_a_validation['st_detected']
-            )
+            has_complete_phase_a_structure = PhaseAdapter.is_phase_a_structure_complete(pa_view)
             phase_a_validation['structure_complete'] = has_complete_phase_a_structure
 
-            # 记录缺失的事件
-            if not phase_a_validation['sc_detected']:
+            if phase_a_validation['sc_detected'] and not phase_a_validation['ps_detected']:
+                phase_a_validation['missing_events'].append('PS（初次支撑）')
+            if not phase_a_validation['sc_detected'] and not (
+                phase_a_validation['ar_detected'] and phase_a_validation['st_detected']
+            ):
                 phase_a_validation['missing_events'].append('SC（恐慌抛售）')
             if not phase_a_validation['ar_detected']:
                 phase_a_validation['missing_events'].append('AR（自然反弹）')

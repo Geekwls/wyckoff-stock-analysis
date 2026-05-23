@@ -87,6 +87,7 @@ class TestPhaseCRequiresPhaseA(unittest.TestCase):
     def test_spring_with_complete_phase_a_is_phase_c(self):
         ident = PhaseIdentifier(_make_ohlcv(), WyckoffConfig(), WyckoffThresholds())
         events = _base_events(
+            preliminary_support=WyckoffEventModel(detected=True),
             climax=ClimaxModel(detected=True, type='selling_climax'),
             automatic_reaction=WyckoffEventModel(detected=True),
             secondary_test=WyckoffEventModel(detected=True),
@@ -95,6 +96,18 @@ class TestPhaseCRequiresPhaseA(unittest.TestCase):
         phase, enum, conf, _ = ident._determine_phase_from_events(events)
         self.assertIn('Phase C', phase)
         self.assertEqual(enum, WyckoffPhase.PHASE_C)
+
+    def test_spring_without_ps_not_phase_c(self):
+        ident = PhaseIdentifier(_make_ohlcv(), WyckoffConfig(), WyckoffThresholds())
+        events = _base_events(
+            climax=ClimaxModel(detected=True, type='selling_climax'),
+            automatic_reaction=WyckoffEventModel(detected=True),
+            secondary_test=WyckoffEventModel(detected=True),
+            spring=SpringModel(detected=True),
+        )
+        phase, enum, conf, _ = ident._determine_phase_from_events(events)
+        self.assertNotIn('Phase C', phase)
+        self.assertIn('Spring待Phase A确认', phase)
 
 
 class TestTradingPlanDistributionFtiGate(unittest.TestCase):
@@ -120,6 +133,7 @@ class TestTradingPlanDistributionFtiGate(unittest.TestCase):
             'phase': 'Distribution Phase D',
             'events_detected': {
                 'fti': {'detected': True, 'ice_level': 95.0},
+                'lpsy': {'detected': True, 'price': 96.0, 'resistance_level': 96.5},
             },
         }
         pd_mock.detect_trading_range.return_value = {'high': 110, 'low': 90}

@@ -1,23 +1,24 @@
 # 新威科夫代码审查问题清单与修复计划
 
-**文档版本：** v2.0（结案）  
+**文档版本：** v2.1（Phase 25 增量）  
 **审查日期：** 2026-05-23  
 **审查基准：** `references/meng-expert-system.md`、`references/wyckoff-theory-full.md`、`SKILL.md`  
 **审查范围：** `src/wyckoff` 核心检测、阶段协调、三大定律、交易建议、报告、批量筛选
 
 > 详细原始审查见 [CODE_REVIEW_REPORT.md](./CODE_REVIEW_REPORT.md)  
-> Phase 15–23 增量见 [PHASE15_OPTIMIZATIONS.md](./PHASE15_OPTIMIZATIONS.md) … [PHASE23_OPTIMIZATIONS.md](./PHASE23_OPTIMIZATIONS.md)
+> Phase 15–23 增量见 [PHASE15_OPTIMIZATIONS.md](./PHASE15_OPTIMIZATIONS.md) … [PHASE23_OPTIMIZATIONS.md](./PHASE23_OPTIMIZATIONS.md)  
+> Phase 24–25 见 [PHASE24_OPTIMIZATIONS.md](./PHASE24_OPTIMIZATIONS.md)、[PHASE25_OPTIMIZATIONS.md](./PHASE25_OPTIMIZATIONS.md)
 
 ---
 
-## 一、总体结论（Phase 23 后）
+## 一、总体结论（Phase 25 后）
 
 | 维度 | 评价 |
 |---|---|
-| 检测器理论设计 | **良好**（孟氏 Spring/JOC、FTI/LPSY 对称、Phase A 完整门槛） |
-| 决策链一致性 | **良好**（`effective_phase` 单一权威；报告/筛选/定律/验证脚本同源） |
-| 实盘级可用性 | **达标**（派发 suppression、JOC/FTI 门控、A 股验证 2/2） |
-| 测试保护 | **良好**（144 个 `test_phase*.py` + pytest 全量；CI workflow） |
+| 检测器理论设计 | **良好**（PS/PSY 硬门槛、Spring/JOC、FTI/LPSY 对称） |
+| 决策链一致性 | **优秀**（评分/计划/报告/验证脚本同源；第五步入场硬门控） |
+| 实盘级可用性 | **达标**（A 股 2/2；派发 suppression + JOC+LPS/FTI+LPSY 门控） |
+| 测试保护 | **良好**（162 个 `test_phase*.py` + 306 pytest；CI workflow） |
 
 **核心根因（已解决）：** 缺乏单一事实源 → `PhaseCoordinator.collect_all_events()` → `identify_phase()` → `SignalExtractor.build_scoring_payload()` → `get_effective_phase()` 贯通全链。
 
@@ -44,8 +45,18 @@
 | ID | 说明 | 状态 |
 |---|---|---|
 | O-1 | VSA / dead_corner 独立 detect | 设计如此，已 JOC 门控 |
-| O-2 | CI 全量 pytest | ✅ Phase 23 workflow |
+| O-2 | CI 全量 pytest | ✅ Phase 23+ workflow |
 | O-3 | P&F 合成数据方向断言 | ✅ `test_phase3_theory` 通过 |
+| O-4 | 美股/港股实盘样本扩充 | 观察（Yahoo 429 → `--cache-only`） |
+
+### Phase 24–25 增量（2026-05-23）
+
+| Phase | 核心修复 |
+|-------|----------|
+| 24 | 死角/JOC 评分同步；LPS/LPSY 评分门控；TR 因果；PS/PSY Phase A 硬门槛 |
+| 25 | JOC+LPS / FTI+LPSY 第五步入场；RS/MTF 方向硬门控；orchestrator RS  enrichment |
+
+**实盘复验：** [REAL_STOCK_VALIDATION.md](./REAL_STOCK_VALIDATION.md) — A 股 2/2 ✅
 
 ---
 
@@ -70,7 +81,7 @@
 - [x] `effective_phase` 报告/筛选同源（Phase 22）
 - [x] `派发阶段A` 早期派发拦截（Phase 23）
 
-**运行：** `PYTHONPATH=src python -m unittest discover -s tests -p 'test_phase*.py' -q` → 144 tests OK
+**运行：** `PYTHONPATH=src python -m unittest discover -s tests -p 'test_phase*.py' -q` → 162 tests OK
 
 ---
 

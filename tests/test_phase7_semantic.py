@@ -159,6 +159,7 @@ class TestLpsCreekAnchor(unittest.TestCase):
         det = StrengthWeaknessDetector(df, self.config, self.thresholds)
         det.update_analysis_context('Accumulation Phase C')
         det.set_phase_a_events({
+            'ps': {'detected': True},
             'climax': {'detected': True, 'type': 'selling_climax'},
             'ar': {'detected': True},
             'st': {'detected': True},

@@ -3,6 +3,7 @@ import numpy as np
 import logging
 from typing import Dict, List, Optional, cast, Any
 from .base_detector import BaseDetector, USE_VECTORIZED
+from ..thresholds import spring_max_recovery_days
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +51,7 @@ class MengReversalDetector(BaseDetector):
         last_close = df['Close'].iloc[-1]
         atr_pct = (atr_series.iloc[-1] / last_close * 100) if last_close > 0 else 0
 
-        #  修复#1: 收回天数逻辑优化 - 根据波动率动态调整
-        # 孟洪涛理论：低波动 1-3 天，中等波动 2-4 天，高波动 3-5 天
-        if atr_pct < 1.5:
-            max_recovery_days = 3  # 低波动：最多 3 天
-        elif atr_pct < 3.0:
-            max_recovery_days = 4  # 中等波动：最多 4 天
-        else:
-            max_recovery_days = 5  # 高波动：最多 5 天
+        max_recovery_days = spring_max_recovery_days(atr_pct)
         
         lows = np.asarray(df['Low'])
         closes = np.asarray(df['Close'])
@@ -129,8 +123,7 @@ class MengReversalDetector(BaseDetector):
         signals = []
         atr_series = self._calculate_atr_series(df, 14)
         atr_pct = (atr_series.iloc[-1] / df['Close'].iloc[-1] * 100) if df['Close'].iloc[-1] > 0 else 0
-        # 与向量化路径保持一致：波动率越高，允许的收回窗口越长
-        max_recovery_days = 3 if atr_pct < 1.5 else 4 if atr_pct < 3.0 else 5
+        max_recovery_days = spring_max_recovery_days(atr_pct)
         t = self.thresholds
         support_series = self._build_support_level_series(df)
         for i in range(20, len(df) - 5):

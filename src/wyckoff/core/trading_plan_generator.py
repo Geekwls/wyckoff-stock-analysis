@@ -86,6 +86,10 @@ class TradingPlanGenerator:
         fti_ev = SignalExtractor.get_event_dict(events, 'fti') if events else {}
         sow_ev = SignalExtractor.get_event_dict(events, 'sow') if events else {}
         upthrust_ev = SignalExtractor.get_event_dict(events, 'upthrust') if events else {}
+        lps_ev = SignalExtractor.get_event_dict(events, 'lps') if events else {}
+        lpsy_ev = SignalExtractor.get_event_dict(events, 'lpsy') if events else {}
+        has_lps = lps_ev.get('detected', False)
+        has_lpsy = lpsy_ev.get('detected', False)
         has_joc = joc_ev.get('detected', False)
         has_fti = fti_ev.get('detected', False)
         has_sow = sow_ev.get('detected', False)
@@ -104,10 +108,19 @@ class TradingPlanGenerator:
 
         # 威科夫方向锁：积累期默认谨慎；Phase D/JOC 才可积极做多
         if is_accumulation:
-            if has_joc or 'Phase D' in phase_str or 'Phase E' in phase_str:
+            if 'Phase E' in phase_str:
                 direction = "做多"
-                dynamic_warning = "JOC/Phase D 突破确认，可按 LPS 分批建仓。"
+                dynamic_warning = "Markup/Phase E 推进期，可按 LPS 或趋势回撤分批参与。"
                 entry_zone = f"Creek/JOC 回测区附近 (JOC: {joc_ev.get('creek_level', round(low, 2))})"
+            elif has_joc and has_lps:
+                direction = "做多"
+                dynamic_warning = "JOC+LPS 威科夫标准入场，可按 LPS 分批建仓。"
+                lps_price = lps_ev.get('price') or lps_ev.get('support_level') or round(low, 2)
+                entry_zone = f"{lps_price} 附近 (JOC+LPS 回测)"
+            elif has_joc or 'Phase D' in phase_str:
+                direction = "观望"
+                dynamic_warning = "JOC/Phase D 已现，等待 LPS 缩量回测确认（威科夫第五步）。"
+                entry_zone = "等待 LPS 确认"
             elif has_spring and not spring_failed:
                 direction = "观望"
                 dynamic_warning = "Spring 震仓已现，等待 JOC 突破小溪或 LPS 缩量回测确认（孟氏 checklist）。"
@@ -129,17 +142,19 @@ class TradingPlanGenerator:
         elif is_distribution:
             is_phase_d = 'Phase D' in phase_str
             is_phase_e = 'Phase E' in phase_str or 'Markdown' in phase_str
-            if has_fti or is_phase_e or (is_phase_d and has_sow):
+            if has_fti and has_lpsy:
                 direction = "减仓/对冲" if self.is_a_stock else "做空"
-                if has_fti:
-                    dynamic_warning = "FTI/Phase D 跌破确认，可按 LPSY 分批减仓或做空。"
-                    entry_zone = f"Ice/FTI 反抽区附近 (Ice: {fti_ev.get('ice_level', round(high, 2))})"
-                elif is_phase_e:
-                    dynamic_warning = "派发/markdown 推进期，可按反弹阻力减仓或做空。"
-                    entry_zone = f"阻力位: {round(high, 2)} 附近"
-                else:
-                    dynamic_warning = "Phase D SOW 确认，可按 LPSY 分批减仓或做空。"
-                    entry_zone = f"阻力位: {round(high, 2)} 附近"
+                dynamic_warning = "FTI+LPSY 威科夫标准入场，可按 LPSY 分批减仓或做空。"
+                lpsy_price = lpsy_ev.get('price') or lpsy_ev.get('resistance_level') or round(high, 2)
+                entry_zone = f"{lpsy_price} 附近 (FTI+LPSY 反抽)"
+            elif is_phase_e:
+                direction = "减仓/对冲" if self.is_a_stock else "做空"
+                dynamic_warning = "派发/markdown 推进期，可按反弹阻力减仓或做空。"
+                entry_zone = f"阻力位: {round(high, 2)} 附近"
+            elif has_fti or (is_phase_d and has_sow):
+                direction = "观望"
+                dynamic_warning = "FTI/Phase D 已现，等待 LPSY 缩量回测确认（威科夫第五步）。"
+                entry_zone = "等待 LPSY 确认"
             elif has_upthrust and not upthrust_failed and (has_sow or has_fti):
                 direction = "减仓/对冲" if self.is_a_stock else "做空"
                 dynamic_warning = "Upthrust 诱多后 SOW/FTI 结构确认，可按阻力区减仓。"

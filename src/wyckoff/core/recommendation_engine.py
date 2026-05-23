@@ -44,6 +44,19 @@ class RecommendationEngine:
             pattern_results if isinstance(pattern_results, dict) else {}
         )
 
+    @staticmethod
+    def _event_detected_static(event_obj: Any) -> bool:
+        return bool(RecommendationEngine._get_attr(event_obj, 'detected', False))
+
+    @staticmethod
+    def _dead_corner_actionable(dead_corner: Any, joc: Any) -> bool:
+        """死角突破须 JOC 确认且未处于 joc_gate pending（与 PhaseCoordinator 同源）。"""
+        if not RecommendationEngine._event_detected_static(dead_corner):
+            return False
+        if RecommendationEngine._get_attr(dead_corner, 'joc_gate') == 'pending':
+            return False
+        return RecommendationEngine._event_detected_static(joc)
+
     def _reset_patience_for_symbol(self, symbol: Optional[str]) -> None:
         if not symbol or symbol == self._patience_symbol:
             return
@@ -286,6 +299,16 @@ class RecommendationEngine:
             if not info or not self._get_attr(info, 'detected'):
                 continue
 
+            # Phase 24：LPS/LPSY 须在 JOC/FTI 确认后才计入评分（威科夫第五步）
+            if key == 'lps' and not self._event_detected_static(
+                RecommendationEngine._get_attr(events, 'joc')
+            ):
+                continue
+            if key == 'lpsy' and not self._event_detected_static(
+                RecommendationEngine._get_attr(events, 'fti')
+            ):
+                continue
+
             detected_keys.append(key)
             if key in ('spring', 'sos', 'sow', 'joc', 'fti', 'upthrust', 'utad'):
                 has_major_signal = True
@@ -432,11 +455,14 @@ class RecommendationEngine:
         dead_corner = RecommendationEngine._get_attr(events, 'dead_corner_breakout') or {}
         if not self._get_attr(dead_corner, 'detected'):
             dead_corner = RecommendationEngine._get_attr(events, 'dead_corner') or dead_corner
+        joc_for_gate = RecommendationEngine._get_attr(events, 'joc') or {}
         skip_conflict_penalty = False
-        if self._get_attr(dead_corner, 'detected'):
+        if self._dead_corner_actionable(dead_corner, joc_for_gate):
             base_score += 25
             skip_conflict_penalty = True
-            reasons.append("🎯 发现“死角突破”信号！从枯燥区放量跃起，极具爆发力，豁免历史冲突惩罚")
+            reasons.append("🎯 发现“死角突破”信号！JOC 已确认，从枯燥区放量跃起 (+25分)")
+        elif self._get_attr(dead_corner, 'detected'):
+            reasons.append("死角突破待 JOC 小溪确认，暂不加分（孟氏 checklist）")
 
         # SOS/Upthrust 交叉验证（模糊区间）
         has_sos = 'sos' in detected_keys
@@ -546,10 +572,25 @@ class RecommendationEngine:
         if self._get_attr(boring, 'score', 0) >= 85 and final_score < 85:
             final_score = 85
             reasons.append("触发高能预警阈值，综合评分上调至 85 (死角突破临界)")
-            
-        if self._get_attr(dead_corner, 'detected') and final_score < 85:
+
+        if self._dead_corner_actionable(dead_corner, joc_for_gate) and final_score < 85:
             final_score = 85
-            reasons.append("🎯 死角突破确立，综合评分强制托底至 85 (极高置信度)")
+            reasons.append("🎯 死角突破 + JOC 确认，综合评分托底至 85")
+
+        # Phase 24：相对强度 / 跨周期冲突评分上限（威科夫第二、三步）
+        if isinstance(pattern_results, dict):
+            rs = pattern_results.get('relative_strength') or {}
+            rs_trend = rs.get('rs_trend') if isinstance(rs, dict) else None
+            phase_str_rs = self._effective_phase_str(pattern_results)
+            if PhaseAdapter.is_accumulation(phase_str_rs) and rs_trend == 'falling':
+                final_score = min(final_score, 55)
+                reasons.append("吸筹阶段但相对强度走弱，评分上限 55")
+            elif PhaseAdapter.is_distribution(phase_str_rs) and rs_trend == 'rising':
+                final_score = min(final_score, 55)
+                reasons.append("派发阶段但相对强度走强，做空评分上限 55")
+            if pattern_results.get('mtf_has_conflict'):
+                final_score = min(final_score, 50)
+                reasons.append("跨周期冲突，评分上限 50")
 
         return SignalQualityModel(
             score=final_score,
@@ -601,6 +642,8 @@ class RecommendationEngine:
         fti = RecommendationEngine._get_attr(events, 'fti') or {}
         sow = RecommendationEngine._get_attr(events, 'sow') or {}
         sos = RecommendationEngine._get_attr(events, 'sos') or {}
+        lps = RecommendationEngine._get_attr(events, 'lps') or {}
+        lpsy = RecommendationEngine._get_attr(events, 'lpsy') or {}
         tr = RecommendationEngine._get_attr(events, 'trading_range') or {}
 
         # 提前提取 ATR 供所有分支使用
@@ -701,17 +744,38 @@ class RecommendationEngine:
 
         # ── 方向判断 (结构导向刚性止损) ──
         if _event_detected(joc):
-            direction = "做多"
             creek = _event_level(joc, 'creek_level', current_price)
-            zone = f"{creek:.2f} 附近 (JOC突破)"
             lps_low = _get_lps_low(15)
-            # 刚性锚定 Creek 下沿或 LPS 支撑低点
             cons_stop = min(lps_low, creek * 0.99)
-            stop = StopLossModel(
-                conservative=round(cons_stop, 2),
-                aggressive=round(creek * 0.995, 2), # 紧贴小溪下沿，一旦漏水立刻止损
-                atr_dynamic_stop=round(cons_stop - atr_val * 0.5, 2),
-            )
+            if _event_detected(lps):
+                direction = "做多"
+                lps_price = _event_price(lps, current_price)
+                zone = f"{lps_price:.2f} 附近 (JOC+LPS 威科夫标准入场)"
+                lps_detail = _event_latest(lps)
+                if lps_detail:
+                    lps_support = _as_float(
+                        _event_get(lps_detail, 'support_level') or
+                        _event_get(lps_detail, 'price'),
+                        lps_price,
+                    )
+                    if lps_support > 0:
+                        cons_stop = min(cons_stop, lps_support * 0.99)
+                stop = StopLossModel(
+                    conservative=round(cons_stop, 2),
+                    aggressive=round(creek * 0.995, 2),
+                    atr_dynamic_stop=round(cons_stop - atr_val * 0.5, 2),
+                )
+            else:
+                # Phase 25：威科夫第五步 — JOC 后须在 LPS 缩量回测处入场
+                direction = "观望"
+                zone = (
+                    f"JOC 已突破小溪 ({creek:.2f})，等待 LPS 缩量回测确认入场（威科夫第五步）"
+                )
+                stop = StopLossModel(
+                    conservative=round(cons_stop, 2),
+                    aggressive=round(creek * 0.995, 2),
+                    atr_dynamic_stop=round(cons_stop - atr_val * 0.5, 2),
+                )
         elif _event_detected(spring):
             sp_detail_early = _get_latest_spring_detail(spring)
             spring_failed = (
@@ -742,16 +806,37 @@ class RecommendationEngine:
             zone = f"SOS 突破 ({sos_price:.2f}) 待 Spring/JOC/LPS 结构确认，暂不建议追多"
             stop = StopLossModel(conservative=0.0, aggressive=0.0)
         elif _event_detected(fti):
-            direction = "做空"
             ice = _event_level(fti, 'ice_level', current_price)
-            zone = f"{ice:.2f} 附近 (FTI跌破)"
             lpsy_high = _get_lpsy_high(15)
             cons_stop = max(lpsy_high, ice * 1.01)
-            stop = StopLossModel(
-                conservative=round(cons_stop, 2),
-                aggressive=round(ice * 1.005, 2), # 紧贴冰层上沿，一旦涨回立刻止损
-                atr_dynamic_stop=round(cons_stop + atr_val * 0.5, 2),
-            )
+            if _event_detected(lpsy):
+                direction = "做空"
+                lpsy_price = _event_price(lpsy, current_price)
+                zone = f"{lpsy_price:.2f} 附近 (FTI+LPSY 威科夫标准入场)"
+                lpsy_detail = _event_latest(lpsy)
+                if lpsy_detail:
+                    lpsy_res = _as_float(
+                        _event_get(lpsy_detail, 'resistance_level') or
+                        _event_get(lpsy_detail, 'price'),
+                        lpsy_price,
+                    )
+                    if lpsy_res > 0:
+                        cons_stop = max(cons_stop, lpsy_res * 1.01)
+                stop = StopLossModel(
+                    conservative=round(cons_stop, 2),
+                    aggressive=round(ice * 1.005, 2),
+                    atr_dynamic_stop=round(cons_stop + atr_val * 0.5, 2),
+                )
+            else:
+                direction = "观望"
+                zone = (
+                    f"FTI 已跌破冰层 ({ice:.2f})，等待 LPSY 缩量回测确认入场（威科夫第五步）"
+                )
+                stop = StopLossModel(
+                    conservative=round(cons_stop, 2),
+                    aggressive=round(ice * 1.005, 2),
+                    atr_dynamic_stop=round(cons_stop + atr_val * 0.5, 2),
+                )
         elif _event_detected(upthrust):
             ut_detail = _event_latest(upthrust)
             ut_failed = (
@@ -927,6 +1012,42 @@ class RecommendationEngine:
             zone = f"信号质量过低风控拦截 (当前得分: {final_score}/100)"
             stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
             pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
+
+        # Phase 25：威科夫第二/三步 — RS / 多周期方向硬门控
+        if (
+            isinstance(pattern_results, dict)
+            and direction != "观望"
+            and not is_utad_falsified
+        ):
+            rs = pattern_results.get('relative_strength') or {}
+            rs_trend = rs.get('rs_trend') if isinstance(rs, dict) else None
+            zero_pos = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
+            zero_stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
+
+            if (
+                direction == "做多"
+                and PhaseAdapter.is_accumulation(phase_str)
+                and rs_trend == 'falling'
+            ):
+                direction = "观望"
+                zone = "吸筹阶段但相对强度走弱，不符合威科夫第二步，建议观望"
+                stop = zero_stop
+                pos_sizing = zero_pos
+            elif (
+                direction == "做空"
+                and PhaseAdapter.is_distribution(phase_str)
+                and rs_trend == 'rising'
+            ):
+                direction = "观望"
+                zone = "派发阶段但相对强度仍走强，做空缺乏第二步支撑，建议观望"
+                stop = zero_stop
+                pos_sizing = zero_pos
+            elif pattern_results.get('mtf_has_conflict'):
+                details = pattern_results.get('mtf_conflict_details') or '周线与日线方向冲突'
+                direction = "观望"
+                zone = f"跨周期冲突：{details}，等待多周期共振"
+                stop = zero_stop
+                pos_sizing = zero_pos
 
         return TradingPlanModel(
             direction=direction,
