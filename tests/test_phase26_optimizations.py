@@ -186,7 +186,3 @@ class TestRiskAdviceMtfSync(unittest.TestCase):
         )
         self.assertEqual(advice.aggressive.action, '观望')
         self.assertEqual(advice.aggressive.position, '0%')
-
-
-if __name__ == '__main__':
-    unittest.main()

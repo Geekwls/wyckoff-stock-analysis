@@ -30,12 +30,12 @@
 ## 测试
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m unittest \
-  tests.test_phase16_optimizations \
-  tests.test_phase15_optimizations \
-  tests.test_phase14_optimizations \
-  tests.test_phase2_theory -q
-# 29 tests OK（全量 phase 测试 103 OK）
+PYTHONPATH=src python -m pytest \
+  tests/test_phase16_optimizations.py \
+  tests/test_phase15_optimizations.py \
+  tests/test_phase14_optimizations.py \
+  tests/test_phase2_theory.py -q
+# 29 tests OK（全量 phase 测试 186 OK）
 ```
 
 ---

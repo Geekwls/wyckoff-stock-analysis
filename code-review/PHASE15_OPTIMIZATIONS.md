@@ -36,8 +36,8 @@
 ## 测试
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m unittest \
-  tests.test_phase15_optimizations \
-  tests.test_phase14_optimizations -q
-# 20 tests OK
+PYTHONPATH=src python -m pytest \
+  tests/test_phase15_optimizations.py \
+  tests/test_phase14_optimizations.py -q
+# 子集回归（见全量 phase 命令）
 ```

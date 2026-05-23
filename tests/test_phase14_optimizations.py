@@ -275,7 +275,3 @@ class TestJocBlockedInDistribution(unittest.TestCase):
         c_plus = ident._detect_phase_c_plus_signals(MockEvents(), flags)
         self.assertIsNotNone(c_plus)
         self.assertIn('Distribution', c_plus[0])
-
-
-if __name__ == '__main__':
-    unittest.main()

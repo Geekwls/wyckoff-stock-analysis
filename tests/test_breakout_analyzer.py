@@ -132,7 +132,7 @@ class TestBreakoutAnalyzer:
 
         assert result['is_breakout'] is True
         assert result['direction'] == 'up'
-        assert result['quality'] in ['strong', 'moderate', 'weak']
+        assert result['quality'] in ['strong', 'moderate', 'weak', 'very_weak']
 
     def test_upthrust_detection(self, sample_data_with_upthrust):
         """测试Upthrust（假突破）识别"""

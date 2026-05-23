@@ -124,7 +124,3 @@ class TestPhase9BreakoutPriority(unittest.TestCase):
         self.assertIn('Phase D', phase)
         self.assertIn('Distribution', phase)
         self.assertGreaterEqual(conf, 0.85)
-
-
-if __name__ == '__main__':
-    unittest.main()

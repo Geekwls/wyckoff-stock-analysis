@@ -111,7 +111,3 @@ class TestResolvePrimaryUpthrustGate(unittest.TestCase):
         key, direction = SignalExtractor.resolve_primary_signal(events)
         self.assertEqual(key, 'none')
         self.assertEqual(direction, 'neutral')
-
-
-if __name__ == '__main__':
-    unittest.main()

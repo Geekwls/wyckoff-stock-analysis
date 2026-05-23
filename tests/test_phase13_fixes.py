@@ -142,7 +142,3 @@ class TestPhase13Fixes(unittest.TestCase):
         self.assertIn('trading_plan', result)
         self.assertIn('patterns', result)
         self.assertIn('phase', result['patterns'])
-
-
-if __name__ == '__main__':
-    unittest.main()

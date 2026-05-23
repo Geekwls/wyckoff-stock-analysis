@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-from src.wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
-from src.wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
+from wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
+from wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
 
 def create_mock_data(trend="up"):
     dates = pd.date_range(start="2023-01-01", periods=100)
@@ -42,7 +42,6 @@ def test_lps_detection():
     if result['detected']:
         assert 'latest' in result
         assert 'signals' in result
-    print("LPS detection structure test passed.")
 
 def test_lpsy_detection():
     data = create_mock_data("down")
@@ -52,8 +51,3 @@ def test_lpsy_detection():
     
     result = detector.detect_lpsy()
     assert 'detected' in result
-    print("LPSY detection structure test passed.")
-
-if __name__ == "__main__":
-    test_lps_detection()
-    test_lpsy_detection()

@@ -68,7 +68,3 @@ class TestPnfAccumulationDirection(unittest.TestCase):
         self.assertEqual(result.get('breakout_direction'), 'down')
         targets = result.get('targets', {})
         self.assertLess(targets.get('target_1', 999), 98.0)
-
-
-if __name__ == '__main__':
-    unittest.main()

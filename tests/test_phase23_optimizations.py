@@ -41,7 +41,3 @@ class TestDistributionEarlyPhaseFormats(unittest.TestCase):
         }
         plan = engine.generate_trading_plan(data, patterns, {'target_1': 95.0})
         self.assertEqual(plan.direction, '观望')
-
-
-if __name__ == '__main__':
-    unittest.main()

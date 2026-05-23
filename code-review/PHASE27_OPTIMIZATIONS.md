@@ -26,6 +26,6 @@
 ## 测试
 
 ```bash
-PYTHONPATH=src python -m unittest tests.test_phase27_optimizations -q
-PYTHONPATH=src python -m unittest discover -s tests -p 'test_phase*.py' -q
+PYTHONPATH=src python -m pytest tests/test_phase27_optimizations.py -q
+PYTHONPATH=src python -m pytest tests/test_phase*.py -q
 ```

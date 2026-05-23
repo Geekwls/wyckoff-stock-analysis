@@ -194,7 +194,3 @@ class TestClimaxStRequiresAr(unittest.TestCase):
         )
         phase, enum, conf, _ = ident._determine_phase_from_events(events)
         self.assertNotIn('Phase B', phase)
-
-
-if __name__ == '__main__':
-    unittest.main()

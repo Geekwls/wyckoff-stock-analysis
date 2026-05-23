@@ -1,9 +1,10 @@
 import pytest
+import json
 import pandas as pd
 import numpy as np
-from src.wyckoff.core.report_generator import WyckoffReportGenerator
-from src.wyckoff.config.settings import ScoringConfig, PositionSizingConfig, WyckoffConfig
-from src.wyckoff.core.enums import MarketEnvironment, MarketSide
+from wyckoff.core.report_generator import WyckoffReportGenerator
+from wyckoff.config.settings import ScoringConfig, PositionSizingConfig, WyckoffConfig
+from wyckoff.core.enums import MarketEnvironment, MarketSide
 from datetime import datetime
 
 class MockAnalyzer:
@@ -239,8 +240,19 @@ def test_threshold_gating_low_score():
     assert "观望等待（信号质量不足）" in report
     assert "信号强度或可靠性低于执行阈值" in report
 
+def test_generate_json_signal_quality_is_structured():
+    data = create_mock_data([100.0, 101.0], [1000, 1100], vol_ma20=1000)
+    analyzer = MockAnalyzer(data)
+    generator = WyckoffReportGenerator(analyzer)
+
+    payload = json.loads(generator.generate_json())
+
+    assert isinstance(payload["signal_quality"], dict)
+    assert "score" in payload["signal_quality"]
+    assert "reasons" in payload["signal_quality"]
+
 def test_market_aware_direction_a_stock():
-    from src.wyckoff.core.trading_plan_generator import TradingPlanGenerator
+    from wyckoff.core.trading_plan_generator import TradingPlanGenerator
     data = create_mock_data([100.0, 100.0], [1000, 1000])
     # detect_trading_range in generator is called without args, but my mock might be receiving self.
     pattern_detector = type('obj', (object,), {'detect_trading_range': lambda self: {}})()
@@ -255,8 +267,8 @@ def test_market_aware_direction_a_stock():
     assert plan['direction'] == "观望"
 
 def test_early_distribution_intercept():
-    from src.wyckoff.core.recommendation_engine import RecommendationEngine
-    from src.wyckoff.schemas import SignalQualityModel, TradingPlanModel
+    from wyckoff.core.recommendation_engine import RecommendationEngine
+    from wyckoff.schemas import SignalQualityModel, TradingPlanModel
     import pandas as pd
 
     engine = RecommendationEngine()

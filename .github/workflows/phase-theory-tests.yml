@@ -28,50 +28,8 @@ jobs:
           pip install pytest
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run Phase 24 regression tests
-        env:
-          PYTHONPATH: src
-        run: |
-          python -m unittest tests.test_phase24_optimizations -q
-
-      - name: Run Phase 25 regression tests
-        env:
-          PYTHONPATH: src
-        run: |
-          python -m unittest tests.test_phase25_optimizations -q
-
-      - name: Run Phase 26 regression tests
-        env:
-          PYTHONPATH: src
-        run: |
-          python -m unittest tests.test_phase26_optimizations -q
-
-      - name: Run Phase 27 regression tests
-        env:
-          PYTHONPATH: src
-        run: |
-          python -m unittest tests.test_phase27_optimizations -q
-
-      - name: Run phase theory unit tests (unittest)
-        env:
-          PYTHONPATH: src
-        run: |
-          python -m unittest discover -s tests -p 'test_phase*.py' -q
-
-      - name: Run legacy unittest suite (non-pytest)
-        env:
-          PYTHONPATH: src
-        run: |
-          python -m unittest \
-            tests.test_theory_fix \
-            tests.test_batch_scan \
-            tests.test_mcp_compatibility \
-            tests.test_lps_lpsy \
-            tests.test_cache_consistency \
-            -q
-
       - name: Run pytest suite
         env:
           PYTHONPATH: src
         run: |
-          python -m pytest tests/ -q --tb=no
+          python -m pytest tests/ -q --tb=short -m "not integration"

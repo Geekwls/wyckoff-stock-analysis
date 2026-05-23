@@ -147,7 +147,3 @@ class TestSignalExtractorSpringWithoutJoc(unittest.TestCase):
         }
         sig, direction = SignalExtractor.resolve_primary_signal({'events_detected': events})
         self.assertNotEqual((sig, direction), ('spring', 'long'))
-
-
-if __name__ == '__main__':
-    unittest.main()

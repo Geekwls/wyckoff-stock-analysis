@@ -712,10 +712,11 @@ VSA detected 时报告可能漏字段或崩溃。
   - SOS 1.5x 放量被 `2.5x` 阈值漏检。
   - SOS/SOW 进入 Pydantic 模型后字段丢失。
 
-未完整执行：
+后续验证（测试风格已收敛）：
 
-- `pytest`：当前环境缺少 `pytest`。
-- `unittest discover`：导入阶段因缺少 `baostock` 失败，说明可选数据源仍是硬依赖。
+- CI 与本地默认：`PYTHONPATH=src python -m pytest tests/ -q -m "not integration"`（342 passed，1 skipped）。
+- Phase 语义回归：`PYTHONPATH=src python -m pytest tests/test_phase*.py -q`（186 tests）。
+- 历史审查时曾用 `unittest discover`；现已统一 pytest 单入口，测试导入统一为 `from wyckoff...`。
 
 ## 推荐修复顺序
 

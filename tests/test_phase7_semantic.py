@@ -244,7 +244,3 @@ class TestLawsUseCachedEvents(unittest.TestCase):
 
         follow = analyzer._analyze_signal_follow_through()
         self.assertTrue(follow['spring_follow_through']['tracked'])
-
-
-if __name__ == '__main__':
-    unittest.main()

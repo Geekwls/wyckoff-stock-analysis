@@ -66,8 +66,8 @@ PSY → BC → AR → ST → Upthrust → SOW → FTI → LPSY → Phase E
 ## 四、验证
 
 ```bash
-# 144 phase 语义测试
-PYTHONPATH=src python -m unittest discover -s tests -p 'test_phase*.py' -q
+# 186 个 phase 语义测试
+PYTHONPATH=src python -m pytest tests/test_phase*.py -q
 
 # A 股实盘
 PYTHONPATH=src python scripts/validate_real_stocks.py --ashare-only

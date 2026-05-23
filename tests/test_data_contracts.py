@@ -7,10 +7,10 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, Set
 
-from src.wyckoff.core.detectors.classic_pattern_detector import ClassicPatternDetector
-from src.wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
-from src.wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
-from src.wyckoff.core.cache import LRUCache
+from wyckoff.core.detectors.classic_pattern_detector import ClassicPatternDetector
+from wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
+from wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
+from wyckoff.core.cache import LRUCache
 
 
 def _make_test_df(n: int = 100) -> pd.DataFrame:
@@ -131,7 +131,7 @@ class TestSOSContract:
     
     def test_sos_signal_has_required_fields(self):
         """验证SOS 经 normalize 后 signals/latest 保留契约字段"""
-        from src.wyckoff.core.phase_coordinator import _normalize_sos_event
+        from wyckoff.core.phase_coordinator import _normalize_sos_event
 
         raw = {
             'detected': True,
@@ -161,7 +161,7 @@ class TestSOWContract:
     
     def test_sow_signal_has_required_fields(self):
         """验证SOW 经 normalize 后 signals/latest 保留契约字段"""
-        from src.wyckoff.core.phase_coordinator import _normalize_sow_event
+        from wyckoff.core.phase_coordinator import _normalize_sow_event
 
         raw = {
             'detected': True,
@@ -216,16 +216,12 @@ class TestReportReaderContract:
         """验证报告层读取recovery_days（复数）"""
         # 这个测试通过代码检查来验证
         import inspect
-        from src.wyckoff.core.report_generator import WyckoffReportGenerator
+        from wyckoff.core.report_generator import WyckoffReportGenerator
         
         source = inspect.getsource(WyckoffReportGenerator.generate_report)
         
         # 检查是否在方法中引用了recovery_days（可能通过子方法调用）
         has_recovery_days = "recovery_days" in source or "recovery_day" in source
         # 测试信号层是否正确返回recovery_days字段
-        from src.wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
+        from wyckoff.core.detectors.strength_weakness_detector import StrengthWeaknessDetector
         assert hasattr(StrengthWeaknessDetector, 'detect_lps'), "检测器应有detect_lps方法"
-
-
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])

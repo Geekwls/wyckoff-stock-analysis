@@ -260,7 +260,3 @@ class TestMtfHourlyWyckoffAnchor(unittest.TestCase):
         pattern = {'events_detected': {'lpsy': {'detected': True, 'confidence': 80}}}
         daily_result = mtf._analyze_daily_signal('lpsy', 'short', pattern)
         self.assertEqual(daily_result['direction'], 'short')
-
-
-if __name__ == '__main__':
-    unittest.main()

@@ -26,9 +26,9 @@
 ## 测试
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m unittest \
-  tests.test_phase18_optimizations \
-  tests.test_phase17_optimizations -q
+PYTHONPATH=src python -m pytest \
+  tests/test_phase18_optimizations.py \
+  tests/test_phase17_optimizations.py -q
 ```
 
 ## 复现

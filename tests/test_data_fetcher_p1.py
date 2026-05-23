@@ -1,7 +1,7 @@
 import unittest
 import pandas as pd
-from src.wyckoff.core.data_fetcher import WyckoffDataFetcher
-from src.wyckoff.core.symbol_resolver import MarketType
+from wyckoff.core.data_fetcher import WyckoffDataFetcher
+from wyckoff.core.symbol_resolver import MarketType
 
 class TestDataFetcherRefactoring(unittest.TestCase):
     def setUp(self):
@@ -45,6 +45,3 @@ class TestDataFetcherRefactoring(unittest.TestCase):
         info = self.fetcher.resolver.resolve("0700.HK")
         self.assertEqual(info.market, MarketType.HK_STOCK)
         self.assertEqual(info.normalized, "0700.HK")
-
-if __name__ == '__main__':
-    unittest.main()

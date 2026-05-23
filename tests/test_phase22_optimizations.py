@@ -47,7 +47,3 @@ class TestScoringPayloadPhaseFields(unittest.TestCase):
         payload = SignalExtractor.build_scoring_payload(phase_result)
         self.assertEqual(payload['phase'], 'Distribution Phase C/D')
         self.assertEqual(payload['identifier_phase'], 'Accumulation Phase C')
-
-
-if __name__ == '__main__':
-    unittest.main()

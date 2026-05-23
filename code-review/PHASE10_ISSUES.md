@@ -54,11 +54,11 @@
 ## 测试
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m unittest \
-  tests.test_phase9_theory \
-  tests.test_phase9b_theory \
-  tests.test_phase10_integration \
-  tests.test_phase11_integration \
-  tests.test_phase12_golden \
-  tests.test_phase2_theory -v
+PYTHONPATH=src python -m pytest \
+  tests/test_phase9_theory.py \
+  tests/test_phase9b_theory.py \
+  tests/test_phase10_integration.py \
+  tests/test_phase11_integration.py \
+  tests/test_phase12_golden.py \
+  tests/test_phase2_theory.py -v
 ```

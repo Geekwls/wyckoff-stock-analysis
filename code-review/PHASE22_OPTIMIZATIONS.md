@@ -23,18 +23,18 @@
 | 项 | 修复 |
 |----|------|
 | GitHub Actions | 新增 `.github/workflows/phase-theory-tests.yml` |
-| 覆盖 | `test_phase*.py` 全量（137+ tests） |
+| 覆盖 | `test_phase*.py` 全量（186 tests） |
 
 ---
 
 ## 测试
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m unittest \
-  tests.test_phase22_optimizations \
-  tests.test_phase21_optimizations -q
+PYTHONPATH=src python -m pytest \
+  tests/test_phase22_optimizations.py \
+  tests/test_phase21_optimizations.py -q
 
-PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_phase*.py' -q
+PYTHONPATH=src python -m pytest tests/test_phase*.py -q
 ```
 
 ## 复现

@@ -38,9 +38,9 @@
 # 仅 A 股（推荐）
 PYTHONPATH=src .venv/bin/python scripts/validate_real_stocks.py --ashare-only
 
-# 178 个 phase 语义测试
-PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_phase*.py' -q
+# 186 个 phase 语义测试
+PYTHONPATH=src python -m pytest tests/test_phase*.py -q
 
-# 全量 pytest（322 passed）
-PYTHONPATH=src .venv/bin/python -m pytest tests/ -q
+# 全量 pytest（342 passed）
+PYTHONPATH=src python -m pytest tests/ -q -m "not integration"
 ```

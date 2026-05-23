@@ -26,12 +26,12 @@
 ## 测试
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m unittest \
-  tests.test_phase21_optimizations \
-  tests.test_phase10_integration \
-  tests.test_phase9_theory -q
+PYTHONPATH=src python -m pytest \
+  tests/test_phase21_optimizations.py \
+  tests/test_phase10_integration.py \
+  tests/test_phase9_theory.py -q
 
-PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_phase*.py' -q
+PYTHONPATH=src python -m pytest tests/test_phase*.py -q
 ```
 
 ## 复现

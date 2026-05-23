@@ -3,7 +3,7 @@ tests/test_config.py - WyckoffConfig 配置验证测试
 """
 import pytest
 from pydantic import ValidationError
-from src.wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
+from wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
 
 
 class TestWyckoffConfig:
@@ -54,3 +54,9 @@ class TestWyckoffThresholds:
         t = WyckoffThresholds()
         assert "strong" in t.VOLUME_CONFIRMATION
         assert t.VOLUME_CONFIRMATION["strong"] > 1.0
+
+    def test_searchlight_threshold_defaults(self):
+        t = WyckoffThresholds()
+        assert t.SEARCHLIGHT_BULLISH_PROB_THRESHOLD == 0.55
+        assert t.SEARCHLIGHT_BEARISH_PROB_THRESHOLD == 0.55
+        assert t.SEARCHLIGHT_APS_ABSORPTION_THRESHOLD == 8.0

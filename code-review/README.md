@@ -16,8 +16,8 @@
 
 ## 当前状态（Phase 27 后）
 
-- **178** 个 `test_phase*.py` 语义测试通过
-- **322** pytest 全量通过
+- **186** 个 `test_phase*.py` 语义测试通过
+- **342** pytest 全量通过
 - **单一事实源**：`identify_phase()` → `events_detected` → `build_scoring_payload()`
 - **阶段权威**：`SignalExtractor.get_effective_phase()`
 - **LPS 正式性**：`detected` 仅 `signal_type=='lps'`；`is_formal_lps()` 贯通 scoring/计划/升级
@@ -25,5 +25,18 @@
 - **Phase 路径**：A→B→C（A 不直跳 C）；1 号 Spring → Phase B 待二次测试
 - **第五步入场**：JOC+LPS / FTI+LPSY 才给出方向；否则观望
 - **fallback**：纯均线不再标 Phase E
-- **CI**：`phase-theory-tests.yml`（Phase 24–27 regression + unittest + pytest）
+- **CI**：`phase-theory-tests.yml`（单入口 pytest，`-m "not integration"`）
 - **实盘**：A 股 2/2 — 见 [REAL_STOCK_VALIDATION.md](./REAL_STOCK_VALIDATION.md)
+
+## 运行测试
+
+```bash
+# 全量（CI 同款，默认跳过 integration）
+PYTHONPATH=src python -m pytest tests/ -q -m "not integration"
+
+# Phase 语义回归
+PYTHONPATH=src python -m pytest tests/test_phase*.py -q
+
+# 单个 phase 文件
+PYTHONPATH=src python -m pytest tests/test_phase27_optimizations.py -q
+```

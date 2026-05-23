@@ -1,9 +1,9 @@
 import pytest
 import pandas as pd
 import numpy as np
-from src.wyckoff.core.trading_plan_generator import TradingPlanGenerator
-from src.wyckoff.facade import WyckoffAnalyzer
-from src.wyckoff.core.reports.section_builders.conclusion_section import ConclusionSection
+from wyckoff.core.trading_plan_generator import TradingPlanGenerator
+from wyckoff.facade import WyckoffAnalyzer
+from wyckoff.core.reports.section_builders.conclusion_section import ConclusionSection
 
 
 class DummyPatternDetector:

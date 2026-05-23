@@ -104,7 +104,3 @@ class TestSpringStructuralSupport(unittest.TestCase):
         det.set_structural_levels(support=90.0)
         series = det._build_support_level_series(df)
         self.assertTrue((series == 90.0).all())
-
-
-if __name__ == '__main__':
-    unittest.main()

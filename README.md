@@ -4,7 +4,7 @@
 <div align="center">
 
 ![Version](https://img.shields.io/badge/Version-v3.1.0--Meng--Refined-blueviolet?style=for-the-badge)
-![Tests](https://img.shields.io/badge/Tests-288%20Passed-success?style=for-the-badge&logo=pytest&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-342%20Passed-success?style=for-the-badge&logo=pytest&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11-blue?style=for-the-badge&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Agent-Ready](https://img.shields.io/badge/Agent--Ready-Claude%20%7C%20Cursor-orange?style=for-the-badge)
@@ -64,7 +64,7 @@ graph TD
     Pattern -->|四层自然反弹检测| AR[AR 自动反弹引擎]
     Pattern -->|15日回测窗口打分| JOC[JOC 强度与测试质量对齐]
     
-    Facade -->|3. 微观概率推演| HMM[adaptive/hmm_engine.py]
+    Facade -->|3. 微观概率推演| HMM[core/state_engine.py]
     HMM -->|S0-S5 后验转移概率| Bayesian[贝叶斯自适应背景]
 
     Facade -->|4. 因果测算与风控| PF[core/point_and_figure.py]
@@ -152,12 +152,12 @@ wyckoff-stock-analysis/
 │   │   ├── pattern_detector.py   # 形态、AR四层、LPS与Spring过滤
 │   │   ├── point_and_figure.py   # 点数图测算引擎（DRY 与 区间失效检测）
 │   │   └── data_fetcher.py       # A股/港股/美股 数据自动适配工厂
-│   └── adaptive/            # 贝叶斯自适应环境推演
-│       └── hmm_engine.py         # 6x6 非对称隐马尔可夫微观概率状态机
+│   ├── core/state_engine.py      # 6x6 非对称隐马尔可夫微观概率状态机
+│   └── adaptive/                 # 贝叶斯自适应阈值
 ├── apps/                    # 🚀 [应用层]
 │   ├── cli/                 # 命令行终端分析应用
 │   └── mcp/                 # 原生 MCP (Model Context Protocol) 协议服务器
-├── tests/                   # 🧪 [质量保证] 288+ pytest / 144 phase 语义测试 (CI)
+├── tests/                   # 🧪 [质量保证] 342 pytest / 186 个 phase 语义测试 (CI)
 └── references/              # 📚 [理论底座] 孟洪涛《新威科夫操盘法》及相关文献
 ```
 

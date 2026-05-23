@@ -158,7 +158,3 @@ class TestUpthrustNormalize(unittest.TestCase):
         out = _normalize_upthrust_event(raw)
         self.assertIsNotNone(out.get('latest_upthrust'))
         self.assertEqual(out['latest_upthrust']['breakout_price'], 105.0)
-
-
-if __name__ == '__main__':
-    unittest.main()

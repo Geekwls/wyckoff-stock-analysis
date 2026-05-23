@@ -101,7 +101,3 @@ class TestArbitrationResultPersistence(unittest.TestCase):
         stored = result if isinstance(result, ArbitrationResult) else None
         self.assertIsNotNone(stored)
         self.assertEqual(stored.dominant_signal.signal_type, 'sow')
-
-
-if __name__ == '__main__':
-    unittest.main()

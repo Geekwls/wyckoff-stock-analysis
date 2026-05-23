@@ -26,6 +26,6 @@
 ## 测试
 
 ```bash
-PYTHONPATH=src python -m unittest tests.test_phase25_optimizations -q
-PYTHONPATH=src python -m pytest tests/ -q
+PYTHONPATH=src python -m pytest tests/test_phase25_optimizations.py -q
+PYTHONPATH=src python -m pytest tests/ -q -m "not integration"
 ```

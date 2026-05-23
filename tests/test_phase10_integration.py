@@ -175,7 +175,3 @@ class TestMergeCoordinatorPhase(unittest.TestCase):
         self.assertEqual(merged['phase'], 'Distribution Phase C')
         self.assertEqual(merged['phase_source'], 'coordinator')
         self.assertEqual(merged['identifier_phase'], 'Accumulation Phase C')
-
-
-if __name__ == '__main__':
-    unittest.main()

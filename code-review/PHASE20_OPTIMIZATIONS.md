@@ -20,12 +20,12 @@
 ## 测试
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m unittest \
-  tests.test_phase20_optimizations \
-  tests.test_phase19_optimizations -q
+PYTHONPATH=src python -m pytest \
+  tests/test_phase20_optimizations.py \
+  tests/test_phase19_optimizations.py -q
 
 # 全量 phase 测试
-PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_phase*.py' -q
+PYTHONPATH=src python -m pytest tests/test_phase*.py -q
 ```
 
 ## 复现

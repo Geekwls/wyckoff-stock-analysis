@@ -118,7 +118,3 @@ class TestHarmonyHardGates(unittest.TestCase):
         )
         self.assertEqual(plan.direction, '观望')
         self.assertIn('相对强度', plan.entry_zone)
-
-
-if __name__ == '__main__':
-    unittest.main()

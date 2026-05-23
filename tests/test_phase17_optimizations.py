@@ -118,7 +118,3 @@ class TestMtfCoordinatorEvr(unittest.TestCase):
         )
         self.assertIn('JOC', rec)
         self.assertIn('等待', rec)
-
-
-if __name__ == '__main__':
-    unittest.main()

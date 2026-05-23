@@ -107,7 +107,3 @@ class TestPhaseDRequiresJoc(unittest.TestCase):
         phase, enum, conf, _ = ident._determine_phase_from_events(events)
         self.assertIn('Phase D', phase)
         self.assertGreaterEqual(conf, 0.85)
-
-
-if __name__ == '__main__':
-    unittest.main()

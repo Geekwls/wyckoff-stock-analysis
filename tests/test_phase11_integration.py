@@ -194,7 +194,3 @@ class TestRecollectOnSideFlip(unittest.TestCase):
             _safe,
         )
         self.assertTrue(any('Phase11' in log for log in updated.phase_revision_log))
-
-
-if __name__ == '__main__':
-    unittest.main()

@@ -156,7 +156,3 @@ class TestPhaseDToEConfirmation(unittest.TestCase):
         self.assertTrue(
             coord._has_continuous_confirmation(3, 'Distribution Phase D', None)
         )
-
-
-if __name__ == '__main__':
-    unittest.main()

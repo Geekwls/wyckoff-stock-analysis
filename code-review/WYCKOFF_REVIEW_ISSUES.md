@@ -19,7 +19,7 @@
 | 决策链一致性 | **优秀**（主链 + TPG + Risk Advice + 因果定律同源） |
 | 阶段路径 | **良好**（A→B→C；1 号 Spring→Phase B；fallback 不标 E） |
 | 实盘级可用性 | **达标**（A 股 2/2；派发 suppression + 第五步门控） |
-| 测试保护 | **良好**（178 个 `test_phase*.py` + 322 pytest；CI workflow） |
+| 测试保护 | **良好**（186 个 `test_phase*.py` + 342 pytest；CI workflow） |
 
 **核心根因（已解决）：** 缺乏单一事实源 + 正式信号语义未贯通 → Phase 26–27 统一 `SignalExtractor.is_formal_lps()` 与阶段路径约束。
 
@@ -79,7 +79,7 @@
 - [x] 1 号 Spring → Phase B 待二次测试（Phase 27）
 - [x] fallback 纯均线不标 Phase E（Phase 27）
 
-**运行：** `PYTHONPATH=src python -m unittest discover -s tests -p 'test_phase*.py' -q` → 178 tests OK
+**运行：** `PYTHONPATH=src python -m pytest tests/test_phase*.py -q` → 186 tests OK
 
 ---
 

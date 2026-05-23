@@ -103,7 +103,3 @@ class TestEffectivePhase(unittest.TestCase):
         payload = SignalExtractor.build_scoring_payload(phase_result)
         self.assertEqual(payload['phase'], 'Accumulation Phase C')
         self.assertEqual(payload['effective_phase'], 'Accumulation Phase C')
-
-
-if __name__ == '__main__':
-    unittest.main()

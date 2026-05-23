@@ -19,16 +19,16 @@
 |----|------|
 | 文档 | 更新 `WYCKOFF_REVIEW_ISSUES.md` v2.0 结案快照 |
 | 文档 | 更新 `DEEP_REVIEW_ISSUES.md` B4–B15 全部 ✅ |
-| CI | `phase-theory-tests.yml` 增加 pytest + legacy unittest |
+| CI | `phase-theory-tests.yml` 单入口 pytest（`-m "not integration"`） |
 
 ---
 
 ## 测试
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m unittest tests.test_phase23_optimizations tests.test_theory_fix -q
-PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_phase*.py' -q
-pip install pytest && PYTHONPATH=src python -m pytest tests/ -q
+PYTHONPATH=src python -m pytest tests/test_phase23_optimizations.py tests/test_theory_fix.py -q
+PYTHONPATH=src python -m pytest tests/test_phase*.py -q
+PYTHONPATH=src python -m pytest tests/ -q -m "not integration"
 ```
 
 ## 实盘验证（2026-05-23 刷新）

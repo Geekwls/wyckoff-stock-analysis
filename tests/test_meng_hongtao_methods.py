@@ -12,12 +12,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-# ─── 路径修正 ─────────────────────────────────────────────────
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.wyckoff.core.pattern_detector import WyckoffPatternDetector
-from src.wyckoff.config.settings import WyckoffConfig
+from wyckoff.core.pattern_detector import WyckoffPatternDetector
+from wyckoff.config.settings import WyckoffConfig
 
 
 # ─────────────────────────────────────────────────────────────
@@ -120,7 +116,7 @@ def _inject_fti_test(df: pd.DataFrame, ice_level: float, position: int = -3) -> 
 
 def _make_detector(df: pd.DataFrame) -> WyckoffPatternDetector:
     """构造一个带缓存的探测器"""
-    from src.wyckoff.core.cache import LRUCache
+    from wyckoff.core.cache import LRUCache
     return WyckoffPatternDetector(df, WyckoffConfig(), LRUCache())
 
 
@@ -468,7 +464,7 @@ class TestMengReconstruction:
 
     def test_recommendation_position_and_low_score_intercept(self):
         """测试4 & 5：风控仓位极低拦截及仓位推荐配比联动"""
-        from src.wyckoff.core.recommendation_engine import RecommendationEngine
+        from wyckoff.core.recommendation_engine import RecommendationEngine
         
         engine = RecommendationEngine(WyckoffConfig())
         data = _make_base_df(n=50)

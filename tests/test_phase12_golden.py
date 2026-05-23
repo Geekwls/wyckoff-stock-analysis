@@ -188,7 +188,3 @@ class TestGoldenAccumulationPipeline(unittest.TestCase):
             'Accumulation' in phase or 'Markup' in phase or 'Phase C' in phase or 'Phase D' in phase,
             f'unexpected phase: {phase}',
         )
-
-
-if __name__ == '__main__':
-    unittest.main()

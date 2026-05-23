@@ -132,7 +132,3 @@ class DualSpringStub:
         'needs_secondary_test': True,
         'st_confirmed': False,
     }
-
-
-if __name__ == '__main__':
-    unittest.main()

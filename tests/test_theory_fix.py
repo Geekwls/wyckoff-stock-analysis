@@ -2,8 +2,8 @@ import unittest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from src.wyckoff.core.pattern_detector import WyckoffPatternDetector
-from src.wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
+from wyckoff.core.pattern_detector import WyckoffPatternDetector
+from wyckoff.config.settings import WyckoffConfig, WyckoffThresholds
 
 class MockCache:
     def get_or_compute(self, key, func, *args, **kwargs):
@@ -109,8 +109,8 @@ class TestTheoryFix(unittest.TestCase):
 
     def test_multiformat_phase_str_intercept(self):
         """测试大写、中文、中英文混合等多格式 phase_str 的高鲁棒性绝对观望拦截"""
-        from src.wyckoff.core.recommendation_engine import RecommendationEngine
-        from src.wyckoff.schemas import SignalQualityModel, TradingPlanModel
+        from wyckoff.core.recommendation_engine import RecommendationEngine
+        from wyckoff.schemas import SignalQualityModel, TradingPlanModel
         import pandas as pd
 
         engine = RecommendationEngine()
@@ -158,8 +158,8 @@ class TestTheoryFix(unittest.TestCase):
 
     def test_strict_phase_c_evidence_chain(self):
         """测试 Phase C 强证据链校验对阶段评定及拦截的影响"""
-        from src.wyckoff.core.phase_coordinator import PhaseCoordinator
-        from src.wyckoff.core.pattern_detector import WyckoffPatternDetector
+        from wyckoff.core.phase_coordinator import PhaseCoordinator
+        from wyckoff.core.pattern_detector import WyckoffPatternDetector
         
         # 1. 构造一个普通的 upthrust（不满足 UTAD，不满足快速回落）
         data_normal = self._create_mock_data(100, base_price=100)
@@ -208,6 +208,3 @@ class TestTheoryFix(unittest.TestCase):
         
         # 强证据链上冲应正确升级为 Distribution Phase C
         self.assertEqual(phase_strong, 'Distribution Phase C')
-
-if __name__ == '__main__':
-    unittest.main()
