@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 9–25 真实股票数据验证脚本"""
+"""Phase 9–27 真实股票数据验证脚本"""
 import argparse
 import json
 import os
@@ -78,6 +78,7 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
         "spring": "-",
         "joc": "-",
         "lps": "-",
+        "lps_obs": "-",
         "sos": "-",
         "fti": "-",
         "lpsy": "-",
@@ -116,10 +117,12 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
 
             row["spring"] = _flag(events, "spring")
             row["joc"] = _flag(events, "joc")
-            row["lps"] = _flag(events, "lps")
+            lps_obj = getattr(events, "lps", None) if events else None
+            row["lps"] = "Y" if SignalExtractor.is_formal_lps(lps_obj) else "-"
+            row["lps_obs"] = "Y" if SignalExtractor.has_lps_observation(lps_obj) else "-"
             row["sos"] = _flag(events, "sos")
             row["fti"] = _flag(events, "fti")
-            row["lpsy"] = _flag(events, "lpsy")
+            row["lpsy"] = "Y" if SignalExtractor.is_formal_lpsy(getattr(events, "lpsy", None) if events else None) else "-"
             row["sow"] = _flag(events, "sow")
             row["ps"] = _flag(events, "preliminary_support")
             vsa = getattr(events, "vsa_signals", None) if events else None
@@ -207,7 +210,7 @@ def main():
         selected = [s for s in SYMBOLS if s[0] in sym_set]
 
     print("=" * 72)
-    print("威科夫真实股票验证 (Phase 9–25)")
+    print("威科夫真实股票验证 (Phase 9–27)")
     print("=" * 72)
 
     results = []
@@ -226,8 +229,8 @@ def main():
             print(
                 f"  ✓ phase={row['phase']} conf={row['confidence']} "
                 f"dir={row['direction']} score={row.get('signal_score')} rs={row.get('rs_trend')} "
-                f"[Sp/J/LPS/SOS/FTI/LPSY/SOW={row['spring']}/{row['joc']}/{row['lps']}/"
-                f"{row['sos']}/{row['fti']}/{row['lpsy']}/{row['sow']}] "
+                f"[Sp/J/LPS/LPS~obs/SOS/FTI/LPSY/SOW={row['spring']}/{row['joc']}/{row['lps']}/"
+                f"{row.get('lps_obs', '-')}/{row['sos']}/{row['fti']}/{row['lpsy']}/{row['sow']}] "
                 f"bars={row['bars']} rev={row['revisions']}{arb_note}"
             )
             if row.get("entry_zone"):

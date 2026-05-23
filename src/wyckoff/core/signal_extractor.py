@@ -75,6 +75,44 @@ class SignalExtractor:
         return bool(cls._get(obj, 'detected', False))
 
     @classmethod
+    def is_formal_lps(cls, event: Any) -> bool:
+        """
+        正式 LPS：signal_type=='lps'（或 legacy 无 type 时 trust detected）。
+        support_test / pullback 等观察信号不计入交易/阶段升级。
+        """
+        if not cls._detected(event):
+            return False
+        latest = cls._latest(event)
+        signal_type = cls._get(latest, 'signal_type') if latest else cls._get(event, 'signal_type')
+        if signal_type is None:
+            phase_ctx = cls._get(event, 'phase_context') or {}
+            if isinstance(phase_ctx, dict) and phase_ctx.get('has_lps_qualification'):
+                return True
+            return True  # legacy/test payloads without signal_type
+        return signal_type == 'lps'
+
+    @classmethod
+    def has_lps_observation(cls, event: Any) -> bool:
+        """任意 LPS 形态（含 support_test），供报告展示观察项。"""
+        if cls.is_formal_lps(event):
+            return True
+        if cls._get(event, 'observation_detected'):
+            return True
+        signals = cls._get(event, 'signals') or []
+        return len(signals) > 0
+
+    @classmethod
+    def is_formal_lpsy(cls, event: Any) -> bool:
+        """正式 LPSY：与 detect_lpsy 出口一致（detected 即 formal）。"""
+        if not cls._detected(event):
+            return False
+        latest = cls._latest(event)
+        signal_type = cls._get(latest, 'signal_type') if latest else cls._get(event, 'signal_type')
+        if signal_type is None:
+            return True
+        return signal_type == 'lpsy'
+
+    @classmethod
     def _latest(cls, obj: Any):
         for key in ('latest', 'latest_spring', 'latest_upthrust'):
             latest = cls._get(obj, key)
@@ -124,8 +162,8 @@ class SignalExtractor:
         has_upthrust = (SignalExtractor._get(spring_upthrust, '_type') or SignalExtractor._get(spring_upthrust, 'type_')) == 'upthrust'
         has_sos = (SignalExtractor._get(sos_sow, '_type') or SignalExtractor._get(sos_sow, 'type_')) == 'sos'
         has_sow = (SignalExtractor._get(sos_sow, '_type') or SignalExtractor._get(sos_sow, 'type_')) == 'sow'
-        has_lps = SignalExtractor._detected(lps_data)
-        has_lpsy = SignalExtractor._detected(lpsy_data)
+        has_lps = SignalExtractor.is_formal_lps(lps_data)
+        has_lpsy = SignalExtractor.is_formal_lpsy(lpsy_data)
 
         return {
             'has_spring': has_spring,
@@ -212,9 +250,9 @@ class SignalExtractor:
                 if key == 'lps_lpsy':
                     lps = SignalExtractor._get(events, 'lps')
                     lpsy = SignalExtractor._get(events, 'lpsy')
-                    if SignalExtractor._detected(lps):
+                    if SignalExtractor.is_formal_lps(lps):
                         info = lps
-                    elif SignalExtractor._detected(lpsy):
+                    elif SignalExtractor.is_formal_lpsy(lpsy):
                         info = lpsy
                 if not info:
                     continue
@@ -576,6 +614,8 @@ class SignalExtractor:
             if not event and isinstance(pattern_results, dict):
                 event = pattern_results.get(key) or {}
             if cls._detected(event):
+                if key == 'lps' and not cls.is_formal_lps(event):
+                    continue
                 if key == 'spring' and cls._spring_lifecycle_failed(event):
                     continue
                 if key == 'spring':
@@ -592,6 +632,8 @@ class SignalExtractor:
             if not event and isinstance(pattern_results, dict):
                 event = pattern_results.get(key) or {}
             if cls._detected(event):
+                if key == 'lpsy' and not cls.is_formal_lpsy(event):
+                    continue
                 if key == 'upthrust' and cls._upthrust_lifecycle_failed(event):
                     continue
                 if key == 'upthrust':
@@ -641,6 +683,10 @@ class SignalExtractor:
             if not event and isinstance(pattern_results, dict):
                 event = pattern_results.get(key) or {}
             if not cls._detected(event):
+                continue
+            if key == 'lps' and not cls.is_formal_lps(event):
+                continue
+            if key == 'lpsy' and not cls.is_formal_lpsy(event):
                 continue
             latest = cls._latest(event) or event
             for field in fields:

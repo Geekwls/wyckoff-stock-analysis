@@ -133,7 +133,8 @@ class TestSignalStrengthEventsModel(unittest.TestCase):
         )
         phase_res = {'events_detected': events, 'phase': 'Accumulation Phase C'}
         strength = RecommendationEngine.calculate_signal_strength(phase_res)
-        self.assertGreaterEqual(strength, 2)
+        # Phase 26：LPS 无 JOC 前置时不计入 signal strength
+        self.assertEqual(strength, 1)
 
 
 class TestSpringNormalize(unittest.TestCase):

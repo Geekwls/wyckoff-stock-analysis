@@ -982,10 +982,13 @@ class StrengthWeaknessDetector(BaseDetector):
             except Exception as _ww_err:
                 logger.debug(f"[Wave4] Weis Wave LPS 校验失败 (non-critical): {_ww_err}")
 
+            formal_signals = [s for s in lps_signals if s.get('signal_type') == 'lps']
             return {
-                'detected': True,
+                'detected': bool(formal_signals),
+                'observation_detected': True,
                 'signals': lps_signals,
                 'latest': lps_signals[-1],
+                'latest_formal': formal_signals[-1] if formal_signals else None,
                 'spring_low': spring_low,
                 'tr_support': tr_support,
                 'anchor_candidates': [
@@ -996,11 +999,7 @@ class StrengthWeaknessDetector(BaseDetector):
                     'phase': self._current_phase or 'unknown',
                     'is_accumulation': is_accumulation,
                     'has_breakout_context': bool(breakout_dates),
-                    'has_lps_qualification': (
-                        is_accumulation and
-                        has_complete_phase_a_structure and
-                        bool(breakout_dates)
-                    ),
+                    'has_lps_qualification': bool(formal_signals),
                     'note': ('当前阶段不是标准Accumulation，'
                              '信号已按阶段上下文重新定性为"缩量回踩"而非正式LPS'
                              if not is_accumulation else None),

@@ -309,7 +309,7 @@ class ConclusionSection(BaseSectionBuilder):
                 joc_entry = self._num(self._get(joc, 'creek_level', current_price), current_price)
                 target2 = cause_effect.get('targets', {}).get('target_2', current_price * 1.15)
                 report += f"🚀 趋势跟踪买入（JOC 突破确认）:\n   参考入场区间: {joc_entry:.2f} ~ {joc_entry * 1.02:.2f}\n   止损: {joc_entry * 0.96:.2f} | 目标2: {target2:.2f}\n"
-            elif self._detected(lps) and not is_distribution:
+            elif SignalExtractor.has_lps_observation(lps) and not is_distribution:
                 #  修复：LPS返回结构中price字段在latest里，且需要检查signal_type
                 latest = self._latest(lps) or lps
                 signal_type = self._get(latest, 'signal_type', 'unknown')

@@ -34,8 +34,8 @@ class TestPhaseARequiresST(unittest.TestCase):
             vsa_signals = {}
 
         phase, enum, conf, _ = ident._determine_phase_from_events(MockEvents())
-        self.assertIn('待ST确认', phase)
-        self.assertEqual(enum, WyckoffPhase.PHASE_A)
+        self.assertIn('待PS/ST确认', phase)
+        self.assertEqual(enum, WyckoffPhase.UNKNOWN)
         self.assertLess(conf, 0.70)
 
 

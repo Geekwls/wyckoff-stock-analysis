@@ -1,26 +1,27 @@
 # 新威科夫代码审查问题清单与修复计划
 
-**文档版本：** v2.1（Phase 25 增量）  
+**文档版本：** v2.3（Phase 27 增量）  
 **审查日期：** 2026-05-23  
 **审查基准：** `references/meng-expert-system.md`、`references/wyckoff-theory-full.md`、`SKILL.md`  
 **审查范围：** `src/wyckoff` 核心检测、阶段协调、三大定律、交易建议、报告、批量筛选
 
 > 详细原始审查见 [CODE_REVIEW_REPORT.md](./CODE_REVIEW_REPORT.md)  
 > Phase 15–23 增量见 [PHASE15_OPTIMIZATIONS.md](./PHASE15_OPTIMIZATIONS.md) … [PHASE23_OPTIMIZATIONS.md](./PHASE23_OPTIMIZATIONS.md)  
-> Phase 24–25 见 [PHASE24_OPTIMIZATIONS.md](./PHASE24_OPTIMIZATIONS.md)、[PHASE25_OPTIMIZATIONS.md](./PHASE25_OPTIMIZATIONS.md)
+> Phase 24–27 见 [PHASE24_OPTIMIZATIONS.md](./PHASE24_OPTIMIZATIONS.md) … [PHASE27_OPTIMIZATIONS.md](./PHASE27_OPTIMIZATIONS.md)
 
 ---
 
-## 一、总体结论（Phase 25 后）
+## 一、总体结论（Phase 27 后）
 
 | 维度 | 评价 |
 |---|---|
-| 检测器理论设计 | **良好**（PS/PSY 硬门槛、Spring/JOC、FTI/LPSY 对称） |
-| 决策链一致性 | **优秀**（评分/计划/报告/验证脚本同源；第五步入场硬门控） |
-| 实盘级可用性 | **达标**（A 股 2/2；派发 suppression + JOC+LPS/FTI+LPSY 门控） |
-| 测试保护 | **良好**（162 个 `test_phase*.py` + 306 pytest；CI workflow） |
+| 检测器理论设计 | **良好**（PS/PSY 硬门槛、Spring/JOC、FTI/LPSY 对称、LPS 正式性） |
+| 决策链一致性 | **优秀**（主链 + TPG + Risk Advice + 因果定律同源） |
+| 阶段路径 | **良好**（A→B→C；1 号 Spring→Phase B；fallback 不标 E） |
+| 实盘级可用性 | **达标**（A 股 2/2；派发 suppression + 第五步门控） |
+| 测试保护 | **良好**（178 个 `test_phase*.py` + 322 pytest；CI workflow） |
 
-**核心根因（已解决）：** 缺乏单一事实源 → `PhaseCoordinator.collect_all_events()` → `identify_phase()` → `SignalExtractor.build_scoring_payload()` → `get_effective_phase()` 贯通全链。
+**核心根因（已解决）：** 缺乏单一事实源 + 正式信号语义未贯通 → Phase 26–27 统一 `SignalExtractor.is_formal_lps()` 与阶段路径约束。
 
 ---
 
@@ -30,15 +31,18 @@
 
 见下文历史表格，**均已 ✅**。
 
-### Phase 19–23 新增修复摘要
+### Phase 19–25 摘要
+
+见 [PHASE19_OPTIMIZATIONS.md](./PHASE19_OPTIMIZATIONS.md) … [PHASE25_OPTIMIZATIONS.md](./PHASE25_OPTIMIZATIONS.md)
+
+### Phase 26–27 增量（2026-05-23）
 
 | Phase | 核心修复 |
 |-------|----------|
-| 19 | Phase C 须 Phase A 完整；FTI 门控；LPSY 语义；Phase D→E 须 LPS/LPSY |
-| 20 | LPS 仲裁；JOC/FTI 高优先级注册；死角 JOC 门控；FTI 因果对称 |
-| 21 | CHoCH Weis Wave 统一；`effective_phase` 权威；协调器 override 收紧 |
-| 22 | 报告/筛选/定律/验证脚本 `effective_phase` 统一；CI phase 测试 |
-| 23 | 派发 Phase A/B 中文格式拦截；pytest CI；审查结案 |
+| 26 | LPS 正式性契约；Phase B 死代码；PS/PSY 硬门槛；TPG/RE/Risk 同步；EventsModel 120 日过滤 |
+| 27 | fallback/方案B 禁无事件 Phase E；A 不直跳 C；序列评分 11 项；1 号 Spring→Phase B |
+
+**实盘复验：** [REAL_STOCK_VALIDATION.md](./REAL_STOCK_VALIDATION.md) — A 股 2/2 ✅
 
 ### 可选后续（非阻断，保留观察）
 
@@ -48,15 +52,7 @@
 | O-2 | CI 全量 pytest | ✅ Phase 23+ workflow |
 | O-3 | P&F 合成数据方向断言 | ✅ `test_phase3_theory` 通过 |
 | O-4 | 美股/港股实盘样本扩充 | 观察（Yahoo 429 → `--cache-only`） |
-
-### Phase 24–25 增量（2026-05-23）
-
-| Phase | 核心修复 |
-|-------|----------|
-| 24 | 死角/JOC 评分同步；LPS/LPSY 评分门控；TR 因果；PS/PSY Phase A 硬门槛 |
-| 25 | JOC+LPS / FTI+LPSY 第五步入场；RS/MTF 方向硬门控；orchestrator RS  enrichment |
-
-**实盘复验：** [REAL_STOCK_VALIDATION.md](./REAL_STOCK_VALIDATION.md) — A 股 2/2 ✅
+| O-5 | dead_corner FTI 对称门控 | 观察 |
 
 ---
 
@@ -67,7 +63,8 @@
 | Phase 1–8 | 单一事实源 / orchestrator 同源 | ✅ |
 | Phase 9–12 | 深度审查 B1–B15 + 金样本 | ✅ |
 | Phase 13–18 | 派发 suppression / 仲裁扩展 / 验证脚本 | ✅ |
-| Phase 19–23 | P0/P1/P2 收尾 + effective_phase + CI | ✅ |
+| Phase 19–25 | P0/P1/P2 收尾 + effective_phase + 第五步门控 | ✅ |
+| Phase 26–27 | LPS 正式性 + 双轨同步 + 阶段路径 + fallback | ✅ |
 
 ---
 
@@ -76,12 +73,13 @@
 - [x] Spring 无 JOC → 观望（Phase 15–16）
 - [x] 孤立 SOS/SOW → 观望（Phase 9–10）
 - [x] LPS 须 JOC / LPSY 须 FTI（Phase 15）
-- [x] Spring/LPS triage：JOC 后 LPS 优先（Phase 20）
-- [x] CHoCH Weis Wave 三路径一致（Phase 21）
-- [x] `effective_phase` 报告/筛选同源（Phase 22）
-- [x] `派发阶段A` 早期派发拦截（Phase 23）
+- [x] `support_test` 不计入正式 LPS（Phase 26）
+- [x] SC+AR+ST → Phase B（Phase 26）
+- [x] Phase A 不直跳 C（Phase 27）
+- [x] 1 号 Spring → Phase B 待二次测试（Phase 27）
+- [x] fallback 纯均线不标 Phase E（Phase 27）
 
-**运行：** `PYTHONPATH=src python -m unittest discover -s tests -p 'test_phase*.py' -q` → 162 tests OK
+**运行：** `PYTHONPATH=src python -m unittest discover -s tests -p 'test_phase*.py' -q` → 178 tests OK
 
 ---
 

@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 from .enums import MarketEnvironment, MarketSide, WyckoffPhase
 from .utils import PhaseAdapter
+from .signal_extractor import SignalExtractor
 from ..schemas import (
     TradingPlanModel, StopLossModel, TargetsModel, 
     PositionSizingModel, RiskAdviceModel, RiskAdviceItem,
@@ -297,6 +298,12 @@ class RecommendationEngine:
             info = RecommendationEngine._get_attr(events, key, None)
 
             if not info or not self._get_attr(info, 'detected'):
+                continue
+
+            # Phase 26：仅正式 LPS/LPSY 计入评分
+            if key == 'lps' and not SignalExtractor.is_formal_lps(info):
+                continue
+            if key == 'lpsy' and not SignalExtractor.is_formal_lpsy(info):
                 continue
 
             # Phase 24：LPS/LPSY 须在 JOC/FTI 确认后才计入评分（威科夫第五步）
@@ -607,11 +614,24 @@ class RecommendationEngine:
     def calculate_signal_strength(pattern_results: Dict[str, Any]) -> int:
         """计算基础信号强度 (简单计数，仅为兼容性保留)"""
         events = RecommendationEngine._get_attr(pattern_results, 'events_detected', None) or pattern_results
+        joc = RecommendationEngine._get_attr(events, 'joc', None)
+        fti = RecommendationEngine._get_attr(events, 'fti', None)
         count = 0
         for key in ['joc', 'spring', 'sos', 'lps', 'upthrust', 'sow', 'lpsy', 'fti']:
             event = RecommendationEngine._get_attr(events, key, None)
-            if event and RecommendationEngine._get_attr(event, 'detected'):
-                count += 1
+            if not event or not RecommendationEngine._get_attr(event, 'detected'):
+                continue
+            if key == 'lps':
+                if not RecommendationEngine._event_detected_static(joc):
+                    continue
+                if not SignalExtractor.is_formal_lps(event):
+                    continue
+            if key == 'lpsy':
+                if not RecommendationEngine._event_detected_static(fti):
+                    continue
+                if not SignalExtractor.is_formal_lpsy(event):
+                    continue
+            count += 1
         return count
 
     def generate_trading_plan(self, data: Any, pattern_results: Dict[str, Any], targets: Dict[str, Any]) -> TradingPlanModel:
@@ -747,7 +767,7 @@ class RecommendationEngine:
             creek = _event_level(joc, 'creek_level', current_price)
             lps_low = _get_lps_low(15)
             cons_stop = min(lps_low, creek * 0.99)
-            if _event_detected(lps):
+            if SignalExtractor.is_formal_lps(lps):
                 direction = "做多"
                 lps_price = _event_price(lps, current_price)
                 zone = f"{lps_price:.2f} 附近 (JOC+LPS 威科夫标准入场)"
@@ -809,7 +829,7 @@ class RecommendationEngine:
             ice = _event_level(fti, 'ice_level', current_price)
             lpsy_high = _get_lpsy_high(15)
             cons_stop = max(lpsy_high, ice * 1.01)
-            if _event_detected(lpsy):
+            if SignalExtractor.is_formal_lpsy(lpsy):
                 direction = "做空"
                 lpsy_price = _event_price(lpsy, current_price)
                 zone = f"{lpsy_price:.2f} 附近 (FTI+LPSY 威科夫标准入场)"
@@ -1242,18 +1262,16 @@ class RecommendationEngine:
                         stop_loss=stop_desc,
                         entry_condition="等待周期共振或明确的次级折返测试成功"
                     )
-                else:  # aggressive
-                    #  修复：跨周期冲突下激进仓位上限从15-20%严格降至5-10%
+                else:  # aggressive — Phase 26：与交易计划硬门控一致，MTF 冲突一律观望
                     return RiskAdviceItem(
-                        action="极轻仓试错",
+                        action="观望",
                         reason=(
-                            f"跨周期冲突：{conflict_details}，等待日线级别明确信号。"
-                            "⚠️ 风险警告：高时间框空头压制下，日线结构有失效风险（可能是下跌中继）。"
-                            "如强行参与，仓位严格控制在5-10%，必须设好止损，极短线快进快出，不宜隔夜持仓。"
+                            f"跨周期冲突：{conflict_details}。"
+                            "与交易计划一致：跨周期不一致时不建议参与。"
                         ),
-                        position="5-10%",
+                        position="0%",
                         stop_loss=stop_desc,
-                        entry_condition="日线级 Spring/UT 得到小周期量价配合确认"
+                        entry_condition="等待高时间周期与日线结构共振"
                     )
 
             if direction == "观望":

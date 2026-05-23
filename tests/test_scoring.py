@@ -246,15 +246,13 @@ def test_market_aware_direction_a_stock():
     pattern_detector = type('obj', (object,), {'detect_trading_range': lambda self: {}})()
     generator = TradingPlanGenerator(data, pattern_detector)
     
-    # Bearish case for A-stock
+    # Phase 26：派发 Phase E 无 FTI+LPSY 第五步确认 → 观望
     plan = generator.generate(phase_str="Distribution Phase E", is_a_stock=True)
-    assert plan['direction'] == "减仓/对冲"
-    assert "A股无法直接做空" in plan['market_constraint']
-    
-    # Bearish case for Non-A-stock
+    assert plan['direction'] == "观望"
+    assert "FTI+LPSY" in plan.get('dynamic_warning', '')
+
     plan = generator.generate(phase_str="Distribution Phase E", is_a_stock=False)
-    assert plan['direction'] == "做空"
-    assert plan.get('market_constraint') is None
+    assert plan['direction'] == "观望"
 
 def test_early_distribution_intercept():
     from src.wyckoff.core.recommendation_engine import RecommendationEngine

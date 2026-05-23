@@ -82,7 +82,10 @@ class CauseEffectMixin:
             return {"basic_analysis": basic_cause_effect, "enhanced_analysis": enhanced}
 
         phase_result = self.pattern_detector.identify_phase() if self.pattern_detector else {}
-        phase = phase_result.get("phase", "") if isinstance(phase_result, dict) else ""
+        from ..signal_extractor import SignalExtractor
+        phase = SignalExtractor.get_effective_phase(phase_result) if isinstance(phase_result, dict) else ""
+        if not phase or phase == 'Unknown':
+            phase = phase_result.get("phase", "") if isinstance(phase_result, dict) else ""
         if not phase:
             ma60 = self.data['Close'].rolling(60).mean().iloc[-1] if len(self.data) >= 60 else current_close
             if trading_range.get("is_consolidation"):

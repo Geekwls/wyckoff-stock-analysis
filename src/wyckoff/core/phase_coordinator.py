@@ -444,6 +444,9 @@ class PhaseCoordinator:
         if lifecycle == 'failed':
             return 'Accumulation Phase B (Spring失效观察)'
 
+        if latest_spring.get('needs_secondary_test') and not latest_spring.get('st_confirmed', False):
+            return 'Accumulation Phase B (1号Spring待二次测试)'
+
         spring_type = latest_spring.get('spring_type', 2)
         if isinstance(spring_type, int):
             if spring_type == 1:
@@ -455,6 +458,18 @@ class PhaseCoordinator:
         if spring_type == 'type_1_dangerous':
             return 'Accumulation Phase B (Spring待确认)'
         return 'Accumulation Phase C'
+
+    @staticmethod
+    def _spring_detail_to_dict(latest_spring: Any) -> Dict[str, Any]:
+        if latest_spring is None:
+            return {}
+        if isinstance(latest_spring, dict):
+            return latest_spring
+        if hasattr(latest_spring, 'model_dump'):
+            return latest_spring.model_dump()
+        if hasattr(latest_spring, 'dict'):
+            return latest_spring.dict()
+        return {}
 
     @staticmethod
     def _normalize_vsa_signals(vsa_raw: Dict) -> Dict[str, Any]:
@@ -992,13 +1007,7 @@ class PhaseCoordinator:
         if consolidation_days < min_a_days:
             return current_phase, 0.6
 
-        # 检查Phase B→C的触发信号
-        trigger = self._check_phase_triggers(events, criteria.B_TO_C_SIGNALS)
-        if trigger:
-            new_phase = self._replace_phase_type(current_phase, 'Phase C')
-            return new_phase, 0.85
-
-        # 没有触发信号，进入Phase B
+        # 检查Phase B→C的触发信号 — Phase A 不得直跳 Phase C（须先经历 Phase B）
         new_phase = self._replace_phase_type(current_phase, 'Phase B')
         return new_phase, 0.8
 
@@ -1304,11 +1313,25 @@ class PhaseCoordinator:
             #  修复问题1：Phase A 与 Spring 时序矛盾
             # Wyckoff 理论：Spring 只能发生在 Phase C（吸筹区积累完成后的震仓测试）
             if 'Phase A' in preliminary_phase and 'Accumulation' in preliminary_phase and event_type == 'spring':
-                new_phase = 'Accumulation Phase C'
+                latest_spring = None
+                spring_obj = getattr(events, 'spring', None)
+                if spring_obj is not None:
+                    latest_spring = getattr(spring_obj, 'latest_spring', None)
+                    if not latest_spring:
+                        signals = getattr(spring_obj, 'signals', None) or []
+                        latest_spring = signals[-1] if signals else None
+                if latest_spring is None and spring_upthrust.data is not None:
+                    latest_spring = spring_upthrust.data
+                spring_dict = self._spring_detail_to_dict(latest_spring)
+                new_phase = self._phase_from_spring_signal(spring_dict) if spring_dict else 'Accumulation Phase C'
                 revision_logs.append(
-                    f"[时序修正] Spring 只属于 Phase C。当前阶段 '{preliminary_phase}' 与 Spring 信号矛盾，"
-                    f"强制升级为 '{new_phase}'。（Spring 是 Phase C 的震仓测试行为，"
-                    f"发生在 SC→AR→ST 积累之后，而非 Phase A 初期）"
+                    f"[时序修正] Spring 只属于 Phase C 及以后。当前阶段 '{preliminary_phase}' 与 Spring 信号矛盾，"
+                    f"调整为 '{new_phase}'。"
+                    + (
+                        "（1号 Spring 须二次测试确认，暂标 Phase B）"
+                        if 'Phase B' in new_phase else
+                        "（Spring 是 Phase C 的震仓测试行为，发生在 SC→AR→ST 积累之后）"
+                    )
                 )
                 return new_phase, revision_logs
             # 派发阶段同理：Phase A 不应出现 Upthrust。根据威科夫强证据链，若是决断性的 UTAD 则应升级为 Phase C，若仅是普通上冲测试则修正为 Phase B。
