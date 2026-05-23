@@ -3,7 +3,6 @@ A 股数据提供器
 获取全 A 股代码、市值、行业、成交额等基础数据
 """
 import pandas as pd
-import baostock as bs
 from typing import List, Dict, Optional
 import logging
 
@@ -69,6 +68,8 @@ class StockDataProvider:
     def _fetch_from_baostock(cls) -> Optional[pd.DataFrame]:
         """通过 BaoStock 获取全 A 股数据"""
         try:
+            import baostock as bs
+
             lg = bs.login()
             if lg.error_code != '0':
                 logger.warning(f"BaoStock 登录失败: {lg.error_msg}")
@@ -180,6 +181,8 @@ class StockDataProvider:
         """通过 baostock 获取行业分类映射"""
         industry_map = {}
         try:
+            import baostock as bs
+
             lg = bs.login()
             if lg.error_code == '0':
                 rs = bs.query_stock_industry()

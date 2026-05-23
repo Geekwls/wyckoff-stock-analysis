@@ -14,6 +14,38 @@ class SignalExtractor:
     """从威科夫事件检测结果中提取信号的工具类"""
 
     @staticmethod
+    def _get(obj: Any, key: str, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @classmethod
+    def _detected(cls, obj: Any) -> bool:
+        return bool(cls._get(obj, 'detected', False))
+
+    @classmethod
+    def _latest(cls, obj: Any):
+        for key in ('latest', 'latest_spring', 'latest_upthrust'):
+            latest = cls._get(obj, key)
+            if latest:
+                return latest
+        signals = cls._get(obj, 'signals', []) or []
+        return signals[-1] if signals else None
+
+    @staticmethod
+    def _num(value: Any, default: float = 0.0) -> float:
+        if isinstance(value, dict):
+            value = value.get('value', default)
+        elif hasattr(value, 'value'):
+            value = getattr(value, 'value')
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
     def extract_signals(phase_result: Dict[str, Any]) -> Dict[str, bool]:
         """
         从阶段识别结果中提取所有信号状态
@@ -28,33 +60,23 @@ class SignalExtractor:
         if not events:
             events = phase_result
 
-        # 如果 events 是 dict
-        if isinstance(events, dict):
-            spring_upthrust = events.get('spring_upthrust') or {}
-            sos_sow = events.get('sos_sow') or {}
-            lps_lpsy = events.get('lps_lpsy') or {}
-            lps_data = lps_lpsy.get('lps', {}) if isinstance(lps_lpsy, dict) else {}
-            lpsy_data = lps_lpsy.get('lpsy', {}) if isinstance(lps_lpsy, dict) else {}
+        spring_upthrust = SignalExtractor._get(events, 'spring_upthrust') or {}
+        sos_sow = SignalExtractor._get(events, 'sos_sow') or {}
+        lps_lpsy = SignalExtractor._get(events, 'lps_lpsy') or {}
 
-            has_spring = spring_upthrust.get('_type') == 'spring'
-            has_upthrust = spring_upthrust.get('_type') == 'upthrust'
-            has_sos = sos_sow.get('_type') == 'sos'
-            has_sow = sos_sow.get('_type') == 'sow'
-            has_lps = getattr(lps_data, 'detected', False) if hasattr(lps_data, 'detected') else lps_data.get('detected', False)
-            has_lpsy = getattr(lpsy_data, 'detected', False) if hasattr(lpsy_data, 'detected') else lpsy_data.get('detected', False)
-        else:
-            # 强类型 Pydantic Model (EventsModel)
-            spring_upthrust = getattr(events, 'spring_upthrust', None)
-            sos_sow = getattr(events, 'sos_sow', None)
-            lps_data = getattr(events, 'lps', None)
-            lpsy_data = getattr(events, 'lpsy', None)
+        lps_data = SignalExtractor._get(events, 'lps')
+        lpsy_data = SignalExtractor._get(events, 'lpsy')
+        if not lps_data and isinstance(lps_lpsy, dict):
+            lps_data = lps_lpsy.get('lps')
+        if not lpsy_data and isinstance(lps_lpsy, dict):
+            lpsy_data = lps_lpsy.get('lpsy')
 
-            has_spring = spring_upthrust.type_ == 'spring' if spring_upthrust else False
-            has_upthrust = spring_upthrust.type_ == 'upthrust' if spring_upthrust else False
-            has_sos = sos_sow.type_ == 'sos' if sos_sow else False
-            has_sow = sos_sow.type_ == 'sow' if sos_sow else False
-            has_lps = getattr(lps_data, 'detected', False) if lps_data else False
-            has_lpsy = getattr(lpsy_data, 'detected', False) if lpsy_data else False
+        has_spring = (SignalExtractor._get(spring_upthrust, '_type') or SignalExtractor._get(spring_upthrust, 'type_')) == 'spring'
+        has_upthrust = (SignalExtractor._get(spring_upthrust, '_type') or SignalExtractor._get(spring_upthrust, 'type_')) == 'upthrust'
+        has_sos = (SignalExtractor._get(sos_sow, '_type') or SignalExtractor._get(sos_sow, 'type_')) == 'sos'
+        has_sow = (SignalExtractor._get(sos_sow, '_type') or SignalExtractor._get(sos_sow, 'type_')) == 'sow'
+        has_lps = SignalExtractor._detected(lps_data)
+        has_lpsy = SignalExtractor._detected(lpsy_data)
 
         return {
             'has_spring': has_spring,
@@ -134,21 +156,16 @@ class SignalExtractor:
         bearish_count = 0
 
         for key, max_weight in important_signals:
-            if isinstance(events, dict):
-                info = events.get(key)
-            else:
-                info = getattr(events, key, None)
+            info = SignalExtractor._get(events, key)
 
             if not info:
-                # 兼容：如果 key 是 lps_lpsy 且 events 是 EventsModel
-                if key == 'lps_lpsy' and not isinstance(events, dict):
-                    lps = getattr(events, 'lps', None)
-                    lpsy = getattr(events, 'lpsy', None)
-                    is_lps_detected = getattr(lps, 'detected', False) if lps else False
-                    is_lpsy_detected = getattr(lpsy, 'detected', False) if lpsy else False
-                    if is_lps_detected:
+                # 兼容：新 EventsModel 已废弃 lps_lpsy，lps/lpsy 单独存放。
+                if key == 'lps_lpsy':
+                    lps = SignalExtractor._get(events, 'lps')
+                    lpsy = SignalExtractor._get(events, 'lpsy')
+                    if SignalExtractor._detected(lps):
                         info = lps
-                    elif is_lpsy_detected:
+                    elif SignalExtractor._detected(lpsy):
                         info = lpsy
                 if not info:
                     continue
@@ -159,14 +176,14 @@ class SignalExtractor:
                 sig_type = info.get('_type') or info.get('type', '')
             else:
                 # 强类型，可能是 DualEventModel 或具体的 LpsModel/LpsyModel
-                if hasattr(info, 'type_'):
-                    sig_type = info.type_
-                    data = info.data
+                if SignalExtractor._get(info, 'type_'):
+                    sig_type = SignalExtractor._get(info, 'type_')
+                    data = SignalExtractor._get(info, 'data')
                 else:
-                    sig_type = key
+                    sig_type = 'lps' if key == 'lps_lpsy' else key
                     data = info
 
-            if not data or not getattr(data, 'detected', False): continue
+            if not data or not SignalExtractor._detected(data): continue
 
             # 判断方向供冲突检测
             if sig_type in ['spring', 'sos', 'lps']: bullish_count += 1
@@ -176,16 +193,23 @@ class SignalExtractor:
             quality_factor = 0.8 # 默认基础分
 
             # 考虑成交量比 (Volume Ratio)
-            vol_ratio = getattr(data, 'volume_ratio', 1.0)
+            latest = SignalExtractor._latest(data) or data
+            vol_ratio = SignalExtractor._num(
+                SignalExtractor._get(data, 'volume_ratio', SignalExtractor._get(latest, 'volume_ratio', 1.0)),
+                1.0
+            )
             if vol_ratio > 2.0: quality_factor += weights['volume_ratio']
             elif vol_ratio > 1.5: quality_factor += weights['volume_ratio'] * 0.5
 
             # 考虑置信度 (Confidence)
-            conf = getattr(data, 'confidence', 0.5)
+            conf = SignalExtractor._num(
+                SignalExtractor._get(data, 'confidence', SignalExtractor._get(latest, 'confidence', 0.5)),
+                0.5
+            )
             quality_factor += (conf - 0.5) * weights['confidence']
 
             # 考虑日期 (时间衰减)
-            sig_date = getattr(data, 'date', None)
+            sig_date = SignalExtractor._get(data, 'date', SignalExtractor._get(latest, 'date'))
             if sig_date:
                 if isinstance(sig_date, str):
                     try: sig_date = datetime.strptime(sig_date, '%Y-%m-%d')

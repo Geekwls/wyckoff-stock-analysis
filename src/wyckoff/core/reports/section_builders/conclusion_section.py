@@ -7,6 +7,37 @@ logger = logging.getLogger(__name__)
 
 class ConclusionSection(BaseSectionBuilder):
     """构建报告结论、因果测算、冲突警告及证伪区块"""
+    @staticmethod
+    def _get(obj, key, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @classmethod
+    def _detected(cls, obj) -> bool:
+        return bool(cls._get(obj, 'detected', False))
+
+    @classmethod
+    def _latest(cls, obj, latest_key='latest'):
+        latest = cls._get(obj, latest_key)
+        if latest:
+            return latest
+        signals = cls._get(obj, 'signals', []) or []
+        return signals[-1] if signals else None
+
+    @staticmethod
+    def _num(value, default=0.0) -> float:
+        if isinstance(value, dict):
+            value = value.get('value', default)
+        elif hasattr(value, 'value'):
+            value = getattr(value, 'value')
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     def build(self, phase_result: dict, trading_range: dict, cause_effect: dict, conflict: dict,
               quality_data: dict, joc: dict, spring: dict, sos: dict, lps: dict, fti: dict,
               upthrust: dict, sow: dict, lpsy: dict, mtf: dict, boring_res: dict,
@@ -31,8 +62,8 @@ class ConclusionSection(BaseSectionBuilder):
             #  修复：LPS返回结构中price字段在latest里
             lps_price = 0
             if lps:
-                latest = lps.get('latest', {}) if isinstance(lps, dict) else lps
-                lps_price = latest.get('price', 0) if isinstance(latest, dict) else 0
+                latest = self._latest(lps) or lps
+                lps_price = self._num(self._get(latest, 'price', 0))
             retest_zone = self._calculate_healthy_retest_zone(current_price, breakout_level, lps_price)
 
         # === 事件仲裁结果 ===
@@ -69,8 +100,8 @@ class ConclusionSection(BaseSectionBuilder):
         report += self._build_market_context_section(market_env)
 
         # 增加信号冲突自检逻辑 (JOC/Spring/SOS 与 Upthrust/SOW/FTI 共存时)
-        has_bullish_signal = (joc and joc.get('detected')) or (spring and spring.get('detected')) or (sos and sos.get('detected'))
-        has_bearish_signal = (upthrust and upthrust.get('detected')) or (sow and sow.get('detected')) or (fti and fti.get('detected'))
+        has_bullish_signal = self._detected(joc) or self._detected(spring) or self._detected(sos)
+        has_bearish_signal = self._detected(upthrust) or self._detected(sow) or self._detected(fti)
         if has_bullish_signal and has_bearish_signal:
             report += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -111,29 +142,23 @@ class ConclusionSection(BaseSectionBuilder):
         #  基于高时间框架优先原则的仲裁逻辑
         is_weekly_bullish = conflict.get('weekly_trend') == 'bullish'
         # 安全地检查fti是否为模型对象或dict
-        fti_detected = False
-        if fti is not None:
-            if hasattr(fti, 'detected'):
-                fti_detected = fti.detected
-            elif isinstance(fti, dict):
-                fti_detected = fti.get('detected', False)
+        fti_detected = self._detected(fti)
         is_daily_bearish = ('Distribution' in phase_str or 'Markdown' in phase_str or fti_detected) and not breakout_override
 
         #  新增：检查SOW信号，判断区间是否被破坏
-        sow_detected = False
         sow_broke_tr = False
         if sow is not None:
-            if isinstance(sow, dict):
-                sow_detected = sow.get('detected', False)
-                if sow_detected:
-                    signal_type = sow.get('signal_type', '')
-                    sow_price = sow.get('price', 0)
-                    sow_low = sow.get('low', 0)
-                    tr_low = self._get_tr_value(trading_range, 'low', 0)
+            sow_detected = self._detected(sow)
+            if sow_detected:
+                latest_sow = self._latest(sow) or sow
+                signal_type = self._get(latest_sow, 'signal_type', self._get(sow, 'signal_type', ''))
+                sow_price = self._num(self._get(latest_sow, 'price', self._get(sow, 'price', 0)))
+                sow_low = self._num(self._get(latest_sow, 'low', self._get(sow, 'low', sow_price)))
+                tr_low = self._get_tr_value(trading_range, 'low', 0)
 
-                    # 判断SOW是否跌破区间下沿
-                    if signal_type == 'true_sow' or (sow_low > 0 and sow_low < tr_low):
-                        sow_broke_tr = True
+                # 判断SOW是否跌破区间下沿
+                if signal_type == 'true_sow' or (sow_low > 0 and sow_low < tr_low):
+                    sow_broke_tr = True
 
         # 如果SOW破坏了区间，显示威科夫逻辑警告
         if sow_broke_tr and trading_range and trading_range.get('is_consolidation'):
@@ -275,15 +300,15 @@ class ConclusionSection(BaseSectionBuilder):
             is_distribution = 'Distribution' in phase_str or '派发' in phase_str
             if post_breakout: report += post_breakout
 
-            if joc.get('detected') and joc.get('test_detected') and not is_distribution:
-                joc_entry = joc.get('creek_level', current_price)
+            if self._detected(joc) and self._get(joc, 'test_detected') and not is_distribution:
+                joc_entry = self._num(self._get(joc, 'creek_level', current_price), current_price)
                 target2 = cause_effect.get('targets', {}).get('target_2', current_price * 1.15)
                 report += f"🚀 趋势跟踪买入（JOC 突破确认）:\n   参考入场区间: {joc_entry:.2f} ~ {joc_entry * 1.02:.2f}\n   止损: {joc_entry * 0.96:.2f} | 目标2: {target2:.2f}\n"
-            elif lps.get('detected') and not is_distribution:
+            elif self._detected(lps) and not is_distribution:
                 #  修复：LPS返回结构中price字段在latest里，且需要检查signal_type
-                latest = lps.get('latest', {}) if isinstance(lps, dict) else lps
-                signal_type = latest.get('signal_type', 'unknown') if isinstance(latest, dict) else 'unknown'
-                lp = latest.get('price', current_price) if isinstance(latest, dict) else current_price
+                latest = self._latest(lps) or lps
+                signal_type = self._get(latest, 'signal_type', 'unknown')
+                lp = self._num(self._get(latest, 'price', current_price), current_price)
 
                 # 只有正式LPS（signal_type='lps'）才显示为"做多机会"
                 if signal_type == 'lps':
@@ -292,7 +317,7 @@ class ConclusionSection(BaseSectionBuilder):
                     report += f"[?] 观察支撑测试:\n   价格: {lp:.2f}（非正式LPS，需等待确认）\n"
                 else:
                     report += f"⏸️ 观察过渡回踩 ({signal_type}):\n   价格: {lp:.2f}（非标准买点信号，建议继续观望）\n"
-            elif fti.get('detected') and fti.get('test_detected'):
+            elif self._detected(fti) and self._get(fti, 'test_detected'):
                 report += f"🔻 做空/减仓警示（FTI 跌破确认）\n"
             elif trading_range.get('is_consolidation'):
                 report += "⏳ 观望等待: 横盘整理阶段，等待信号。\n"
@@ -813,11 +838,12 @@ class ConclusionSection(BaseSectionBuilder):
         return report
 
     def _check_post_breakout_state(self, trading_range, joc, current_price) -> str:
-        if not trading_range.get('is_broken'): return ''
-        direction = trading_range.get('breakout_direction', 'unknown')
-        tr_high, tr_low = trading_range.get('high', 0), trading_range.get('low', 0)
+        if not self._get(trading_range, 'is_broken'): return ''
+        direction = self._get(trading_range, 'breakout_direction', 'unknown')
+        tr_high = self._num(self._get(trading_range, 'high', 0))
+        tr_low = self._num(self._get(trading_range, 'low', 0))
         if direction == 'up':
-            if joc.get('test_detected'): return f"【突破后状态 - 回测确认】\n   价格已突破TR上沿{tr_high:.2f}至{current_price:.2f}，且回测已确认。\n"
+            if self._get(joc, 'test_detected'): return f"【突破后状态 - 回测确认】\n   价格已突破TR上沿{tr_high:.2f}至{current_price:.2f}，且回测已确认。\n"
             return f"【突破后状态 - JOC推进中】\n   价格已突破TR上沿{tr_high:.2f}至{current_price:.2f}，JOC已触发。\n"
         return f"【突破后状态 - 向下突破】\n   价格已跌破TR下沿{tr_low:.2f}至{current_price:.2f}。\n"
 
@@ -857,23 +883,11 @@ class ConclusionSection(BaseSectionBuilder):
             if hasattr(self, 'pattern_detector') and hasattr(self.pattern_detector, 'phase_coordinator'):
                 try:
                     events = self.pattern_detector.phase_coordinator.collect_all_events()
-                    if isinstance(events, dict):
-                        climax = events.get('climax')
-                        if climax:
-                            # 检查detected属性
-                            detected = getattr(climax, 'detected', None)
-                            if detected is None and isinstance(climax, dict):
-                                detected = climax.get('detected', False)
-
-                            # 检查type属性
-                            climax_type_value = getattr(climax, 'type', None)
-                            if climax_type_value is None and isinstance(climax, dict):
-                                climax_type_value = climax.get('type')
-
-                            bc_detected = detected if detected is not None else False
-                            bc_type = climax_type_value
-
-                            logger.info(f"BC check: detected={bc_detected}, type={bc_type}")
+                    climax = self._get(events, 'climax')
+                    if climax:
+                        bc_detected = self._detected(climax)
+                        bc_type = self._get(climax, 'type')
+                        logger.info(f"BC check: detected={bc_detected}, type={bc_type}")
                 except Exception as e:
                     logger.debug(f"Failed to get climax from phase_coordinator: {e}")
 

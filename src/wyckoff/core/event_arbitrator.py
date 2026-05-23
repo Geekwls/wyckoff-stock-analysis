@@ -126,6 +126,32 @@ class EventArbitrator:
             return signal_obj.get('detected', False)
         return False
 
+    def _get_signal_field(self, signal_obj: Any, key: str, default=None):
+        if isinstance(signal_obj, dict):
+            return signal_obj.get(key, default)
+        return getattr(signal_obj, key, default)
+
+    def _dump_signal(self, signal_obj: Any) -> Dict[str, Any]:
+        if hasattr(signal_obj, 'model_dump'):
+            return signal_obj.model_dump()
+        if isinstance(signal_obj, dict):
+            return signal_obj
+        return {}
+
+    def _iter_signal_details(self, event_obj: Any, latest_key: str = 'latest') -> List[Any]:
+        if isinstance(event_obj, dict):
+            signals = list(event_obj.get('signals') or [])
+            latest = event_obj.get(latest_key)
+            if latest and latest not in signals:
+                signals.append(latest)
+            return signals
+
+        signals = list(getattr(event_obj, 'signals', None) or [])
+        latest = getattr(event_obj, latest_key, None)
+        if latest and latest not in signals:
+            signals.append(latest)
+        return signals
+
     def _extract_spring_signals(self, spring: SpringModel) -> List[ArbitrationSignal]:
         """提取Spring信号"""
         signals = []
@@ -190,15 +216,15 @@ class EventArbitrator:
         """提取SOS信号"""
         signals = []
 
-        if hasattr(sos, 'signals') and sos.signals:
-            for sig in sos.signals:
-                signals.append(ArbitrationSignal(
-                    signal_type='sos',
-                    date=sig.date,
-                    direction='bullish',
-                    confidence=sig.confidence if hasattr(sig, 'confidence') else 0.7,
-                    raw_data={'sos': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
-                ))
+        for sig in self._iter_signal_details(sos):
+            signals.append(ArbitrationSignal(
+                signal_type='sos',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bullish',
+                confidence=self._get_signal_field(sig, 'confidence', 0.7),
+                strength=self._get_signal_field(sig, 'volume_ratio'),
+                raw_data={'sos': self._dump_signal(sig)}
+            ))
 
         return signals
 
@@ -206,15 +232,15 @@ class EventArbitrator:
         """提取SOW信号"""
         signals = []
 
-        if hasattr(sow, 'signals') and sow.signals:
-            for sig in sow.signals:
-                signals.append(ArbitrationSignal(
-                    signal_type='sow',
-                    date=sig.date,
-                    direction='bearish',
-                    confidence=sig.confidence if hasattr(sig, 'confidence') else 0.7,
-                    raw_data={'sow': sig.model_dump() if hasattr(sig, 'model_dump') else sig}
-                ))
+        for sig in self._iter_signal_details(sow):
+            signals.append(ArbitrationSignal(
+                signal_type='sow',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bearish',
+                confidence=self._get_signal_field(sig, 'confidence', 0.7),
+                strength=self._get_signal_field(sig, 'volume_ratio'),
+                raw_data={'sow': self._dump_signal(sig)}
+            ))
 
         return signals
 

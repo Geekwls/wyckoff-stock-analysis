@@ -32,6 +32,51 @@ def _get_pydantic_fields(model_cls):
         return frozenset(model_cls.model_fields.keys())
     return frozenset(model_cls.__fields__.keys())
 
+def _normalize_signal_event(data: Dict, required_fields: Tuple[str, ...]) -> Dict:
+    """将旧的扁平事件输出补成 signals/latest 结构，避免强类型封装时丢证据"""
+    if not isinstance(data, dict):
+        return data
+
+    normalized = dict(data)
+    signals = normalized.get('signals')
+    if signals:
+        if normalized.get('latest') is None:
+            normalized['latest'] = signals[-1]
+        return normalized
+
+    if not normalized.get('detected'):
+        return normalized
+
+    signal = {k: normalized.get(k) for k in required_fields if k in normalized}
+    if all(k in signal and signal[k] is not None for k in required_fields):
+        normalized['signals'] = [signal]
+        normalized['latest'] = signal
+    return normalized
+
+def _normalize_sos_event(data: Dict) -> Dict:
+    return _normalize_signal_event(
+        data,
+        ('date', 'price', 'volume_ratio', 'price_change', 'breakthrough_level')
+    )
+
+def _normalize_sow_event(data: Dict) -> Dict:
+    return _normalize_signal_event(
+        data,
+        ('date', 'price', 'volume_ratio', 'price_change', 'breakdown_level')
+    )
+
+def _flatten_latest_event(data: Dict, latest_key: str = 'latest') -> Dict:
+    """将 latest 中的核心字段提升到顶层，兼容现有 JocModel/FtiModel"""
+    if not isinstance(data, dict):
+        return data
+    latest = data.get(latest_key)
+    if not isinstance(latest, dict):
+        return data
+    flattened = dict(data)
+    for key, value in latest.items():
+        flattened.setdefault(key, value)
+    return flattened
+
 class PhaseCoordinator:
     """
     阶段协调器
@@ -135,10 +180,16 @@ class PhaseCoordinator:
         sow_res = self.detector.detect_sow()
 
         tr_res = self.detector.detect_trading_range()
-        lps_res = self.detector.detect_lps(sos_res, spring_res, trading_range=tr_res)
-        lpsy_res = self.detector.detect_lpsy(trading_range=tr_res)
         joc_res = self.detector.detect_joc(trading_range=tr_res)
         fti_res = self.detector.detect_fti(trading_range=tr_res)
+
+        sos_res = _normalize_sos_event(sos_res)
+        sow_res = _normalize_sow_event(sow_res)
+        joc_res = _flatten_latest_event(joc_res)
+        fti_res = _flatten_latest_event(fti_res)
+
+        lps_res = self.detector.detect_lps(sos_res, spring_res, trading_range=tr_res, joc_result=joc_res)
+        lpsy_res = self.detector.detect_lpsy(trading_range=tr_res)
 
 
         # 5.5. 运行事件仲裁（解决信号冲突）
@@ -218,9 +269,9 @@ class PhaseCoordinator:
             events_dict['spring_upthrust'] = DualEventModel(_type='upthrust', data=_safe_model(UpthrustModel, upthrust_res))
 
         if sos_res.get('detected'):
-            events_dict['sos_sow'] = DualEventModel(_type='sos', data=_safe_model(SosModel, sos_res))
+            events_dict['sos_sow'] = DualEventModel(_type='sos', data=events_dict['sos'])
         elif sow_res.get('detected'):
-            events_dict['sos_sow'] = DualEventModel(_type='sow', data=_safe_model(SowModel, sow_res))
+            events_dict['sos_sow'] = DualEventModel(_type='sow', data=events_dict['sow'])
 
         # lps_lpsy 字典已废弃，lps/lpsy 已单独存于 EventsModel.lps / .lpsy
 

@@ -60,6 +60,34 @@ class StrengthWeaknessDetector(BaseDetector):
 
         return df
 
+    @staticmethod
+    def _get_event_field(event_obj, key: str, default=None):
+        """兼容 dict / Pydantic 事件对象的字段读取。"""
+        if event_obj is None:
+            return default
+        if isinstance(event_obj, dict):
+            return event_obj.get(key, default)
+        return getattr(event_obj, key, default)
+
+    @classmethod
+    def _latest_event_detail(cls, event_obj, latest_key: str = 'latest'):
+        latest = cls._get_event_field(event_obj, latest_key)
+        if latest:
+            return latest
+        signals = cls._get_event_field(event_obj, 'signals', []) or []
+        return signals[-1] if signals else None
+
+    @staticmethod
+    def _numeric_value(value, default=None):
+        if isinstance(value, dict):
+            value = value.get('value', default)
+        elif hasattr(value, 'value'):
+            value = getattr(value, 'value')
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     def update_analysis_context(self, phase: str):
         """更新当前阶段，用于动态调整信号分类"""
         super().update_analysis_context(phase)
@@ -180,7 +208,7 @@ class StrengthWeaknessDetector(BaseDetector):
 
         df = self.data.tail(window).copy()
 
-        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
+        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['moderate']
         price_change_threshold = self.thresholds.SOS_PRICE_CHANGE_DEFAULT
 
         # 转换为 NumPy 数组
@@ -307,7 +335,7 @@ class StrengthWeaknessDetector(BaseDetector):
         price_pct_change = df['Close'].pct_change()
 
         # 使用配置中的阈值
-        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
+        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['moderate']
         price_change_threshold = self.thresholds.SOS_PRICE_CHANGE_DEFAULT
 
         # 修复 #6: SOS 必须收盘在日内高位（无长上影线），防止 UT 误判为 SOS
@@ -398,7 +426,7 @@ class StrengthWeaknessDetector(BaseDetector):
 
         df = self.data.tail(window).copy()
 
-        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
+        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['moderate']
         price_change_threshold = self.thresholds.SOW_PRICE_CHANGE_DEFAULT
 
         closes = df['Close'].values
@@ -519,7 +547,7 @@ class StrengthWeaknessDetector(BaseDetector):
         vol_ma = df['Volume'].rolling(20).mean()
         price_pct_change = df['Close'].pct_change()
 
-        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['strong']
+        vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['moderate']
         price_change_threshold = self.thresholds.SOW_PRICE_CHANGE_DEFAULT
 
         close_position = (df['Close'] - df['Low']) / (df['High'] - df['Low']).replace(0, float('nan'))
@@ -576,7 +604,14 @@ class StrengthWeaknessDetector(BaseDetector):
             }
         return {'detected': False}
 
-    def detect_lps(self, window: int = 30, spring_res: Dict = None, trading_range: Dict = None, sos_result: Dict = None) -> Dict:
+    def detect_lps(
+        self,
+        window: int = 30,
+        spring_res: Dict = None,
+        trading_range: Dict = None,
+        sos_result: Dict = None,
+        joc_result: Dict = None,
+    ) -> Dict:
         """
         检测 LPS (Last Point of Support)
 
@@ -588,35 +623,83 @@ class StrengthWeaknessDetector(BaseDetector):
         Args:
             window: 检测窗口
             spring_res: Spring检测结果，用于验证LPS低点>Spring低点
-            trading_range: 交易区间字典（需包含low字段），用于验证LPS靠近TR支撑位
-            sos_result: SOS检测结果（LPS必须发生在SOS强势信号之后）
+            trading_range: 交易区间字典，用于提取 TR 上沿/下沿锚点
+            sos_result: SOS检测结果（LPS必须发生在SOS/JOC强势信号之后）
+            joc_result: JOC检测结果，用于将 LPS 锚定到 Creek 回测
         """
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
 
-        # 提取 SOS 日期（LPS 必须发生在 SOS 之后）
-        sos_date = None
-        if sos_result and sos_result.get('detected'):
-            sos_date = pd.to_datetime(sos_result.get('date'))
-            if self.data.index.tz is not None and sos_date.tz is None:
-                sos_date = sos_date.tz_localize('UTC').tz_convert(self.data.index.tz)
-            elif self.data.index.tz is None and sos_date.tz is not None:
-                sos_date = sos_date.tz_localize(None)
+        def _normalize_event_date(raw_date):
+            if raw_date is None:
+                return None
+            event_date = pd.to_datetime(raw_date)
+            if self.data.index.tz is not None and event_date.tz is None:
+                event_date = event_date.tz_localize('UTC').tz_convert(self.data.index.tz)
+            elif self.data.index.tz is None and event_date.tz is not None:
+                event_date = event_date.tz_localize(None)
+            return event_date
+
+        # 提取 SOS/JOC 日期（LPS 必须发生在突破确认之后）
+        breakout_dates = []
+        if sos_result and self._get_event_field(sos_result, 'detected'):
+            sos_detail = self._latest_event_detail(sos_result)
+            sos_date = (
+                self._get_event_field(sos_detail, 'date') or
+                self._get_event_field(sos_result, 'date')
+            )
+            normalized_date = _normalize_event_date(sos_date)
+            if normalized_date is not None:
+                breakout_dates.append(('SOS', normalized_date))
+
+        if joc_result and self._get_event_field(joc_result, 'detected'):
+            joc_detail = self._latest_event_detail(joc_result)
+            joc_date = (
+                self._get_event_field(joc_detail, 'date') or
+                self._get_event_field(joc_result, 'date')
+            )
+            normalized_date = _normalize_event_date(joc_date)
+            if normalized_date is not None:
+                breakout_dates.append(('JOC', normalized_date))
 
         # 提取 Spring 低点（若有）
         spring_low = None
-        if spring_res and spring_res.get('detected'):
-            sl = spring_res.get('latest_spring') or (
-                spring_res.get('signals', [{}])[-1] if spring_res.get('signals') else {}
+        if spring_res and self._get_event_field(spring_res, 'detected'):
+            sl = self._get_event_field(spring_res, 'latest_spring') or (
+                self._get_event_field(spring_res, 'signals', [{}])[-1]
+                if self._get_event_field(spring_res, 'signals') else {}
             )
-            spring_low = sl.get('breakdown_price') if isinstance(sl, dict) else (
-                getattr(sl, 'breakdown_price', None) if hasattr(sl, 'breakdown_price') else None
-            )
+            spring_low = self._numeric_value(self._get_event_field(sl, 'breakdown_price'))
 
-        # 提取 TR 支撑位（威科夫 LPS 应在 TR 下沿附近）
+        # 构建 LPS 回测锚点：优先 Creek/SOS 突破位，其次 TR 上沿，最后才是 TR 下沿。
         tr_support = None
-        if trading_range and 'low' in trading_range:
-            tr_support = trading_range['low']
+        anchor_candidates = []
+
+        if joc_result and self._get_event_field(joc_result, 'detected'):
+            joc_detail = self._latest_event_detail(joc_result)
+            creek_level = self._numeric_value(
+                self._get_event_field(joc_detail, 'creek_level') or
+                self._get_event_field(joc_result, 'creek_level')
+            )
+            if creek_level and creek_level > 0:
+                anchor_candidates.append(('JOC Creek', creek_level))
+
+        if sos_result and self._get_event_field(sos_result, 'detected'):
+            sos_detail = self._latest_event_detail(sos_result)
+            breakthrough_level = self._numeric_value(
+                self._get_event_field(sos_detail, 'breakthrough_level') or
+                self._get_event_field(sos_result, 'breakthrough_level')
+            )
+            if breakthrough_level and breakthrough_level > 0:
+                anchor_candidates.append(('SOS突破位', breakthrough_level))
+
+        if trading_range:
+            tr_high = self._numeric_value(self._get_event_field(trading_range, 'high'))
+            tr_support = self._numeric_value(self._get_event_field(trading_range, 'low'))
+            if tr_high and tr_high > 0:
+                anchor_candidates.append(('TR上沿', tr_high))
+            if tr_support and tr_support > 0:
+                anchor_candidates.append(('TR下沿', tr_support))
 
         # 判断阶段上下文
         is_accumulation = self._is_accumulation_phase()
@@ -675,20 +758,28 @@ class StrengthWeaknessDetector(BaseDetector):
             if spring_low is not None and current['Low'] <= spring_low:
                 continue
 
-            # 威科夫 LPS：必须在 TR 下沿支撑位附近（自适应容差）
-            # 孟洪涛书中定义：LPS 是"最后支撑点"，应在 TR 下沿受支撑后缩量
-            near_tr_support = True
-            if tr_support is not None:
-                # LPS 低点必须在 TR 下沿的合理范围内（+动态容差）
-                low_pct_from_support = (current['Low'] - tr_support) / max(tr_support, 1e-9)
-                # P2 修复：基于 ATR 自适应容差，对高波动收紧、低波动放宽
+            # 威科夫 LPS：优先观察 SOS/JOC 后对 Creek / 突破位 / TR 上沿的缩量回测。
+            near_lps_anchor = True
+            matched_anchor_label = None
+            matched_anchor_value = None
+            matched_anchor_deviation = None
+            if anchor_candidates:
                 atr_val = current.get('ATR')
                 if pd.isna(atr_val) or atr_val <= 0:
                     atr_pct = 0.015
                 else:
                     atr_pct = atr_val / max(current['Close'], 1e-9)
                 tolerance_upper = min(0.08, max(0.04, atr_pct * 1.5))
-                near_tr_support = -0.03 <= low_pct_from_support <= tolerance_upper
+
+                matches = []
+                for anchor_label, anchor_value in anchor_candidates:
+                    low_pct_from_anchor = (current['Low'] - anchor_value) / max(anchor_value, 1e-9)
+                    if -0.03 <= low_pct_from_anchor <= tolerance_upper:
+                        matches.append((abs(low_pct_from_anchor), anchor_label, anchor_value, low_pct_from_anchor))
+
+                near_lps_anchor = bool(matches)
+                if matches:
+                    _, matched_anchor_label, matched_anchor_value, matched_anchor_deviation = min(matches, key=lambda item: item[0])
 
             # 新增：VCP 波动率收缩验证 (P0)
             vcp_detected = False
@@ -712,45 +803,50 @@ class StrengthWeaknessDetector(BaseDetector):
                 is_tight = (bodies[-1] / max(ranges[-1], 1e-9)) < 0.3 # 实体占波幅比例小
                 vcp_detected = is_body_shrinking and is_tight
 
-            if is_pullback and low_volume and higher_low and near_tr_support:
+            if is_pullback and low_volume and higher_low and near_lps_anchor:
                 signal = {
                     'date': df.index[i],
                     'price': current['Close'],
                     'volume_ratio': round(current['Volume'] / vol_ma.iloc[i], 2),
-                    'support_level': tr_support if tr_support is not None else df['MA20'].iloc[i],
+                    'support_level': matched_anchor_value if matched_anchor_value is not None else df['MA20'].iloc[i],
+                    'anchor_type': matched_anchor_label,
                     'vcp_detected': bool(vcp_detected),
                     'confidence_score': 'HIGH' if vcp_detected else 'MEDIUM'
                 }
 
-                # 记录 TR 支撑关系
+                # 记录 LPS 锚点关系，保留 tr_support 兼容旧报告字段
+                if matched_anchor_value is not None:
+                    signal['lps_anchor'] = matched_anchor_value
+                    signal['lps_anchor_deviation_pct'] = round(float(matched_anchor_deviation * 100), 2)
                 if tr_support is not None:
-                    low_pct = (current['Low'] - tr_support) / max(tr_support, 1e-9) * 100
                     signal['tr_support'] = tr_support
-                    signal['tr_support_deviation_pct'] = round(float(low_pct), 2)
 
                 # 阶段约束：只有 Accumulation 阶段且具备完整Phase A结构、且必须在 SOS 强势信号之后才叫 LPS
                 if is_accumulation:
-                    has_sos = sos_date is not None
-                    is_after_sos = has_sos and pd.to_datetime(df.index[i]) > sos_date
+                    has_breakout_context = bool(breakout_dates)
+                    current_date = pd.to_datetime(df.index[i])
+                    is_after_breakout = any(current_date > event_date for _, event_date in breakout_dates)
 
-                    if has_complete_phase_a_structure and has_sos and is_after_sos:
+                    if has_complete_phase_a_structure and has_breakout_context and is_after_breakout:
                         signal['signal_type'] = 'lps'
-                        note = '吸筹阶段最后支撑点（LPS）| ✅ 具备完整Phase A结构（SC→AR→ST）并发生在 SOS 强势信号之后 ✓'
-                        if tr_support is not None:
-                            note += f' | 靠近TR下沿{tr_support:.2f} ✓'
+                        breakout_names = '/'.join(name for name, _ in breakout_dates)
+                        note = f'吸筹阶段最后支撑点（LPS）| ✅ 具备完整Phase A结构（SC→AR→ST）并发生在 {breakout_names} 强势突破之后 ✓'
+                        if matched_anchor_value is not None:
+                            note += f' | 缩量回测{matched_anchor_label}{matched_anchor_value:.2f} ✓'
                     else:
                         signal['signal_type'] = 'support_test'
                         reasons = []
                         if not has_complete_phase_a_structure:
                             missing = ', '.join(phase_a_validation['missing_events'])
                             reasons.append(f'缺少完整Phase A结构：缺失[{missing}]')
-                        if not has_sos:
-                            reasons.append('未检测到前置 SOS 强势信号')
-                        elif not is_after_sos:
-                            reasons.append(f'未发生在 SOS 强势信号之后 (SOS 日期: {sos_date.strftime("%Y-%m-%d") if hasattr(sos_date, "strftime") else sos_date})')
+                        if not has_breakout_context:
+                            reasons.append('未检测到前置 SOS/JOC 强势突破信号')
+                        elif not is_after_breakout:
+                            latest_breakout = max(event_date for _, event_date in breakout_dates)
+                            reasons.append(f'未发生在 SOS/JOC 强势信号之后 (最近突破日期: {latest_breakout.strftime("%Y-%m-%d") if hasattr(latest_breakout, "strftime") else latest_breakout})')
 
                         note = (f'⚠️ 降级为支撑测试（非正式LPS）| ' + ' | '.join(reasons) +
-                                f' | 威科夫理论要求：LPS需前置SC→AR→ST吸筹结构，且必须发生在 SOS 强势突破之后进行确认性回测')
+                                f' | 威科夫理论要求：LPS需前置SC→AR→ST吸筹结构，且必须发生在 SOS/JOC 强势突破之后进行确认性回测')
                 elif is_markup:
                     signal['signal_type'] = 'pullback'
                     note = ('上涨趋势缩量回踩（非正式LPS，因缺少SC/AR/ST吸筹前置结构；'
@@ -826,10 +922,19 @@ class StrengthWeaknessDetector(BaseDetector):
                 'latest': lps_signals[-1],
                 'spring_low': spring_low,
                 'tr_support': tr_support,
+                'anchor_candidates': [
+                    {'type': label, 'level': level}
+                    for label, level in anchor_candidates
+                ],
                 'phase_context': {
                     'phase': self._current_phase or 'unknown',
                     'is_accumulation': is_accumulation,
-                    'has_lps_qualification': is_accumulation and has_complete_phase_a_structure,
+                    'has_breakout_context': bool(breakout_dates),
+                    'has_lps_qualification': (
+                        is_accumulation and
+                        has_complete_phase_a_structure and
+                        bool(breakout_dates)
+                    ),
                     'note': ('当前阶段不是标准Accumulation，'
                              '信号已按阶段上下文重新定性为"缩量回踩"而非正式LPS'
                              if not is_accumulation else None),

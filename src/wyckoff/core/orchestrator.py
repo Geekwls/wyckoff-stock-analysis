@@ -214,16 +214,22 @@ class WyckoffOrchestrator:
         # 关键修复：在检测SOS之前，先设置当前阶段
         if hasattr(detector, 'sw_detector') and hasattr(detector.sw_detector, 'set_current_phase'):
             detector.sw_detector.set_current_phase(phase)
-        
+
+        trading_range = detector.detect_trading_range()
+        spring = detector.detect_spring_menhongtao()
+        sos = detector.detect_sos()
+        sow = detector.detect_sow(trading_range=trading_range)
+        joc = detector.detect_joc_menhongtao()
+
         return {
-            "joc": detector.detect_joc_menhongtao(),
+            "joc": joc,
             "fti": detector.detect_fti(),
-            "spring": detector.detect_spring_menhongtao(),
+            "spring": spring,
             "upthrust": detector.detect_upthrust(),
-            "sos": detector.detect_sos(),
-            "sow": detector.detect_sow(),
-            "lps": detector.detect_lps(),
-            "lpsy": detector.detect_lpsy()
+            "sos": sos,
+            "sow": sow,
+            "lps": detector.detect_lps(sos, spring, trading_range=trading_range, joc_result=joc),
+            "lpsy": detector.detect_lpsy(trading_range=trading_range)
         }
 
     def _analyze_market_env(self, symbol: str, period: str) -> Any:

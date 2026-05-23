@@ -2,8 +2,44 @@ from .base_builder import BaseSectionBuilder
 
 class PatternSection(BaseSectionBuilder):
     """构建形态检测区块 (TR, PS, PSY, Spring, SOS/SOW, LPS)"""
+    @staticmethod
+    def _get(obj, key, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @classmethod
+    def _detected(cls, obj) -> bool:
+        return bool(cls._get(obj, 'detected', False))
+
+    @classmethod
+    def _latest(cls, obj, latest_key='latest'):
+        latest = cls._get(obj, latest_key)
+        if latest:
+            return latest
+        signals = cls._get(obj, 'signals', []) or []
+        return signals[-1] if signals else None
+
+    @staticmethod
+    def _num(value, default=0.0) -> float:
+        if isinstance(value, dict):
+            value = value.get('value', default)
+        elif hasattr(value, 'value'):
+            value = getattr(value, 'value')
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _date(value):
+        return value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else value
+
     def build(self, trading_range: dict, spring: dict, upthrust: dict, sos: dict, sow: dict, lps: dict, lpsy: dict, phase_str: str, ps: dict = None, psy: dict = None) -> str:
         text = "【形态检测】\n"
+        trading_range = trading_range or {}
         
         # 深度破位寻底检查
         is_deep_breakdown = trading_range.get('position', 0) < -0.05
@@ -64,93 +100,73 @@ class PatternSection(BaseSectionBuilder):
 
         # Spring & Upthrust - 安全检查
         if spring is not None:
-            spring_detected = spring.detected if hasattr(spring, 'detected') else spring.get('detected', False)
-            if spring_detected:
+            if self._detected(spring):
                 text += self._fmt_spring(spring)
 
         if upthrust is not None:
-            upthrust_detected = upthrust.detected if hasattr(upthrust, 'detected') else upthrust.get('detected', False)
-            if upthrust_detected:
+            if self._detected(upthrust):
                 text += self._fmt_upthrust(upthrust)
 
         # SOS & SOW - 安全检查
         if sos is not None:
-            sos_detected = sos.detected if hasattr(sos, 'detected') else sos.get('detected', False)
-            sos_latest = sos.latest if hasattr(sos, 'latest') else sos.get('latest', True)
-            if sos_detected and sos_latest:
+            if self._detected(sos) and self._latest(sos):
                 text += self._fmt_sos(sos)
 
         if sow is not None:
-            sow_detected = sow.detected if hasattr(sow, 'detected') else sow.get('detected', False)
-            sow_latest = sow.latest if hasattr(sow, 'latest') else sow.get('latest', True)
-            if sow_detected and sow_latest:
+            if self._detected(sow) and self._latest(sow):
                 text += self._fmt_sow(sow)
 
         # LPS & LPSY
-        if lps.get('detected'):
+        if self._detected(lps):
             text += self._fmt_lps(lps)
-        if lpsy.get('detected'):
+        if self._detected(lpsy):
             text += self._fmt_lpsy(lpsy)
             
         return text
 
     def _fmt_spring(self, spring) -> str:
-        latest = spring['latest_spring']
-        s_type = latest.get('spring_type', 2)
-        s_desc = latest.get('type_description', f"{s_type}号 Spring")
-        status_label = latest.get('lifecycle_status', 'active')
+        latest = self._latest(spring, 'latest_spring') or spring
+        s_type = self._get(latest, 'spring_type', 2)
+        s_desc = self._get(latest, 'type_description', f"{s_type}号 Spring")
+        status_label = self._get(latest, 'lifecycle_status', 'active')
         status_note = ""
         if status_label == 'failed': status_note = " (⚠️ 信号已证伪)"
         elif status_label == 'confirmed': status_note = " (🚀 强势确认)"
         
         return f"""
 [YES] 检测到Spring:
-   日期: {latest['date'].strftime('%Y-%m-%d') if hasattr(latest['date'], 'strftime') else latest['date']}
-   跌破价: {latest['breakdown_price']:.2f}
-   支撑位: {latest['support_level']:.2f}
-   收回价: {latest['recovery_price']:.2f}
+   日期: {self._date(self._get(latest, 'date', 'N/A'))}
+   跌破价: {self._num(self._get(latest, 'breakdown_price')):.2f}
+   支撑位: {self._num(self._get(latest, 'support_level')):.2f}
+   收回价: {self._num(self._get(latest, 'recovery_price')):.2f}
    状态: {status_label}{status_note}
    类型: {s_desc}
 """
 
     def _fmt_upthrust(self, upthrust) -> str:
-        latest = upthrust['latest_upthrust']
-        ut_type = latest.get('upthrust_type', 2)
-        ut_desc = latest.get('type_description', f"{ut_type}号 Upthrust")
+        latest = self._latest(upthrust, 'latest_upthrust') or upthrust
+        ut_type = self._get(latest, 'upthrust_type', 2)
+        ut_desc = self._get(latest, 'type_description', f"{ut_type}号 Upthrust")
         
         is_utad = 'UTAD' in str(ut_desc) or '派发后' in str(ut_desc)
         advice = "🔻 派发阶段终极做空信号 (UTAD)，建议逢高做空。" if is_utad else "中性。"
 
         return f"""
 [YES] 检测到Upthrust:
-   日期: {latest['date'].strftime('%Y-%m-%d') if hasattr(latest['date'], 'strftime') else latest['date']}
-   突破价: {latest['breakout_price']:.2f}
-   回落价: {latest['rejection_price']:.2f}
-   收盘距高点: {latest['close_from_high']*100:.1f}%
+   日期: {self._date(self._get(latest, 'date', 'N/A'))}
+   突破价: {self._num(self._get(latest, 'breakout_price')):.2f}
+   回落价: {self._num(self._get(latest, 'rejection_price')):.2f}
+   收盘距高点: {self._num(self._get(latest, 'close_from_high'))*100:.1f}%
    类型: {ut_desc}
    操作建议: {advice}
 """
 
     def _fmt_sos(self, sos) -> str:
-        if hasattr(sos, 'latest'):
-            latest = sos.latest
-        elif isinstance(sos, dict) and 'latest' in sos:
-            latest = sos['latest']
-        else:
-            latest = sos
-
-        if hasattr(latest, 'get'):
-            st = latest.get('type', 'sos')
-            date = latest.get('date', 'N/A')
-            price = latest.get('price', 0)
-            volume_ratio = latest.get('volume_ratio', 0)
-            price_change = latest.get('price_change', 0)
-        else:
-            st = getattr(latest, 'type', 'sos')
-            date = getattr(latest, 'date', 'N/A')
-            price = getattr(latest, 'price', 0)
-            volume_ratio = getattr(latest, 'volume_ratio', 0)
-            price_change = getattr(latest, 'price_change', 0)
+        latest = self._latest(sos) or sos
+        date = self._get(latest, 'date', 'N/A')
+        price = self._num(self._get(latest, 'price'))
+        volume_ratio = self._num(self._get(latest, 'volume_ratio'))
+        price_change = self._num(self._get(latest, 'price_change'))
 
         return f"""
 [YES] 检测到SOS（Sign of Strength）:
@@ -161,30 +177,29 @@ class PatternSection(BaseSectionBuilder):
 """
 
     def _fmt_sow(self, sow) -> str:
-        if isinstance(sow, dict):
-            signal_type = sow.get('signal_type', 'unknown')
-            interpretation = sow.get('interpretation', '')
-            date = sow.get('date', 'N/A')
-            price = sow.get('price', 0)
-            price_change = sow.get('price_change', 0)
+        latest = self._latest(sow) or sow
+        signal_type = self._get(latest, 'signal_type', self._get(sow, 'signal_type', 'unknown'))
+        interpretation = self._get(sow, 'interpretation', self._get(latest, 'interpretation', ''))
+        date = self._get(latest, 'date', 'N/A')
+        price = self._num(self._get(latest, 'price'))
+        price_change = self._num(self._get(latest, 'price_change'))
 
-            label = "SOW（Sign of Weakness）" if signal_type == 'true_sow' else "区间内弱势"
-            icon = "YES" if signal_type == 'true_sow' else "?"
+        label = "SOW（Sign of Weakness）" if signal_type == 'true_sow' else "区间内弱势"
+        icon = "YES" if signal_type == 'true_sow' else "?"
 
-            return f"""
+        return f"""
 [{icon}] 检测到{label}:
    日期: {date}
    价格: {price:.2f}
    跌幅: {price_change*100:.1f}%
    说明: {interpretation}
 """
-        return "[?] 检测到弱势信号（格式异常）"
 
     def _fmt_lps(self, lps) -> str:
-        latest = lps.get('latest', {}) if isinstance(lps, dict) else lps
-        price = latest.get('price', 0) if isinstance(latest, dict) else 0
-        signal_type = latest.get('signal_type', 'unknown') if isinstance(latest, dict) else 'unknown'
-        note = latest.get('note', '') if isinstance(latest, dict) else ''
+        latest = self._latest(lps) or lps
+        price = self._num(self._get(latest, 'price'))
+        signal_type = self._get(latest, 'signal_type', 'unknown')
+        note = self._get(latest, 'note', '')
 
         if signal_type == 'lps':
             return f"""
@@ -199,8 +214,9 @@ class PatternSection(BaseSectionBuilder):
 """
 
     def _fmt_lpsy(self, lpsy) -> str:
+        latest = self._latest(lpsy) or lpsy
         return f"""
 [!] 检测到LPSY（Last Point of Supply）:
-   价格: {lpsy.get('price', 0):.2f}
+   价格: {self._num(self._get(latest, 'price')):.2f}
    弱势反弹信号：价格已跌破支撑后的反弹回测
 """

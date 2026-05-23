@@ -349,12 +349,12 @@ class MengReversalDetector(BaseDetector):
         elif vol_ratio >= 1.2:
             score += 15
         
-        # 收盘位置评分（最优>80%）
-        if close_position >= 80:
+        # 收盘位置评分（0~1，最优>80%）
+        if close_position >= 0.80:
             score += 25
-        elif close_position >= 70:
+        elif close_position >= 0.70:
             score += 20
-        elif close_position >= 60:
+        elif close_position >= 0.60:
             score += 15
         
         # 收回速率评分 (P0 优化)
@@ -412,4 +412,3 @@ class MengReversalDetector(BaseDetector):
                 }
             
         return {"detected": False}
-
