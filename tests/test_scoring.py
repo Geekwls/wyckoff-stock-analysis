@@ -184,14 +184,25 @@ def test_signal_conflict_detection():
         'position': 0.5, 'volume_trend': 'neutral'
     }
     
-    # Mock _collect_all_events to return events with enough signals for quality score
-    generator.pattern_detector._collect_all_events = lambda: {
+    # Mock identify_phase with events_detected (报告唯一事实源)
+    generator.pattern_detector.identify_phase = lambda: {
+        'phase': 'Accumulation Phase D',
+        'confidence': 0.8,
         'events_detected': {
             'joc': {'detected': True, 'volume_ratio': 2.0, 'confidence': 0.9, 'date': datetime.now()},
-            'upthrust': {'detected': True, 'volume_ratio': 1.5, 'confidence': 0.8, 'date': datetime.now()}
+            'upthrust': {'detected': True, 'volume_ratio': 1.5, 'confidence': 0.8, 'date': datetime.now()},
+            'spring': {'detected': False},
+            'sos': {'detected': False},
+            'sow': {'detected': False},
+            'lps': {'detected': False},
+            'lpsy': {'detected': False},
+            'fti': {'detected': False},
+            'trading_range': {
+                'is_consolidation': True, 'low': 100, 'high': 110,
+                'range_pct': 0.1, 'position': 0.5, 'volume_trend': 'neutral',
+            },
         },
-        'phase': 'Accumulation Phase D',
-        'sequence_validation': {'score': {'rating': 'B'}}
+        'sequence_validation': {'score': {'rating': 'B'}},
     }
     
     # Mock cross-timeframe conflict to not gate signal conflict detection

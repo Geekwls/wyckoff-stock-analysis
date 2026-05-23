@@ -39,9 +39,10 @@ class RecommendationEngine:
 
     @staticmethod
     def _effective_phase_str(pattern_results: Any) -> str:
-        coord = RecommendationEngine._get_attr(pattern_results, 'coordinator_phase', None)
-        phase = RecommendationEngine._get_attr(pattern_results, 'phase', None)
-        return coord or phase or 'Unknown'
+        from .signal_extractor import SignalExtractor
+        return SignalExtractor.get_effective_phase(
+            pattern_results if isinstance(pattern_results, dict) else {}
+        )
 
     def _reset_patience_for_symbol(self, symbol: Optional[str]) -> None:
         if not symbol or symbol == self._patience_symbol:
@@ -460,7 +461,7 @@ class RecommendationEngine:
 
         # --- 冲突惩罚 (v2.1校准) ---
         if bullish_count > 0 and bearish_count > 0 and not skip_conflict_penalty:
-            phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
+            phase_str = self._effective_phase_str(pattern_results)
 
             # Phase E/Markup中SOW是正常回调，不应惩罚
             is_phase_e = ('Phase E' in phase_str or 'Markup' in phase_str or 'Markdown' in phase_str)
@@ -481,7 +482,7 @@ class RecommendationEngine:
                 reasons.append(f"检测到多空信号冲突 (惩罚 -{self.thresholds.CONFLICT_PENALTY}分)")
 
         # --- 市场环境加成 (v2.1校准：仅极端不匹配扣分) ---
-        phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
+        phase_str = self._effective_phase_str(pattern_results)
         current_side = PhaseAdapter.get_market_side(phase_str)
         is_market_strong_bullish = market_env == MarketEnvironment.STRONG_BULL
         is_market_strong_bearish = market_env == MarketEnvironment.STRONG_BEAR
@@ -526,7 +527,7 @@ class RecommendationEngine:
 
         if final_score < 10 and seq_rating in ['A', 'B'] and not has_primary_entry:
             missing_signals = []
-            phase_str = RecommendationEngine._get_attr(pattern_results, 'phase', None) or 'Unknown'
+            phase_str = self._effective_phase_str(pattern_results)
 
             if 'Accumulation' in phase_str or '吸筹' in phase_str:
                 if not self._get_attr(RecommendationEngine._get_attr(events, 'spring'), 'detected'):
@@ -828,6 +829,8 @@ class RecommendationEngine:
         pos_sizing = PositionSizingModel(
             conservative=cons, moderate=mod, aggressive=aggr
         )
+        if direction == "观望":
+            pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
 
         # UTAD ST 证伪/风控保护拦截
         is_utad_falsified = False
@@ -862,11 +865,8 @@ class RecommendationEngine:
             pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
 
         # ── 派发初期/中期做空逻辑拦截覆盖 (威科夫诊断与处方强制一致性) ──
-        is_dist = PhaseAdapter.is_distribution(phase_str)
-        is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
-                         any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
-        is_dist_early = is_dist and is_early_phase
-        if is_dist_early and not is_utad_falsified:
+        is_dist_early = PhaseAdapter.is_distribution_early(phase_str) and not is_utad_falsified
+        if is_dist_early:
             direction = "观望"
             zone = "空仓观望，等待派发结构进一步明朗"
             stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
@@ -963,10 +963,7 @@ class RecommendationEngine:
 
         is_dist_early = False
         if phase_str and not is_utad_falsified:
-            is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
-            is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
-                             any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
-            is_dist_early = is_dist and is_early_phase
+            is_dist_early = PhaseAdapter.is_distribution_early(phase_str)
         elif not is_utad_falsified:
             # 鲁棒的 Fallback：从 trading_plan (plan) 的 entry_zone 识别
             if entry_zone == "空仓观望，等待派发结构进一步明朗":

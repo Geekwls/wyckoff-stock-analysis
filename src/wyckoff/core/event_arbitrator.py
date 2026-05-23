@@ -72,6 +72,11 @@ class EventArbitrator:
                 arbitration_reason="无有效信号需要仲裁"
             )
 
+        # Phase 20：同向多头信号优先级（JOC 后 LPS 优于 Spring）
+        bullish_triage = self._triage_bullish_signals(all_signals, events)
+        if bullish_triage is not None:
+            return bullish_triage
+
         # 检测冲突信号
         conflicts = self._detect_conflicts(all_signals)
 
@@ -126,6 +131,11 @@ class EventArbitrator:
         if fti and self._is_signal_detected(fti):
             signals.extend(self._extract_fti_signals(fti))
 
+        # Phase 20: LPS 入场锚点
+        lps = events.get('lps')
+        if lps and self._is_signal_detected(lps):
+            signals.extend(self._extract_lps_signals(lps))
+
         # 按日期排序（最新的在前）
         signals.sort(key=lambda x: self._parse_date(x.date), reverse=True)
 
@@ -165,10 +175,26 @@ class EventArbitrator:
             signals.append(latest)
         return signals
 
-    def _extract_spring_signals(self, spring: SpringModel) -> List[ArbitrationSignal]:
+    def _extract_spring_signals(self, spring: Any) -> List[ArbitrationSignal]:
         """提取Spring信号（B13: 去重 latest_spring 与 signals）"""
         signals = []
         seen_dates = set()
+
+        if isinstance(spring, dict):
+            for sig in self._iter_signal_details(spring, latest_key='latest_spring'):
+                date_key = str(self._get_signal_field(sig, 'date'))
+                if date_key in seen_dates:
+                    continue
+                seen_dates.add(date_key)
+                signals.append(ArbitrationSignal(
+                    signal_type='spring',
+                    date=self._get_signal_field(sig, 'date'),
+                    direction='bullish',
+                    confidence=self._signal_confidence(sig, 0.7),
+                    strength=self._get_signal_field(sig, 'volume_ratio'),
+                    raw_data={'spring': self._dump_signal(sig)}
+                ))
+            return signals
 
         if hasattr(spring, 'signals') and spring.signals:
             for sig in spring.signals:
@@ -325,6 +351,59 @@ class EventArbitrator:
                 raw_data={'fti': self._dump_signal(sig)}
             ))
         return signals
+
+    def _extract_lps_signals(self, lps: Any) -> List[ArbitrationSignal]:
+        """提取 LPS 信号"""
+        signals = []
+        for sig in self._iter_signal_details(lps, latest_key='latest'):
+            signals.append(ArbitrationSignal(
+                signal_type='lps',
+                date=self._get_signal_field(sig, 'date'),
+                direction='bullish',
+                confidence=self._signal_confidence(sig, 0.72),
+                strength=self._get_signal_field(sig, 'volume_ratio'),
+                raw_data={'lps': self._dump_signal(sig)}
+            ))
+        return signals
+
+    def _triage_bullish_signals(
+        self,
+        all_signals: List[ArbitrationSignal],
+        events: Dict[str, Any],
+    ) -> Optional[ArbitrationResult]:
+        """
+        同向多头信号优先级：JOC 确认后 LPS 优于 Spring/SOS 作为入场锚。
+        """
+        spring = [s for s in all_signals if s.signal_type == 'spring']
+        lps = [s for s in all_signals if s.signal_type == 'lps']
+        joc = [s for s in all_signals if s.signal_type == 'joc']
+        if not (spring and lps):
+            return None
+        if joc and self._is_accumulation_context(events):
+            dominant = lps[0]
+            rejected = spring
+            return ArbitrationResult(
+                has_conflict=True,
+                conflicting_signals=[dominant] + rejected,
+                dominant_signal=dominant,
+                rejected_signals=rejected,
+                arbitration_reason="JOC 已确认，LPS 优于 Spring 作为入场锚点",
+                suggested_phase="Accumulation Phase D",
+                confidence_adjustment=0.9,
+            )
+        if not joc:
+            dominant = spring[0]
+            rejected = lps
+            return ArbitrationResult(
+                has_conflict=True,
+                conflicting_signals=[dominant] + rejected,
+                dominant_signal=dominant,
+                rejected_signals=rejected,
+                arbitration_reason="无 JOC 确认，Spring 结构优于 LPS 缩量回踩",
+                suggested_phase="Accumulation Phase C",
+                confidence_adjustment=0.9,
+            )
+        return None
 
     def _calculate_spring_confidence(self, spring_signal: Any) -> float:
         """计算Spring信号的置信度"""

@@ -84,7 +84,7 @@ def test_spring_type_1_and_st_confirmation():
     
     plan = engine.generate_trading_plan(rec_data, pattern_results, {})
     assert plan.direction == "观望"
-    assert plan.entry_zone == "等待低点高于 Spring 且缩量的二次测试确认"
+    assert plan.entry_zone == "Spring 震仓已现，等待 JOC 突破小溪或 LPS 缩量回测确认"
     assert plan.position_sizing.conservative == "0%"
 
 
@@ -567,6 +567,7 @@ def test_phase_b_quantitative_absorption_scoring():
             self.secondary_test = MockEvent(detected=True, date=dates[15])
             self.lps_list = [MockEvent(detected=True), MockEvent(detected=True)]
             self.ut_list = []
+            self.fti = MockEvent(detected=False)
 
     class MockEvent:
         def __init__(self, detected=False, **kwargs):
@@ -575,10 +576,10 @@ def test_phase_b_quantitative_absorption_scoring():
                 setattr(self, k, v)
 
     detector_a = PhaseIdentifier(data_a, config, thresholds)
-    desc, phase_enum, conf = detector_a._detect_phase_b_active(MockEvents())
+    desc, phase_enum, conf, phase_note = detector_a._detect_phase_b_active(MockEvents())
     
     assert phase_enum.value == "Phase B"
-    assert "经典威科夫吸筹特征确认" in desc
+    assert "经典威科夫吸筹特征确认" in (phase_note or desc)
     assert conf >= 0.80  # 基础 0.65 + 0.10 (测试数) + 0.15 奖励 => 0.90 
 
     # ────────────────────────────────────────────────────────
@@ -601,10 +602,10 @@ def test_phase_b_quantitative_absorption_scoring():
     
     data_b["ATR"] = 2.0
     detector_b = PhaseIdentifier(data_b, config, thresholds)
-    desc_b, phase_enum_b, conf_b = detector_b._detect_phase_b_active(MockEvents())
+    desc_b, phase_enum_b, conf_b, phase_note_b = detector_b._detect_phase_b_active(MockEvents())
     
     assert phase_enum_b.value == "Phase B"
-    assert "非吸收性无方向宽幅震荡整理" in desc_b
+    assert "非吸收性无方向宽幅震荡整理" in (phase_note_b or desc_b)
     assert conf_b == 0.50  # 被惩罚降级
 
 
@@ -629,6 +630,7 @@ def test_spring_sow_sequence_and_volume_coexistence():
             self.lps = lps or MockEvent(detected=False)
             self.lpsy = lpsy or MockEvent(detected=False)
             self.joc = joc or MockEvent(detected=False)
+            self.fti = MockEvent(detected=False)
 
     dates = pd.date_range("2026-01-01", periods=100)
     dummy_data = pd.DataFrame(index=dates)

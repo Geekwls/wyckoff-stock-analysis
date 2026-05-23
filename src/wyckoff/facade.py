@@ -27,6 +27,7 @@ from .core.law_analyzer import WyckoffLawAnalyzer
 from .core.multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from .core.relative_strength_analyzer import RelativeStrengthAnalyzer
 from .core.report_generator import WyckoffReportGenerator
+from .core.signal_extractor import SignalExtractor, get_events_from_phase
 from .core.point_and_figure import PointAndFigureCalculator, calculate_cause_effect_from_pnf
 from .core.sos_sow_analyzer import SOSSOWAnalyzer
 from .core.market_context_analyzer import MarketContextAnalyzer
@@ -373,7 +374,7 @@ class WyckoffAnalyzer:
 
         try:
             phase_res = self.identify_phase()
-            phase_str   = phase_res.get('phase', 'Unknown')
+            phase_str = SignalExtractor.get_effective_phase(phase_res)
             confidence  = phase_res.get('confidence', 0.0)
 
             # 序列评分
@@ -383,7 +384,6 @@ class WyckoffAnalyzer:
             # 关键事件摘要（轻量版）— 与主链 events_detected 同源
             events_summary = {}
             try:
-                from .core.signal_extractor import SignalExtractor, get_events_from_phase
                 events = get_events_from_phase(phase_res)
                 tr = SignalExtractor.get_event_dict(events, 'trading_range')
                 events_summary['trading_range'] = {
@@ -484,7 +484,6 @@ class WyckoffAnalyzer:
             if self.data is None or self.data.empty or self.pattern_detector is None:
                 return _json.dumps({'error': 'No data or detector available', 'symbol': self.symbol})
             from .core.trading_plan_generator import TradingPlanGenerator
-            from .core.signal_extractor import SignalExtractor, get_events_from_phase
             
             current_price = float(self.data['Close'].iloc[-1])
             atr = float(self.data['ATR'].iloc[-1]) if 'ATR' in self.data.columns else \
@@ -492,7 +491,7 @@ class WyckoffAnalyzer:
 
             # 1. 主链事件（TR / SOS 与 identify_phase 同源）
             phase_res = self.identify_phase()
-            phase_str = phase_res.get('phase', 'Unknown')
+            phase_str = SignalExtractor.get_effective_phase(phase_res)
             events = get_events_from_phase(phase_res)
             tr = SignalExtractor.get_event_dict(events, 'trading_range')
             tr_high = tr.get('high', current_price * 1.1)
@@ -602,7 +601,6 @@ class WyckoffAnalyzer:
             
         try:
             import json as _json
-            from .core.signal_extractor import SignalExtractor, get_events_from_phase
 
             phase_res = self.identify_phase()
             events = get_events_from_phase(phase_res)

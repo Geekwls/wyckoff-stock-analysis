@@ -399,7 +399,7 @@ class EffortResultMixin:
             if self.pattern_detector:
                 phase_result = get_cached_phase_result(self.pattern_detector)
                 if isinstance(phase_result, dict):
-                    return phase_result.get('phase', 'Unknown')
+                    return SignalExtractor.get_effective_phase(phase_result)
                 return str(phase_result) if phase_result else 'Unknown'
         except Exception:
             pass

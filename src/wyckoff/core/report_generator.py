@@ -178,12 +178,13 @@ class WyckoffReportGenerator:
         patterns_payload = SignalExtractor.build_patterns_payload(ctx)
         quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns_payload, market_env)
 
+        effective_phase = SignalExtractor.get_effective_phase(phase_result)
         mtf = self._build_mtf_analysis(ctx)
-        conflict = self._analyze_conflict(phase_result.get('phase'), mtf)
+        conflict = self._analyze_conflict(effective_phase, mtf)
 
         report = self.header_builder.build(phase_result, trading_range)
         report += self.evidence_builder.build(phase_result)
-        report += self.pattern_builder.build(trading_range, spring, upthrust, sos, sow, lps, lpsy, phase_result.get('phase'), ps=ps, psy=psy)
+        report += self.pattern_builder.build(trading_range, spring, upthrust, sos, sow, lps, lpsy, effective_phase, ps=ps, psy=psy)
         report += self.signal_builder.build(joc, fti, vsa, boring_res, dead_corner)
 
         report += self.conclusion_builder.build(
@@ -239,15 +240,20 @@ class WyckoffReportGenerator:
         patterns_payload = SignalExtractor.build_patterns_payload(ctx)
         quality_data = self.rec_engine.calculate_signal_quality(self.data, patterns_payload, market_env)
 
+        effective_phase = SignalExtractor.get_effective_phase(phase_result)
         mtf = self._build_mtf_analysis(ctx)
-        conflict = self._analyze_conflict(phase_result.get('phase'), mtf)
+        conflict = self._analyze_conflict(effective_phase, mtf)
 
         # 构建JSON结果
         result = {
             'symbol': self.symbol,
             'timestamp': datetime.now().isoformat(),
             'summary': {
-                'phase': phase_result.get('phase', 'unknown'),
+                'phase': effective_phase,
+                'effective_phase': effective_phase,
+                'identifier_phase': phase_result.get('identifier_phase'),
+                'coordinator_phase': phase_result.get('coordinator_phase'),
+                'phase_source': phase_result.get('phase_source'),
                 'confidence': phase_result.get('confidence', 0),
                 'current_price': float(self.data['Close'].iloc[-1]) if self.data is not None else None,
                 '52w_high': float(self.data['High'].tail(252).max()) if len(self.data) >= 252 else None,
@@ -384,7 +390,7 @@ class WyckoffReportGenerator:
         phase_str = ""
         if self.pattern_detector:
             try:
-                phase_str = self.pattern_detector.identify_phase().get('phase', '')
+                phase_str = SignalExtractor.get_effective_phase(self.pattern_detector.identify_phase())
             except Exception:
                 pass
         return self.rec_engine.generate_risk_advice(signal_quality, trading_plan, data=data, phase_str=phase_str)

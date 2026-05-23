@@ -292,22 +292,28 @@ class PhaseIdentifier(BaseDetector):
         if phase_c_plus:
             return self._phase_tuple(phase_c_plus)
 
+        is_spring = flags['is_spring']
+        is_upthrust = flags['is_upthrust']
+        phase_a_complete = self._check_phase_a_completeness(events)
+
+        # Phase 19：Spring/Upthrust → Phase C 须在 Phase B 主动检测之前
+        if is_spring:
+            if phase_a_complete:
+                return self._phase_tuple(('Accumulation Phase C (积累期震仓)', WyckoffPhase.PHASE_C, 0.70))
+            return self._phase_tuple(('Spring待Phase A确认 (结构不完整)', WyckoffPhase.UNKNOWN, 0.45))
+        if is_upthrust:
+            if phase_a_complete:
+                return self._phase_tuple(('Distribution Phase C (派发期诱多)', WyckoffPhase.PHASE_C, 0.70))
+            return self._phase_tuple(('Upthrust待Phase A确认 (结构不完整)', WyckoffPhase.UNKNOWN, 0.45))
+
         #  Phase B 主动检测逻辑（须在 JOC/FTI 之后，避免覆盖 Phase D）
         phase_b_result = self._detect_phase_b_active(events)
         if phase_b_result:
             return self._phase_tuple(phase_b_result)
 
-        is_spring = flags['is_spring']
-        is_upthrust = flags['is_upthrust']
-
         climax = getattr(events, 'climax', None)
         ar = getattr(events, 'automatic_reaction', None)
         st = getattr(events, 'secondary_test', None)
-
-        if is_spring:
-            return self._phase_tuple(('Accumulation Phase C (积累期震仓)', WyckoffPhase.PHASE_C, 0.70))
-        if is_upthrust:
-            return self._phase_tuple(('Distribution Phase C (派发期诱多)', WyckoffPhase.PHASE_C, 0.70))
 
         if climax and climax.detected and ar and ar.detected:
             has_st = st and st.detected
@@ -319,7 +325,7 @@ class PhaseIdentifier(BaseDetector):
                 return self._phase_tuple(('Distribution Phase A (买入高潮停止)', WyckoffPhase.PHASE_A, 0.75))
             return self._phase_tuple(('Distribution Phase A (BC+AR待ST确认)', WyckoffPhase.PHASE_A, 0.55))
 
-        if climax and climax.detected and st and st.detected:
+        if climax and climax.detected and ar and ar.detected and st and st.detected:
             if climax.type == 'selling_climax':
                 return self._phase_tuple(('Accumulation Phase B (积累期测试)', WyckoffPhase.PHASE_B, 0.60))
             return self._phase_tuple(('Distribution Phase B (派发期测试)', WyckoffPhase.PHASE_B, 0.60))
@@ -393,7 +399,7 @@ class PhaseIdentifier(BaseDetector):
             if getattr(joc, 'test_detected', False) and getattr(joc, 'test_score', 0) >= 60:
                 conf = 0.90
             return self._maybe_upgrade_to_phase_e(
-                'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, conf
+                'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, conf, events=events
             )
 
         if flags.get('is_fti'):
@@ -402,18 +408,31 @@ class PhaseIdentifier(BaseDetector):
             if getattr(fti, 'test_detected', False):
                 conf = 0.90
             return self._maybe_upgrade_to_phase_e(
-                'Distribution Phase D (派发期跌破)', WyckoffPhase.PHASE_D, conf
+                'Distribution Phase D (派发期跌破)', WyckoffPhase.PHASE_D, conf, events=events
             )
 
         return None
 
     def _maybe_upgrade_to_phase_e(
-        self, phase_d_label: str, phase_enum: WyckoffPhase, confidence: float
+        self,
+        phase_d_label: str,
+        phase_enum: WyckoffPhase,
+        confidence: float,
+        events: Optional[Dict] = None,
     ) -> Tuple[str, WyckoffPhase, float]:
-        """Phase 11: JOC/FTI Phase D 在连续同向确认后升级 Phase E。"""
+        """Phase 11/19: JOC/FTI Phase D 在连续同向确认 + LPS/LPSY 推进后升级 Phase E。"""
         from ..utils import continuous_price_confirmation
         if self.data is None:
             return phase_d_label, phase_enum, confidence
+        if events is not None:
+            lps = getattr(events, 'lps', None)
+            lpsy = getattr(events, 'lpsy', None)
+            has_lps = bool(lps and getattr(lps, 'detected', False))
+            has_lpsy = bool(lpsy and getattr(lpsy, 'detected', False))
+            if 'Accumulation' in phase_d_label and not has_lps:
+                return phase_d_label, phase_enum, confidence
+            if 'Distribution' in phase_d_label and not has_lpsy:
+                return phase_d_label, phase_enum, confidence
         if not continuous_price_confirmation(self.data, 3, phase_d_label, require_volume=True):
             return phase_d_label, phase_enum, confidence
         if 'Accumulation' in phase_d_label:
@@ -428,10 +447,11 @@ class PhaseIdentifier(BaseDetector):
         """Spring+SOS / Upthrust+SOW / 孤立 SOW(SOS) 决断性组合，突破确认前最高 Phase C+。"""
         climax = getattr(events, 'climax', None)
         climax_type = getattr(climax, 'type', None) if climax and getattr(climax, 'detected', False) else None
+        phase_a_complete = self._check_phase_a_completeness(events)
 
-        if flags.get('is_spring') and flags.get('is_sos'):
+        if flags.get('is_spring') and flags.get('is_sos') and phase_a_complete:
             return 'Accumulation Phase C+ (SOS出现待JOC确认)', WyckoffPhase.PHASE_C, 0.75
-        if flags.get('is_upthrust') and flags.get('is_sow'):
+        if flags.get('is_upthrust') and flags.get('is_sow') and phase_a_complete:
             return 'Distribution Phase C+ (SOW出现待FTI确认)', WyckoffPhase.PHASE_C, 0.75
 
         # Phase 14: 孤立 SOW/SOS 对称升级 C+（须匹配派发/吸筹 climax 语境）
@@ -912,7 +932,7 @@ class PhaseIdentifier(BaseDetector):
         else:
             return df['Volume'].mean()
 
-    def _fallback_logic(self, events: Dict = None) -> Tuple[str, WyckoffPhase, float]:
+    def _fallback_logic(self, events: Dict = None) -> Tuple[str, WyckoffPhase, float, Optional[str]]:
         """基于均线排布的降级判定逻辑"""
         current = self.data['Close'].iloc[-1]
         
@@ -938,14 +958,23 @@ class PhaseIdentifier(BaseDetector):
                           else (tr.get('absorption_detected', False) if isinstance(tr, dict) else False))
             if absorption:
                 if current > ma200:
-                    return "Reaccumulation Phase C/D (再积累确认，供应已被吸收)", WyckoffPhase.PHASE_D, 0.75
+                    flags = self._extract_phase_signal_flags(events)
+                    if flags.get('is_joc'):
+                        return self._phase_tuple((
+                            "Reaccumulation Phase C/D (再积累确认，供应已被吸收)",
+                            WyckoffPhase.PHASE_D, 0.75,
+                        ))
+                    return self._phase_tuple((
+                        "Reaccumulation Phase C+ (吸收特征待JOC确认)",
+                        WyckoffPhase.PHASE_C, 0.65,
+                    ))
         
-        if current > ma20 > ma50 > ma200: 
-            return "Markup Phase E (强势上涨)", WyckoffPhase.PHASE_E, 0.6
-        if current < ma20 < ma50 < ma200: 
-            return "Markdown Phase E (强势下跌)", WyckoffPhase.PHASE_E, 0.6
+        if current > ma20 > ma50 > ma200:
+            return self._phase_tuple(("Markup Phase E (强势上涨)", WyckoffPhase.PHASE_E, 0.6))
+        if current < ma20 < ma50 < ma200:
+            return self._phase_tuple(("Markdown Phase E (强势下跌)", WyckoffPhase.PHASE_E, 0.6))
             
-        return "Trending (趋势中)", WyckoffPhase.UNKNOWN, 0.4
+        return self._phase_tuple(("Trending (趋势中)", WyckoffPhase.UNKNOWN, 0.4))
 
     def _check_ma_confirmation(self, phase: Union[str, WyckoffPhase]) -> float:
         """检查均线确认"""

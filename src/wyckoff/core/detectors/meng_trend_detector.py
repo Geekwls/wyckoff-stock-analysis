@@ -497,7 +497,11 @@ class MengTrendDetector(BaseDetector):
         if not base.get("detected"):
             return base
         strength = self._classify_breakout_strength(base)
-        base.update({"breakout_strength": strength, "trading_advice": self._generate_breakout_trading_advice(base, strength)})
+        joc_confirmed = bool(getattr(self, '_joc_confirmed', False))
+        base.update({
+            "breakout_strength": strength,
+            "trading_advice": self._generate_breakout_trading_advice(base, strength, joc_confirmed),
+        })
         return base
 
     def _classify_breakout_strength(self, res: Dict) -> str:
@@ -510,8 +514,15 @@ class MengTrendDetector(BaseDetector):
             return "MODERATE"
         return "WEAK"
 
-    def _generate_breakout_trading_advice(self, res: Dict, strength: str) -> Dict:
+    def _generate_breakout_trading_advice(self, res: Dict, strength: str, joc_confirmed: bool = False) -> Dict:
         bp = res.get("breakout_price", 0)
+        if not joc_confirmed and strength in ("SUPER_STRONG", "STRONG"):
+            return {
+                "action": "WATCH",
+                "entry": "死角突破待 JOC 小溪确认（孟氏 checklist）",
+                "sl": round(bp * 0.98, 2) if bp else None,
+                "target": f"{round(bp*1.1, 2)}/{round(bp*1.2, 2)}" if bp else None,
+            }
         if strength == "SUPER_STRONG":
             return {"action": "STRONG_BUY", "entry": "激进追涨", "sl": round(bp * 0.98, 2), "target": f"{round(bp*1.1, 2)}/{round(bp*1.2, 2)}"}
         if strength == "STRONG":

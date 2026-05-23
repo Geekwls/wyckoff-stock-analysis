@@ -4,7 +4,7 @@
 <div align="center">
 
 ![Version](https://img.shields.io/badge/Version-v3.1.0--Meng--Refined-blueviolet?style=for-the-badge)
-![Tests](https://img.shields.io/badge/Tests-142%20Passed-success?style=for-the-badge&logo=pytest&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-288%20Passed-success?style=for-the-badge&logo=pytest&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11-blue?style=for-the-badge&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Agent-Ready](https://img.shields.io/badge/Agent--Ready-Claude%20%7C%20Cursor-orange?style=for-the-badge)
@@ -157,7 +157,7 @@ wyckoff-stock-analysis/
 ├── apps/                    # 🚀 [应用层]
 │   ├── cli/                 # 命令行终端分析应用
 │   └── mcp/                 # 原生 MCP (Model Context Protocol) 协议服务器
-├── tests/                   # 🧪 [质量保证] 142 个专业级单元测试用例 (100% 通过)
+├── tests/                   # 🧪 [质量保证] 288+ pytest / 144 phase 语义测试 (CI)
 └── references/              # 📚 [理论底座] 孟洪涛《新威科夫操盘法》及相关文献
 ```
 

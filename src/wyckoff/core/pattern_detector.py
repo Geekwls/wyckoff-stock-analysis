@@ -367,6 +367,7 @@ class WyckoffPatternDetector:
             phase_result['phase_revisions'] = list(revision_log)
 
         if not coord_final or coord_final == phase_result.get('phase'):
+            phase_result['effective_phase'] = phase_result.get('phase', 'Unknown')
             return phase_result
 
         override_markers = ('[事件仲裁]', '[时序修正]', '[突破反噬]', '[Phase Transition]', '[前序趋势否决]', '[Phase11]')
@@ -374,9 +375,10 @@ class WyckoffPatternDetector:
             any(marker in log for marker in override_markers)
             for log in revision_log
         )
-        should_override = has_marker_override or coord_final != phase_result.get('phase')
+        should_override = has_marker_override
 
         if not should_override:
+            phase_result['effective_phase'] = phase_result.get('phase', 'Unknown')
             return phase_result
 
         from .enums import WyckoffPhase
@@ -401,6 +403,7 @@ class WyckoffPatternDetector:
             phase_result['phase_enum'] = WyckoffPhase.PHASE_A
         elif 'Markdown' in coord_final or 'Trending Down' in coord_final:
             phase_result['phase_enum'] = WyckoffPhase.UNKNOWN
+        phase_result['effective_phase'] = coord_final
         return phase_result
 
     # --- 私有辅助方法 ---
@@ -539,8 +542,8 @@ class WyckoffPatternDetector:
         return self.meng_enhancer.detect_rvs(market_df, industry_dfs)
 
     def detect_choch(self) -> Dict:
-        """检测特征变异 (CHoCH)"""
-        return self.meng_enhancer.reversal.detect_choch()
+        """检测特征变异 (CHoCH) — 主链使用 StrengthWeakness Weis Wave 实现。"""
+        return self.sw_detector.detect_choch()
 
     def _handle_detection_error(self, pattern_type: str, exc: Exception) -> Dict:
         """

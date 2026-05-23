@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 9–18 真实股票数据验证脚本"""
+"""Phase 9–23 真实股票数据验证脚本"""
 import argparse
 import json
 import os
@@ -67,6 +67,7 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
         "error": None,
         "bars": 0,
         "phase": None,
+        "effective_phase": None,
         "confidence": None,
         "coordinator_phase": None,
         "identifier_phase": None,
@@ -95,7 +96,8 @@ def analyze_one(symbol: str, market: str, period: str = "1y") -> dict:
             phase_res = az.pattern_detector.identify_phase()
             events = phase_res.get("events_detected")
 
-            row["phase"] = phase_res.get("phase")
+            row["phase"] = SignalExtractor.get_effective_phase(phase_res)
+            row["effective_phase"] = row["phase"]
             row["confidence"] = phase_res.get("confidence")
             row["identifier_phase"] = phase_res.get("identifier_phase")
             row["phase_description"] = phase_res.get("phase_description")
@@ -182,7 +184,7 @@ def main():
         selected = [s for s in SYMBOLS if s[0] in sym_set]
 
     print("=" * 72)
-    print("威科夫真实股票验证 (Phase 9–18)")
+    print("威科夫真实股票验证 (Phase 9–23)")
     print("=" * 72)
 
     results = []

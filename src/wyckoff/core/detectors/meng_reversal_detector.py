@@ -18,22 +18,18 @@ class MengReversalDetector(BaseDetector):
         self.thresholds = thresholds
 
     def _build_support_level_series(self, df) -> np.ndarray:
-        """Spring 支撑：优先 SC/TR 结构下沿，rolling 20d low 作 fallback。"""
-        rolling = df['Low'].rolling(window=20).min().shift(1).values
+        """Spring 支撑：SC/TR 结构下沿；无结构时用 rolling 20d low fallback。"""
         structural = self._resolve_structural_support()
-        if structural is None:
-            return np.asarray(rolling, dtype=float)
-        base = np.full(len(df), structural, dtype=float)
-        return np.where(np.isnan(rolling), base, np.maximum(rolling, structural))
+        if structural is not None:
+            return np.full(len(df), structural, dtype=float)
+        return df['Low'].rolling(window=20).min().shift(1).values
 
     def _build_resistance_level_series(self, df) -> np.ndarray:
-        """Upthrust 阻力：优先 BC/TR 结构上沿。"""
-        rolling = df['High'].rolling(window=20).max().shift(1).values
+        """Upthrust 阻力：BC/TR 结构上沿；无结构时用 rolling 20d high fallback。"""
         structural = self._resolve_structural_resistance()
-        if structural is None:
-            return np.asarray(rolling, dtype=float)
-        base = np.full(len(df), structural, dtype=float)
-        return np.where(np.isnan(rolling), base, np.minimum(rolling, structural))
+        if structural is not None:
+            return np.full(len(df), structural, dtype=float)
+        return df['High'].rolling(window=20).max().shift(1).values
 
     def detect_spring_enhanced(self) -> Dict:
         """孟洪涛增强版 Spring 检测"""
@@ -202,6 +198,8 @@ class MengReversalDetector(BaseDetector):
             "is_high_speed_recovery": bool(is_high_speed),
             "spring_type": s_type,
             "type_description": s_note,
+            "needs_secondary_test": s_type == 1,
+            "st_confirmed": False,
             "recovery_high": float(recovery_high),
             "confidence": confidence
         }
@@ -481,45 +479,6 @@ class MengReversalDetector(BaseDetector):
         return max(0, min(100, score))
 
     def detect_choch(self) -> Dict:
-        """
-        检测特征变异 (Change of Character, CHoCH)
-        理论依据：趋势中第一个显著的反向波段，量能和价差均超过前期水平。
-        """
-        if self.data is None or len(self.data) < 30:
-            return {"detected": False}
-            
-        # 简化逻辑：最近 5 天的波动率 vs 20 天波动率
-        df = cast(Any, self.data).tail(30).copy()
-        recent = df.tail(5)
-        
-        # 计算最高价差
-        recent_range = (recent['High'] - recent['Low']).max()
-        avg_range = (df['High'] - df['Low']).mean()
-        
-        # 计算最高成交量
-        recent_vol = recent['Volume'].max()
-        avg_vol = df['Volume'].mean()
-        
-        # 必须是反向动作（例如在下跌趋势中出现大阳线，或上涨趋势中出现大阴线）
-        # 这里简单通过价格相对于均线的位置判断
-        ma20 = df['Close'].rolling(20).mean().iloc[-1]
-        current_price = df['Close'].iloc[-1]
-        
-        # 如果最近出现了超大波幅且超量
-        if recent_range > avg_range * 1.8 and recent_vol > avg_vol * 1.5:
-            # 进一步判断性质
-            is_bullish_choch = (recent['Close'] > recent['Open']).sum() >= 3 and current_price > ma20
-            is_bearish_choch = (recent['Close'] < recent['Open']).sum() >= 3 and current_price < ma20
-            
-            if is_bullish_choch or is_bearish_choch:
-                return {
-                    "detected": True,
-                    "date": pd.to_datetime(recent.index[-1]).strftime('%Y-%m-%d'),
-                    "type": "CHoCH",
-                    "direction": "bullish" if is_bullish_choch else "bearish",
-                    "intensity": round(float(recent_range / avg_range), 2),
-                    "vol_intensity": round(float(recent_vol / avg_vol), 2),
-                    "interpretation": "特征变异：波幅与量能显著放大，提示原趋势动力衰竭，进入盘整或反转期"
-                }
-            
-        return {"detected": False}
+        """特征变异 (CHoCH) — 委托 Weis Wave 统一实现（Phase 21）。"""
+        from ..utils import detect_choch_weis
+        return detect_choch_weis(self.data)

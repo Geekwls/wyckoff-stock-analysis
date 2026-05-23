@@ -1114,7 +1114,7 @@ class StrengthWeaknessDetector(BaseDetector):
                     signal['signal_type'] = 'lpsy'
                     signals.append(signal)
 
-        result: Dict[str, Any] = {'detected': bool(signals or weak_reactions)}
+        result: Dict[str, Any] = {'detected': bool(signals)}
         if signals:
             result['signals'] = signals
             result['latest'] = signals[-1]
@@ -1130,55 +1130,9 @@ class StrengthWeaknessDetector(BaseDetector):
         return result
 
     def detect_choch(self) -> Dict:
-        """
-        特征变异 (Change of Character, CHoCH) 检测
-
-        理论依据：趋势中出现的第一个显著的反向波段，其强度远超前序波段，标志着供求秩序的改变。
-
-        Returns:
-            {
-                'detected': bool,
-                'direction': 'up' | 'down',
-                'thrust_ratio': float,
-                'volume_ratio': float,
-                'description': str
-            }
-        """
-        from ..weis_wave import WeisWaveGenerator
-        if self.data is None or len(self.data) < 40:
-            return {'detected': False}
-
-        generator = WeisWaveGenerator(self.data)
-        waves = generator.generate()
-        if len(waves) < 4:
-            return {'detected': False}
-
-        last_wave = waves[-1]
-        # 找到前序同方向的波段进行对比
-        prev_same_dir = [w for w in waves[:-1] if w.direction == last_wave.direction]
-        if len(prev_same_dir) < 2:
-            return {'detected': False}
-
-        avg_thrust = np.mean([w.thrust for w in prev_same_dir[-3:]])
-        avg_vol = np.mean([w.volume for w in prev_same_dir[-3:]])
-
-        # CHoCH 判定标准：推力或成交量显著超过均值（1.5倍以上）
-        thrust_ratio = last_wave.thrust / avg_thrust if avg_thrust > 0 else 1.0
-        volume_ratio = last_wave.volume / avg_vol if avg_vol > 0 else 1.0
-
-        is_choch = (thrust_ratio > 1.8) or (volume_ratio > 2.0 and thrust_ratio > 1.2)
-
-        if is_choch:
-            dir_str = "上涨" if last_wave.direction == 'up' else "下跌"
-            return {
-                'detected': True,
-                'direction': last_wave.direction,
-                'thrust_ratio': round(thrust_ratio, 2),
-                'volume_ratio': round(volume_ratio, 2),
-                'date': last_wave.end_idx,
-                'description': f"检测到{dir_str}特征变异(CHoCH)! 波段推力是前序均值的{thrust_ratio:.1f}倍，标志着供求关系发生根本性变化。"
-            }
-        return {'detected': False}
+        """特征变异 (CHoCH) — 委托 Weis Wave 统一实现。"""
+        from ..utils import detect_choch_weis
+        return detect_choch_weis(self.data)
 
     def detect_sos_variants(self) -> Dict:
         return self._detect_variants(is_bullish=True)

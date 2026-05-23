@@ -141,8 +141,9 @@ class TestDetectJOC:
         det = _make_detector(df)
         result = det.detect_joc()
         assert result.get("detected") is True, f"Valid JOC breakout should be detected: {result}"
-        assert result.get("volume_ratio", 0) >= 1.5
-        assert result.get("breakout_pct", 0) >= 3.0
+        latest = result.get("latest") or result
+        assert latest.get("volume_ratio", 0) >= 1.5
+        assert latest.get("breakout_pct", 0) >= 3.0
 
     def test_joc_not_detected_without_volume(self):
         """量能不足时不应触发 JOC"""
@@ -169,7 +170,8 @@ class TestDetectJOC:
         det = _make_detector(df)
         result = det.detect_joc()
         assert result.get("detected") is True, f"JOC breakout should be detected before retest validation: {result}"
-        assert result.get("test_detected") is True, f"JOC creek retest should be detected: {result}"
+        latest = result.get("latest") or result
+        assert latest.get("test_detected") is True, f"JOC creek retest should be detected: {result}"
 
     def test_joc_confidence_increases_with_retest(self):
         """有回测确认的 JOC 置信度应高于无回测"""
@@ -191,8 +193,10 @@ class TestDetectJOC:
         r2 = _make_detector(df_with_test).detect_joc()
 
         if r1.get("detected") and r2.get("detected"):
-            assert r2["confidence"] > r1["confidence"], \
-                f"Confirmed JOC ({r2['confidence']}) should have higher confidence than unconfirmed ({r1['confidence']})"
+            c1 = (r1.get("latest") or r1).get("confidence", r1.get("confidence", 0))
+            c2 = (r2.get("latest") or r2).get("confidence", r2.get("confidence", 0))
+            assert c2 > c1, \
+                f"Confirmed JOC ({c2}) should have higher confidence than unconfirmed ({c1})"
 
     def test_joc_returns_dict_with_required_keys(self):
         """返回字典必须包含所有文档声明的键"""

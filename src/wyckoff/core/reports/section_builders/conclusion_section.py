@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any
 from .base_builder import BaseSectionBuilder
+from ...signal_extractor import SignalExtractor
 from ...sos_sow_analyzer import SOSSOWAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ class ConclusionSection(BaseSectionBuilder):
               breakout_analysis: dict = None, sos_sow_analysis: dict = None,
               wie3_market_state = None) -> str:
 
-        phase_str = phase_result.get('phase', 'Unknown')
+        phase_str = SignalExtractor.get_effective_phase(phase_result)
         phase_conf = phase_result.get('confidence', 0.0)
         self._phase_result = phase_result
         current_price = self.data['Close'].iloc[-1]

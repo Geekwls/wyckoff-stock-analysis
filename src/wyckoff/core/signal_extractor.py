@@ -296,6 +296,20 @@ class SignalExtractor:
         return sum(1 for v in signals.values() if v)
 
     @staticmethod
+    def get_effective_phase(phase_result: Any) -> str:
+        """
+        用户可见权威阶段（Phase 21）。
+        优先 effective_phase → 已合并 phase → coordinator_phase。
+        """
+        if not isinstance(phase_result, dict):
+            return str(phase_result) if phase_result else 'Unknown'
+        for key in ('effective_phase', 'phase', 'coordinator_phase'):
+            val = phase_result.get(key)
+            if val:
+                return str(val)
+        return 'Unknown'
+
+    @staticmethod
     def get_phase_string(phase_result: Dict[str, Any]) -> str:
         """
         从阶段识别结果中获取阶段字符串
@@ -306,7 +320,7 @@ class SignalExtractor:
         Returns:
             阶段字符串
         """
-        return phase_result.get('phase', 'Unknown') if isinstance(phase_result, dict) else str(phase_result)
+        return SignalExtractor.get_effective_phase(phase_result)
 
     @staticmethod
     def is_accumulation_phase(phase_str: str) -> bool:
@@ -407,10 +421,7 @@ class SignalExtractor:
         返回 True 表示已执行 suppression。
         """
         phase_result = phase_result or ctx.get('phase_result') or {}
-        phase_str = (
-            phase_result.get('coordinator_phase')
-            or phase_result.get('phase', '')
-        )
+        phase_str = cls.get_effective_phase(phase_result)
         from .utils import PhaseAdapter
         is_distribution = PhaseAdapter.is_distribution(phase_str)
         ctx['should_suppress_bullish'] = is_distribution
@@ -454,6 +465,8 @@ class SignalExtractor:
 
         result: Dict[str, Any] = dict(phase_result)
         result.update(payload)
+        result['phase'] = cls.get_effective_phase(result)
+        result['effective_phase'] = result['phase']
         result['should_suppress_bullish'] = ctx.get('should_suppress_bullish', False)
         for key in (
             'joc', 'fti', 'spring', 'upthrust', 'sos', 'sow', 'lps', 'lpsy', 'trading_range',
@@ -530,9 +543,14 @@ class SignalExtractor:
             if isinstance(val, dict):
                 events_dict[events_key] = val
 
+        eff_phase = cls.get_effective_phase(phase_result) if isinstance(phase_result, dict) else 'Unknown'
         payload: Dict[str, Any] = {
             'events_detected': events_dict,
-            'phase': phase_result.get('phase'),
+            'phase': eff_phase,
+            'effective_phase': eff_phase,
+            'identifier_phase': phase_result.get('identifier_phase') if isinstance(phase_result, dict) else None,
+            'coordinator_phase': phase_result.get('coordinator_phase') if isinstance(phase_result, dict) else None,
+            'phase_source': phase_result.get('phase_source') if isinstance(phase_result, dict) else None,
             'sequence_validation': phase_result.get('sequence_validation'),
             'boring_zone': ctx.get('boring_res'),
             'dead_corner_breakout': ctx.get('dead_corner'),
@@ -584,6 +602,13 @@ class SignalExtractor:
                             fti_ev = pattern_results.get('fti') or {}
                             sow_ev = pattern_results.get('sow') or sow_ev
                         if not cls._detected(fti_ev) and not cls._detected(sow_ev):
+                            continue
+                if key == 'lpsy':
+                    fti_ev = cls.get_event_dict(events, 'fti') if events else {}
+                    if not cls._detected(fti_ev):
+                        if isinstance(pattern_results, dict):
+                            fti_ev = pattern_results.get('fti') or {}
+                        if not cls._detected(fti_ev):
                             continue
                 return key, 'short'
 

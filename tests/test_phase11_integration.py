@@ -80,12 +80,38 @@ class TestPhaseEUpgrade(unittest.TestCase):
         idx = pd.date_range('2024-01-01', periods=5, freq='D')
         df = pd.DataFrame({'Close': [100, 101, 102, 103, 104]}, index=idx)
         ident = PhaseIdentifier(df, WyckoffConfig(), WyckoffThresholds())
+
+        class _Lps:
+            detected = True
+
+        class _Events:
+            lps = _Lps()
+            lpsy = None
+
         label, enum, conf = ident._maybe_upgrade_to_phase_e(
-            'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, 0.85
+            'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, 0.85, events=_Events()
         )
         self.assertIn('Phase E', label)
         self.assertEqual(enum, WyckoffPhase.PHASE_E)
         self.assertGreaterEqual(conf, 0.90)
+
+    def test_joc_phase_d_stays_without_lps(self):
+        idx = pd.date_range('2024-01-01', periods=5, freq='D')
+        df = pd.DataFrame({'Close': [100, 101, 102, 103, 104]}, index=idx)
+        ident = PhaseIdentifier(df, WyckoffConfig(), WyckoffThresholds())
+
+        class _Lps:
+            detected = False
+
+        class _Events:
+            lps = _Lps()
+            lpsy = None
+
+        label, enum, conf = ident._maybe_upgrade_to_phase_e(
+            'Accumulation Phase D (积累期突破)', WyckoffPhase.PHASE_D, 0.85, events=_Events()
+        )
+        self.assertIn('Phase D', label)
+        self.assertEqual(enum, WyckoffPhase.PHASE_D)
 
     def test_continuous_confirmation_helper(self):
         idx = pd.date_range('2024-01-01', periods=5, freq='D')

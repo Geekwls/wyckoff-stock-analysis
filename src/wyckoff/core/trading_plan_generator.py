@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 import logging
 
 from .signal_extractor import SignalExtractor, get_events_from_phase
+from .utils import PhaseAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -75,16 +76,23 @@ class TradingPlanGenerator:
         phase_res = None
         if not phase_str:
             phase_res = self.pattern_detector.identify_phase()
-            phase_str = phase_res.get('phase', 'Unknown') if isinstance(phase_res, dict) else phase_res
+            phase_str = SignalExtractor.get_effective_phase(phase_res) if isinstance(phase_res, dict) else str(phase_res)
         elif hasattr(self.pattern_detector, 'identify_phase'):
             phase_res = self.pattern_detector.identify_phase()
 
         events = get_events_from_phase(phase_res) if phase_res else None
         joc_ev = SignalExtractor.get_event_dict(events, 'joc') if events else {}
         spring_ev = SignalExtractor.get_event_dict(events, 'spring') if events else {}
+        fti_ev = SignalExtractor.get_event_dict(events, 'fti') if events else {}
+        sow_ev = SignalExtractor.get_event_dict(events, 'sow') if events else {}
+        upthrust_ev = SignalExtractor.get_event_dict(events, 'upthrust') if events else {}
         has_joc = joc_ev.get('detected', False)
+        has_fti = fti_ev.get('detected', False)
+        has_sow = sow_ev.get('detected', False)
         has_spring = spring_ev.get('detected', False)
+        has_upthrust = upthrust_ev.get('detected', False)
         spring_failed = SignalExtractor._spring_lifecycle_failed(spring_ev) if has_spring else False
+        upthrust_failed = SignalExtractor._upthrust_lifecycle_failed(upthrust_ev) if has_upthrust else False
         
         is_bullish = "Accumulation" in phase_str or "Markup" in phase_str
         is_distribution = "Distribution" in phase_str or "Markdown" in phase_str
@@ -119,14 +127,42 @@ class TradingPlanGenerator:
                 current_price, high, low, atr, direction == "做多"
             )
         elif is_distribution:
-            direction = "减仓/对冲" if self.is_a_stock else "做空"
-            pos_sizing = {"status": "空仓/减持"}
+            is_phase_d = 'Phase D' in phase_str
+            is_phase_e = 'Phase E' in phase_str or 'Markdown' in phase_str
+            if has_fti or is_phase_e or (is_phase_d and has_sow):
+                direction = "减仓/对冲" if self.is_a_stock else "做空"
+                if has_fti:
+                    dynamic_warning = "FTI/Phase D 跌破确认，可按 LPSY 分批减仓或做空。"
+                    entry_zone = f"Ice/FTI 反抽区附近 (Ice: {fti_ev.get('ice_level', round(high, 2))})"
+                elif is_phase_e:
+                    dynamic_warning = "派发/markdown 推进期，可按反弹阻力减仓或做空。"
+                    entry_zone = f"阻力位: {round(high, 2)} 附近"
+                else:
+                    dynamic_warning = "Phase D SOW 确认，可按 LPSY 分批减仓或做空。"
+                    entry_zone = f"阻力位: {round(high, 2)} 附近"
+            elif has_upthrust and not upthrust_failed and (has_sow or has_fti):
+                direction = "减仓/对冲" if self.is_a_stock else "做空"
+                dynamic_warning = "Upthrust 诱多后 SOW/FTI 结构确认，可按阻力区减仓。"
+                entry_zone = f"阻力位: {round(high, 2)} 附近"
+            else:
+                direction = "观望"
+                dynamic_warning = (
+                    "派发阶段，等待 FTI 跌破冰层或 Upthrust/SOW 结构确认后再做空"
+                    "（孟氏 checklist）。"
+                )
+                entry_zone = "等待 FTI/LPSY 确认"
+            pos_sizing = {"status": "空仓/减持"} if direction != "观望" else {"status": "绝对观望"}
             scale_in_triggers = {
                 "exit_1": {"condition": "跌破区间下沿 (确认派发)", "price": round(low, 2)},
                 "exit_2": {"condition": "反抽阻力位无力", "price": round(high, 2)}
+            } if direction != "观望" else {
+                "observation": {"condition": "等待 FTI 或 SOW/Upthrust 结构确认", "price": 0.0}
             }
-            dynamic_warning = "当前处于派发阶段。威科夫第一原则：出货区只卖不买。任何回调均视为离场机会，严禁接刀。"
-            entry_zone = f"阻力位: {round(high, 2)} (当前不建议任何买入)"
+            if direction != "观望":
+                dynamic_warning = (
+                    dynamic_warning or
+                    "当前处于派发阶段。威科夫第一原则：出货区只卖不买。"
+                )
         else:
             direction = "做多" if is_bullish else "观望"
             pos_sizing, dynamic_warning = self._adjust_position_with_sentiment(
@@ -137,10 +173,7 @@ class TradingPlanGenerator:
             )
 
         # 派发初期（Phase A/B）强制绝对观望拦截
-        is_dist = 'DISTRIBUTION' in phase_str.upper() or '派发' in phase_str
-        is_early_phase = any(x in phase_str.upper() for x in ['PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B']) or \
-                         any(x in phase_str for x in ['阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B'])
-        is_dist_early = is_dist and is_early_phase
+        is_dist_early = PhaseAdapter.is_distribution_early(phase_str)
 
         if is_dist_early:
             direction = "观望"

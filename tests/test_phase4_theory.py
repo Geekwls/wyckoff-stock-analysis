@@ -92,12 +92,24 @@ class TestSignalExtractorHelpers(unittest.TestCase):
     def test_resolve_primary_signal_short(self):
         patterns = {
             'events_detected': {
+                'fti': {'detected': True},
                 'lpsy': {'detected': True},
             }
         }
         sig, direction = SignalExtractor.resolve_primary_signal(patterns)
-        self.assertEqual(sig, 'lpsy')
+        self.assertEqual(sig, 'fti')
         self.assertEqual(direction, 'short')
+
+    def test_resolve_primary_signal_skips_lpsy_without_fti(self):
+        patterns = {
+            'events_detected': {
+                'lpsy': {'detected': True},
+                'fti': {'detected': False},
+            }
+        }
+        sig, direction = SignalExtractor.resolve_primary_signal(patterns)
+        self.assertEqual(sig, 'none')
+        self.assertEqual(direction, 'neutral')
 
     def test_resolve_primary_signal_none_when_no_events(self):
         patterns = {

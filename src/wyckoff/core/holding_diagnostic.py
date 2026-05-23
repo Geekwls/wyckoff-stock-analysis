@@ -53,7 +53,7 @@ class HoldingDiagnostic:
         else:
             ma_pattern = "数据不足"
 
-        phase = phase_res.get('phase', 'Unknown')
+        phase = SignalExtractor.get_effective_phase(phase_res)
 
         if 'Markup' in phase:
             channel = "主升通道"

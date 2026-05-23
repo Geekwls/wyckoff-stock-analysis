@@ -6,6 +6,7 @@
     "error": null,
     "bars": 242,
     "phase": "Distribution Phase C/D",
+    "effective_phase": "Distribution Phase C/D",
     "confidence": 0.8,
     "coordinator_phase": "Distribution Phase C/D",
     "identifier_phase": "Distribution Phase C+ (SOW出现待FTI确认)",
@@ -35,10 +36,11 @@
     "error": null,
     "bars": 242,
     "phase": "Accumulation Phase C",
+    "effective_phase": "Accumulation Phase C",
     "confidence": 0.8,
     "coordinator_phase": "Accumulation Phase C",
-    "identifier_phase": "Accumulation Phase C+ (LPS出现待JOC确认)",
-    "phase_description": "[Phase Transition] Accumulation Phase A → Accumulation Phase C (置信度:85%)",
+    "identifier_phase": "Accumulation Phase C (积累期震仓)",
+    "phase_description": null,
     "phase_source": "coordinator",
     "direction": "观望",
     "action": null,
@@ -50,11 +52,11 @@
     "vsa": "Y",
     "dead_corner": "-",
     "arbitration": {
-      "has_conflict": false,
-      "reason": "无有效信号需要仲裁",
-      "dominant": null,
-      "suggested_phase": null
+      "has_conflict": true,
+      "reason": "无 JOC 确认，Spring 结构优于 LPS 缩量回踩",
+      "dominant": "spring",
+      "suggested_phase": "Accumulation Phase C"
     },
-    "revisions": 1
+    "revisions": 3
   }
 ]

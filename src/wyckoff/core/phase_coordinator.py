@@ -248,11 +248,6 @@ class PhaseCoordinator:
         )
         gating_phase = preliminary_phase
 
-        # Phase 11: 证据门控（待确认阶段不激进屏蔽 SOS/SOW）
-        self._apply_strength_signal_gating(
-            gating_phase, spring_res, upthrust_res, climax_res
-        )
-
         # 3. 用威科夫事件边界更新交易区间检测器
         # UTAD检测需要移到这里，以便在更新TR边界时使用
         utad_res = self.detector.detect_utad()
@@ -264,17 +259,34 @@ class PhaseCoordinator:
         # 统一更新子检测器的分析上下文
         self.detector._update_all_detectors_context(preliminary_phase)
 
-        # 4. 收集趋势/强度信号（此时 TR 已使用已知边界）
+        # 4. 收集趋势/强度信号（JOC/FTI 先于 SOS/SOW，供孟氏高优先级门控）
+        joc_res = self.detector.detect_joc(trading_range=tr_res)
+        fti_res = self.detector.detect_fti(trading_range=tr_res)
+        joc_res = _flatten_latest_event(joc_res)
+        fti_res = _flatten_latest_event(fti_res)
+
+        if hasattr(self.detector, 'sw_detector'):
+            sw = self.detector.sw_detector
+            sw.reset_blocked_signals()
+            if joc_res.get('detected'):
+                sw.register_high_priority_signal('joc')
+            if fti_res.get('detected'):
+                sw.register_high_priority_signal('fti')
+            if spring_res.get('detected'):
+                sw.register_high_priority_signal('spring')
+            if upthrust_res.get('detected'):
+                sw.register_high_priority_signal('upthrust')
+            self._apply_strength_signal_gating(
+                gating_phase, spring_res, upthrust_res, climax_res
+            )
+
         sos_res = self.detector.detect_sos()
         sow_res = self.detector.detect_sow()
 
-        joc_res = self.detector.detect_joc(trading_range=tr_res)
-        fti_res = self.detector.detect_fti(trading_range=tr_res)
-
         sos_res = _normalize_sos_event(sos_res)
         sow_res = _normalize_sow_event(sow_res)
-        joc_res = _flatten_latest_event(joc_res)
-        fti_res = _flatten_latest_event(fti_res)
+
+        dead_corner_res = self._apply_dead_corner_joc_gate(dead_corner_res, joc_res)
 
         lps_res = self.detector.detect_lps(sos_res, spring_res, trading_range=tr_res, joc_result=joc_res)
         lpsy_res = self.detector.detect_lpsy(
@@ -491,6 +503,25 @@ class PhaseCoordinator:
             self.detector.sw_detector.block_signal('sow')
             logger.info(f"[Phase11] 屏蔽SOW (phase={phase_label})")
 
+    @staticmethod
+    def _apply_dead_corner_joc_gate(dead_corner_res: Dict, joc_res: Dict) -> Dict:
+        """Phase 20：死角突破 STRONG_BUY 须 JOC 确认，否则降级观望。"""
+        if not isinstance(dead_corner_res, dict) or not dead_corner_res.get('detected'):
+            return dead_corner_res
+        if joc_res.get('detected'):
+            return dead_corner_res
+        advice = dict(dead_corner_res.get('trading_advice') or {})
+        if advice.get('action') in ('STRONG_BUY', 'BUY'):
+            dead_corner_res = dict(dead_corner_res)
+            dead_corner_res['trading_advice'] = {
+                'action': 'WATCH',
+                'entry': '死角突破待 JOC 小溪确认（孟氏 checklist）',
+                'sl': advice.get('sl'),
+                'target': advice.get('target'),
+            }
+            dead_corner_res['joc_gate'] = 'pending'
+        return dead_corner_res
+
     def _recollect_strength_events(
         self,
         events_model: 'EventsModel',
@@ -507,7 +538,16 @@ class PhaseCoordinator:
         fti_res = ctx.get('fti_res') or {}
 
         if hasattr(self.detector, 'sw_detector'):
-            self.detector.sw_detector.reset_blocked_signals()
+            sw = self.detector.sw_detector
+            sw.reset_blocked_signals()
+            if joc_res.get('detected'):
+                sw.register_high_priority_signal('joc')
+            if fti_res.get('detected'):
+                sw.register_high_priority_signal('fti')
+            if spring_res.get('detected'):
+                sw.register_high_priority_signal('spring')
+            if upthrust_res.get('detected'):
+                sw.register_high_priority_signal('upthrust')
         self._apply_strength_signal_gating(final_phase, spring_res, upthrust_res, climax_res)
         self.detector._update_all_detectors_context(final_phase)
 
@@ -1037,7 +1077,7 @@ class PhaseCoordinator:
         has_ar = getattr(events.automatic_reaction, 'detected', False) if events.automatic_reaction else False
         has_st = getattr(events.secondary_test, 'detected', False) if events.secondary_test else False
 
-        return has_climax and (has_ar or has_st)
+        return has_climax and has_ar and has_st
 
     def _calculate_consolidation_duration(self, events: 'EventsModel') -> int:
         """计算震荡持续时间（从 ST 完成后开始计数）

@@ -17,7 +17,7 @@ class SupplyDemandMixin:
 
         df = self.data
         phase_result = get_cached_phase_result(self.pattern_detector)
-        phase_obj = phase_result.get('phase_enum') or phase_result.get('phase', 'Unknown')
+        phase_obj = phase_result.get('phase_enum') or SignalExtractor.get_effective_phase(phase_result)
         from ..utils import PhaseAdapter
         is_accumulation = PhaseAdapter.is_accumulation(phase_obj)
         is_distribution = PhaseAdapter.is_distribution(phase_obj)
@@ -133,7 +133,7 @@ class SupplyDemandMixin:
 
         try:
             phase_result = get_cached_phase_result(self.pattern_detector)
-            current_phase = phase_result.get('phase', 'Unknown') if isinstance(phase_result, dict) else str(phase_result)
+            current_phase = SignalExtractor.get_effective_phase(phase_result) if isinstance(phase_result, dict) else str(phase_result)
             events = get_events_from_phase(phase_result)
             # 增强版供求分析同样优先读主链 TR，保证与报告展示区间一致
             tr_from_events = SignalExtractor.get_event_dict(events, 'trading_range')
@@ -265,9 +265,13 @@ class SupplyDemandMixin:
                 events = get_events_from_phase(get_cached_phase_result(self.pattern_detector))
             spring = SignalExtractor.get_event_dict(events, 'spring')
             sos = SignalExtractor.get_event_dict(events, 'sos')
-            if spring.get('detected') and sos.get('detected'):
+            joc = SignalExtractor.get_event_dict(events, 'joc')
+            if spring.get('detected') and sos.get('detected') and joc.get('detected'):
                 stage = 'Phase D-E (准备突破)'
-                stage_description = '吸筹接近尾声，准备进入上涨期'
+                stage_description = 'JOC 确认，吸筹接近尾声，准备进入上涨期'
+            elif spring.get('detected') and sos.get('detected'):
+                stage = 'Phase C+ (SOS出现待JOC确认)'
+                stage_description = 'SOS 出现，等待 JOC 突破小溪确认'
             elif spring.get('detected'):
                 stage = 'Phase C (震仓确认)'
                 stage_description = '震仓完成，主力控盘'
@@ -315,9 +319,13 @@ class SupplyDemandMixin:
                 events = get_events_from_phase(get_cached_phase_result(self.pattern_detector))
             upthrust = SignalExtractor.get_event_dict(events, 'upthrust')
             sow = SignalExtractor.get_event_dict(events, 'sow')
-            if upthrust.get('detected') and sow.get('detected'):
+            fti = SignalExtractor.get_event_dict(events, 'fti')
+            if upthrust.get('detected') and sow.get('detected') and fti.get('detected'):
                 stage = 'Phase D-E (准备下跌)'
-                stage_description = '派发接近尾声，准备进入下跌期'
+                stage_description = 'FTI 确认，派发接近尾声，准备进入下跌期'
+            elif upthrust.get('detected') and sow.get('detected'):
+                stage = 'Phase C+ (SOW出现待FTI确认)'
+                stage_description = 'SOW 出现，等待 FTI 跌破冰层确认'
             elif upthrust.get('detected'):
                 stage = 'Phase C (假突破确认)'
                 stage_description = '假突破完成，主力出货'

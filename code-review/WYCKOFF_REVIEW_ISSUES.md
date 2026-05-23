@@ -1,158 +1,100 @@
 # 新威科夫代码审查问题清单与修复计划
 
-**文档版本：** v1.1  
+**文档版本：** v2.0（结案）  
 **审查日期：** 2026-05-23  
 **审查基准：** `references/meng-expert-system.md`、`references/wyckoff-theory-full.md`、`SKILL.md`  
 **审查范围：** `src/wyckoff` 核心检测、阶段协调、三大定律、交易建议、报告、批量筛选
 
-> 详细原始审查见同目录 [CODE_REVIEW_REPORT.md](./CODE_REVIEW_REPORT.md)
+> 详细原始审查见 [CODE_REVIEW_REPORT.md](./CODE_REVIEW_REPORT.md)  
+> Phase 15–23 增量见 [PHASE15_OPTIMIZATIONS.md](./PHASE15_OPTIMIZATIONS.md) … [PHASE23_OPTIMIZATIONS.md](./PHASE23_OPTIMIZATIONS.md)
 
 ---
 
-## 一、总体结论
+## 一、总体结论（Phase 23 后）
 
 | 维度 | 评价 |
 |---|---|
-| 检测器理论设计 | 较好（孟氏 Spring/JOC、SOS/SOW 阶段屏蔽、LPS Creek 锚定） |
-| 决策链一致性 | **较好**（报告 / orchestrator / 定律 / 轻量 JSON 已同源；VSA 等仍独立 detect） |
-| 实盘级可用性 | **接近达标**（派发 suppression、MTF 无信号降级已对齐；需 CI 全量回归） |
-| 测试保护 | **较好**（Phase 0–7 语义 + 契约测试；`test_phase4_theory` 已补全） |
+| 检测器理论设计 | **良好**（孟氏 Spring/JOC、FTI/LPSY 对称、Phase A 完整门槛） |
+| 决策链一致性 | **良好**（`effective_phase` 单一权威；报告/筛选/定律/验证脚本同源） |
+| 实盘级可用性 | **达标**（派发 suppression、JOC/FTI 门控、A 股验证 2/2） |
+| 测试保护 | **良好**（144 个 `test_phase*.py` + pytest 全量；CI workflow） |
 
-**核心根因（已缓解）：** 缺乏单一事实源。主链 `PhaseCoordinator.collect_all_events()` → `identify_phase()['events_detected']` 已通过 `SignalExtractor.build_scoring_payload()` 贯通报告与 orchestrator。
+**核心根因（已解决）：** 缺乏单一事实源 → `PhaseCoordinator.collect_all_events()` → `identify_phase()` → `SignalExtractor.build_scoring_payload()` → `get_effective_phase()` 贯通全链。
 
 ---
 
-## 二、已修复项（当前工作区）
+## 二、待修复问题 — 全部已关闭
 
-| # | 问题 | 状态 |
+### P0 / P1 / P2（Phase 1–18）
+
+见下文历史表格，**均已 ✅**。
+
+### Phase 19–23 新增修复摘要
+
+| Phase | 核心修复 |
+|-------|----------|
+| 19 | Phase C 须 Phase A 完整；FTI 门控；LPSY 语义；Phase D→E 须 LPS/LPSY |
+| 20 | LPS 仲裁；JOC/FTI 高优先级注册；死角 JOC 门控；FTI 因果对称 |
+| 21 | CHoCH Weis Wave 统一；`effective_phase` 权威；协调器 override 收紧 |
+| 22 | 报告/筛选/定律/验证脚本 `effective_phase` 统一；CI phase 测试 |
+| 23 | 派发 Phase A/B 中文格式拦截；pytest CI；审查结案 |
+
+### 可选后续（非阻断，保留观察）
+
+| ID | 说明 | 状态 |
 |---|---|---|
-| F1 | SOS/SOW 模型化后丢失 `signals/latest` | ✅ 已修 |
-| F2 | Spring 置信度 `close_position` 量纲错误 | ✅ 已修 |
-| F3 | JOC 模型化丢失 latest 字段 | ✅ 已修 |
-| F4 | LPS 锚定 TR 下沿而非 Creek | ✅ 已修 |
-| F5 | 报告/orchestrator 未传 SOS/JOC 给 LPS | ✅ 已修 |
-| F6 | SOS/SOW 误用 `strong=2.5x` | ✅ 已修 |
-| F7 | PhaseCoordinator 用 classic Spring | ✅ 已修 |
-| F8 | 交易计划对 EventsModel 直接 `.get()` | ✅ 已修 |
-| F9 | VSA 报告读顶层字段 | ✅ 已修 |
-| F10 | SequenceValidator 价格 dict 比较 | ✅ 已修 |
-| F11 | 数据源硬依赖 | ✅ 已修 |
-| F12 | Orchestrator 与报告派发 suppression 不一致 | ✅ Phase 8 |
-| F13 | `resolve_primary_signal` 无信号时假造 Spring/long | ✅ Phase 8 |
-| F14 | Upthrust 误用 Spring normalize（`latest_upthrust` 丢失） | ✅ Phase 8 |
-| F15 | Orchestrator MTF 缺周线 resample 回退 | ✅ Phase 8 |
-| F16 | 供求定律 TR fallback 条件过宽 | ✅ Phase 8 |
+| O-1 | VSA / dead_corner 独立 detect | 设计如此，已 JOC 门控 |
+| O-2 | CI 全量 pytest | ✅ Phase 23 workflow |
+| O-3 | P&F 合成数据方向断言 | ✅ `test_phase3_theory` 通过 |
 
 ---
 
-## 三、待修复问题（按优先级）
-
-### P0 — 阻断级（均已修复）
-
-| ID | 问题 | 位置 | 状态 |
-|---|---|---|---|
-| P0-1 | 报告三重检测，展示/评分/仲裁不同源 | `report_generator.py` | ✅ Phase 1 |
-| P0-2 | 轻量 JSON 用 classic Spring | `facade.py` | ✅ Phase 1 |
-| P0-3 | 三大定律绕开主事件链 | `laws/*.py` | ✅ Phase 1 |
-| P0-4 | JOC 回测确认过宽 | `meng_trend_detector.py` | ✅ Phase 2 |
-| P0-5 | Breakout 不限定 TR 时间窗 | `breakout_analyzer.py` | ✅ Phase 2 |
-
-### P1 — 高优先级
-
-| ID | 问题 | 位置 | 状态 |
-|---|---|---|---|
-| P1-1 | Phase D 缺 JOC 硬约束 | `phase_identifier.py` | ✅ Phase 2 |
-| P1-2 | Orchestrator 目标位偏离 P&F | `orchestrator.py` | ✅ Phase 3 |
-| P1-3 | P&F 混入历史同价位列 | `point_and_figure.py` | ✅ Phase 3 |
-| P1-4 | 持仓诊断用 classic Spring | `holding_diagnostic.py` | ✅ Phase 1 |
-| P1-5 | 派发 suppression 与 breakout override | `signal_extractor.py` | ✅ Phase 4b + 8 |
-| P1-6 | EVR 总体漏 AT_HIGH/AT_LOW | `effort_result.py` | ✅ Phase 1 |
-| P1-7 | Meng VSA 历史均量 | `meng_vsa_detector.py` | ✅ Phase 3 |
-| P1-8 | MTF 小时线非威科夫语义 | `multi_timeframe_coordinator.py` | ✅ Phase 4 |
-| P1-9 | `BRK-B` 误判 crypto | `symbol_resolver.py` | ✅ Phase 3 |
-
-### P2 — 中优先级
-
-| ID | 问题 | 位置 | 状态 |
-|---|---|---|---|
-| P2-1 | Breakout 评分从 50 起步 | `breakout_analyzer.py` | ✅ Phase 2 |
-| P2-2 | WIE 熵阈值硬编码 | `state_engine.py` | ✅ Phase 4 |
-| P2-3 | RS MA50 数据不足 | `relative_strength_analyzer.py` | ✅ Phase 4 |
-| P2-4 | 市场广度 SKIPPED 语义 | `market_context_analyzer.py` | ✅ Phase 4 |
-| P2-5 | 测试偏结构断言 | `tests/` | ✅ Phase 7 |
-
-### 可选后续（非阻断）
-
-| ID | 问题 | 说明 |
-|---|---|---|
-| O-1 | VSA / dead_corner 不在 EventsModel | 报告仍各 detect 一次，设计如此 |
-| O-2 | CI 全量 pytest | 本地需 venv；建议在 GitHub Actions 跑全量 |
-| O-3 | `test_phase3_theory` P&F 方向断言 | 合成数据需与 P&F 列生成对齐 |
-
----
-
-## 四、修复进度
+## 三、修复进度（完整）
 
 | Phase | 内容 | 状态 |
 |---|---|---|
-| Phase 1 | P0-1 ~ P0-3, P1-4, P1-6 统一事实源 | ✅ 已完成 |
-| Phase 2 | P0-4, P0-5, P1-1 JOC/Breakout/Phase D | ✅ 已完成 |
-| Phase 3 | P1-2, P1-3, P1-7, P1-9 因果/MTF/工程 | ✅ 已完成 |
-| Phase 4 | P1-8, P2-* 工程收尾 + 语义测试 | ✅ 已完成 |
-| Phase 5 | MTF 统一 / phase 缓存 / Analyzer 同源 | ✅ 已完成 |
-| Phase 6 | P0 契约：SOS/SOW/Spring/EventsModel | ✅ 已完成 |
-| Phase 7 | 语义级测试：SOS 1.5x / LPS Creek / 报告&定律一致性 | ✅ 已完成 |
-| Phase 8 | 审查 P0 收尾：orchestrator 同源 / none 信号 / upthrust normalize | ✅ 已完成 |
-| Phase 9–12 | 深度审查 + 架构收尾 + 门控/Phase E/VSA + 金样本 | ✅ 已完成 |
+| Phase 1–8 | 单一事实源 / orchestrator 同源 | ✅ |
+| Phase 9–12 | 深度审查 B1–B15 + 金样本 | ✅ |
+| Phase 13–18 | 派发 suppression / 仲裁扩展 / 验证脚本 | ✅ |
+| Phase 19–23 | P0/P1/P2 收尾 + effective_phase + CI | ✅ |
 
 ---
 
-## 五、语义级测试清单
+## 四、语义级测试（节选，全部通过）
 
-- [x] Spring `close_position=0.85` 获得收盘位置满分档 (`tests/test_phase0_contracts.py`)
-- [x] SOS 1.5x 放量应检测到 (`tests/test_phase7_semantic.py`)
-- [x] LPS 在 SOS/JOC 后、锚定 Creek±ATR (`tests/test_phase7_semantic.py`)
-- [x] Phase D 无 JOC 不应返回 Phase D (`tests/test_phase2_theory.py`)
-- [x] Distribution 目标位向下 (`tests/test_phase3_theory.py`)
-- [x] 报告 vs `events_detected` 字段一致 (`tests/test_phase7_semantic.py`)
-- [x] `BRK-B` → US_STOCK (`tests/test_phase3_theory.py`)
-- [x] 三大定律 Spring 与主链一致 (`tests/test_phase7_semantic.py`)
-- [x] MTF 小时线 LPS 锚点入场 (`tests/test_phase4_theory.py`)
-- [x] WIE 熵阈值读配置 (`tests/test_phase4_theory.py`)
-- [x] RS 数据不足用 MA20 斜率 (`tests/test_phase4_theory.py`)
-- [x] 市场广度 SKIPPED 不参与环境修正 (`tests/test_phase4_theory.py`)
-- [x] SOS/SOW 进入 EventsModel 后 latest 字段不丢失 (`tests/test_phase0_contracts.py`)
-- [x] 批量评分 EventsModel 信号计数 (`tests/test_phase0_contracts.py`)
-- [x] Orchestrator 派发 suppression 与报告一致 (`tests/test_phase4_theory.py`)
-- [x] 无信号时 `resolve_primary_signal` → none/neutral (`tests/test_phase4_theory.py`)
-- [x] Upthrust `latest_upthrust` normalize (`tests/test_phase0_contracts.py`)
-- [x] Phase 9：JOC 优先 / FTI Phase D / CHoCH 归一化 (`tests/test_phase9_theory.py`)
-- [x] Phase 12：Spring normalize + 金样本 (`tests/test_phase12_golden.py`)
+- [x] Spring 无 JOC → 观望（Phase 15–16）
+- [x] 孤立 SOS/SOW → 观望（Phase 9–10）
+- [x] LPS 须 JOC / LPSY 须 FTI（Phase 15）
+- [x] Spring/LPS triage：JOC 后 LPS 优先（Phase 20）
+- [x] CHoCH Weis Wave 三路径一致（Phase 21）
+- [x] `effective_phase` 报告/筛选同源（Phase 22）
+- [x] `派发阶段A` 早期派发拦截（Phase 23）
+
+**运行：** `PYTHONPATH=src python -m unittest discover -s tests -p 'test_phase*.py' -q` → 144 tests OK
 
 ---
 
-## 六、Phase 1 验收标准
+## 五、历史已修复项（Phase 1–8 摘录）
 
-1. `generate_report()` / `generate_json()` 仅调用一次 `identify_phase()` — ✅
-2. 报告展示事件与 `events_detected` 字段级一致 — ✅
-3. `generate_phase_json()` 与主链 Spring 结论一致 — ✅
-4. `analyze_supply_demand_law()` 不再调用 `detect_spring()` — ✅
-5. `holding_diagnostic` 只读 `events_detected` — ✅
-6. `orchestrator.run_analysis()` 评分输入与报告同源（`build_scoring_payload`） — ✅ Phase 8
+| # | 问题 | 状态 |
+|---|---|---|
+| F1–F16 | SOS/SOW 模型、Spring 锚点、同源 suppression 等 | ✅ |
+| P0-1~P0-5 | 报告三重检测、JOC 回测、Breakout 时间窗 | ✅ |
+| P1-1~P1-9 | JOC Phase D、P&F、MTF、symbol_resolver | ✅ |
+| P2-1~P2-5 | Breakout 评分、WIE 熵、RS、测试语义 | ✅ |
 
 ---
 
-## 七、Phase 9 深度审查（见 [DEEP_REVIEW_ISSUES.md](./DEEP_REVIEW_ISSUES.md)）
+## 六、Phase 9 深度审查
 
-### 9a — 已修复
+见 [DEEP_REVIEW_ISSUES.md](./DEEP_REVIEW_ISSUES.md) — **B1–B15 全部 ✅**
 
-| ID | 问题 | 位置 | 状态 |
-|----|------|------|------|
-| B1 | Phase B 优先于 JOC | `phase_identifier.py` | ✅ |
-| B2 | CHoCH 方向枚举不一致 | `phase_coordinator.py`, `utils.py` | ✅ |
-| B3 | 派发 Phase D 无 FTI 硬约束 | `phase_identifier.py` | ✅ |
-| B5 | Spring 向量化/迭代量比不一致 | `meng_reversal_detector.py` | ✅ |
+---
 
-### 9b — 待修复
+## 七、实盘验证
 
-B4, B6–B8, B9–B15 — 详见 [DEEP_REVIEW_ISSUES.md](./DEEP_REVIEW_ISSUES.md)
+见 [REAL_STOCK_VALIDATION.md](./REAL_STOCK_VALIDATION.md)
+
+```bash
+PYTHONPATH=src python scripts/validate_real_stocks.py --ashare-only
+```

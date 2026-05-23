@@ -21,7 +21,39 @@ class PhaseAdapter:
     def is_distribution(phase: Any) -> bool:
         """判断是否为派发阶段"""
         p_str = phase.value if hasattr(phase, 'value') else str(phase)
-        return bool(re.search(r'\bDistribution\b', p_str, re.I)) or '出货' in p_str
+        return (
+            bool(re.search(r'\bDistribution\b', p_str, re.I))
+            or '出货' in p_str
+            or '派发' in p_str
+        )
+
+    @staticmethod
+    def is_early_ab_phase(phase: Any) -> bool:
+        """是否为 Phase A 或 Phase B（含中英文混合格式）。"""
+        p_str = phase.value if hasattr(phase, 'value') else str(phase)
+        if not p_str:
+            return False
+        upper = p_str.upper()
+        if any(x in upper for x in [
+            'PHASE A', 'PHASE B', 'PHASE_A', 'PHASE_B', 'PHASE A/B', 'PHASE A-B',
+        ]):
+            return True
+        if any(x in p_str for x in [
+            '阶段A', '阶段B', '阶段 A', '阶段 B', '阶段A/B', '阶段 A/B',
+        ]):
+            return True
+        if re.search(r'派发(?:阶段)?\s*[AB]', p_str, re.I):
+            return True
+        if re.search(r'派发\s+PHASE\s+[AB]', p_str, re.I):
+            return True
+        if re.search(r'DISTRIBUTION\s+阶段\s*[AB]', p_str, re.I):
+            return True
+        return False
+
+    @staticmethod
+    def is_distribution_early(phase: Any) -> bool:
+        """派发初期/中期（Phase A/B）。"""
+        return PhaseAdapter.is_distribution(phase) and PhaseAdapter.is_early_ab_phase(phase)
 
     @staticmethod
     def is_markup(phase: Any) -> bool:
@@ -85,6 +117,80 @@ def is_bullish_choch(direction: Any) -> bool:
 
 def is_bearish_choch(direction: Any) -> bool:
     return normalize_choch_direction(direction) == 'bearish'
+
+
+def normalize_choch_result(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """统一 CHoCH 输出字段（direction / type / interpretation）。"""
+    if not raw or not raw.get('detected'):
+        return raw or {'detected': False}
+    out = dict(raw)
+    normalized = normalize_choch_direction(out.get('direction'))
+    if normalized:
+        out['direction'] = normalized
+    out.setdefault('type', 'CHoCH')
+    if 'interpretation' not in out:
+        desc = out.get('description')
+        if desc:
+            out['interpretation'] = desc
+        else:
+            dir_label = '上涨' if is_bullish_choch(out.get('direction')) else '下跌'
+            out['interpretation'] = (
+                f"特征变异(CHoCH)：{dir_label}波段推力/量能显著放大，提示供求秩序变化"
+            )
+    if out.get('date') is not None and not isinstance(out.get('date'), str):
+        try:
+            out['date'] = pd.Timestamp(out['date']).strftime('%Y-%m-%d')
+        except Exception:
+            pass
+    return out
+
+
+def detect_choch_weis(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Weis Wave CHoCH 检测 — 全库单一事实源（Phase 21）。
+    理论依据：趋势中第一个显著反向波段，推力/量能远超前序同向波段。
+    """
+    from .weis_wave import WeisWaveGenerator
+
+    if df is None or len(df) < 40:
+        return {'detected': False}
+
+    generator = WeisWaveGenerator(df)
+    waves = generator.generate()
+    if len(waves) < 4:
+        return {'detected': False}
+
+    last_wave = waves[-1]
+    prev_same_dir = [w for w in waves[:-1] if w.direction == last_wave.direction]
+    if len(prev_same_dir) < 2:
+        return {'detected': False}
+
+    avg_thrust = float(np.mean([w.thrust for w in prev_same_dir[-3:]]))
+    avg_vol = float(np.mean([w.volume for w in prev_same_dir[-3:]]))
+    thrust_ratio = last_wave.thrust / avg_thrust if avg_thrust > 0 else 1.0
+    volume_ratio = last_wave.volume / avg_vol if avg_vol > 0 else 1.0
+
+    is_choch = (thrust_ratio > 1.8) or (volume_ratio > 2.0 and thrust_ratio > 1.2)
+    if not is_choch:
+        return {'detected': False}
+
+    wave_dir = last_wave.direction
+    normalized_dir = 'bullish' if wave_dir == 'up' else 'bearish'
+    dir_label = '上涨' if wave_dir == 'up' else '下跌'
+    return normalize_choch_result({
+        'detected': True,
+        'direction': normalized_dir,
+        'thrust_ratio': round(thrust_ratio, 2),
+        'volume_ratio': round(volume_ratio, 2),
+        'intensity': round(thrust_ratio, 2),
+        'vol_intensity': round(volume_ratio, 2),
+        'date': last_wave.end_idx,
+        'method': 'weis_wave',
+        'description': (
+            f"检测到{dir_label}特征变异(CHoCH)! "
+            f"波段推力是前序均值的{thrust_ratio:.1f}倍，标志着供求关系发生根本性变化。"
+        ),
+    })
 
 
 def continuous_price_confirmation(

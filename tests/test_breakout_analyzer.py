@@ -189,7 +189,7 @@ class TestBreakoutAnalyzer:
             assert 'interpretation' in pullback_analysis
 
     def test_override_recommendation_upside(self, sample_data_with_upside_breakout):
-        """测试向上突破的覆盖建议（派发→趋势）"""
+        """向上突破不再自动覆盖派发阶段，须 JOC/结构确认（Phase 14+）"""
         analyzer = BreakoutAnalyzer(sample_data_with_upside_breakout)
 
         current_phase = "Distribution Phase A"
@@ -204,13 +204,13 @@ class TestBreakoutAnalyzer:
         breakout_analysis = analyzer.analyze_breakout(trading_range)
 
         if not breakout_analysis.get('is_upthrust', False):
-            # 真实突破应该否决派发判断
             new_phase, reason, conf_adjust = analyzer.get_override_recommendation(
                 trading_range, current_phase
             )
 
-            assert 'Distribution' not in new_phase
-            assert 'Trending' in new_phase or 'Reaccumulation' in new_phase
+            assert new_phase == current_phase
+            assert 'Distribution' in new_phase
+            assert 'JOC' in reason or '再积累' in reason
             assert conf_adjust < 1.0
 
     def test_override_recommendation_downside(self):

@@ -404,17 +404,21 @@ class CauseEffectMixin:
         elif ("Distribution" in phase or "派发" in phase) and direction in ("down", "downside"):
             base_prob = 0.75
             
-        # 2. 突破质量加权 (JOC/FTI 质量)
+        # 2. 突破质量加权 (JOC/FTI 质量，派发侧对称)
         quality_score = 0
         joc = {}
+        fti = {}
         if self.pattern_detector:
             phase_result = get_cached_phase_result(self.pattern_detector)
             events = get_events_from_phase(phase_result)
             joc = SignalExtractor.get_event_dict(events, 'joc')
+            fti = SignalExtractor.get_event_dict(events, 'fti')
 
-        if joc.get('detected'):
-            #  Weis Wave 波段累加量评估（替换原单K线降级方案）
+        if direction in ("up", "upside") and joc.get('detected'):
             weis_quality = self._get_weis_wave_breakout_quality(joc.get('date'))
+            quality_score = weis_quality.get('quality_score', 0)
+        elif direction in ("down", "downside") and fti.get('detected'):
+            weis_quality = self._get_weis_wave_breakout_quality(fti.get('date'))
             quality_score = weis_quality.get('quality_score', 0)
                 
         final_prob = base_prob + quality_score

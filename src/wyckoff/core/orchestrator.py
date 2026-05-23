@@ -90,7 +90,7 @@ class WyckoffOrchestrator:
 
         phase_info = detector.identify_phase()
         set_cached_phase_result(detector, phase_info)
-        phase_str = phase_info.get('phase', '')
+        phase_str = SignalExtractor.get_effective_phase(phase_info)
 
         if hasattr(detector, 'sw_detector') and hasattr(detector.sw_detector, 'set_current_phase'):
             detector.sw_detector.set_current_phase(phase_str)

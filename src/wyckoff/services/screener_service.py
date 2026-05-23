@@ -15,7 +15,7 @@ from ..core.recommendation_engine import RecommendationEngine
 from ..core.enums import MarketEnvironment
 from ..core.utils import PhaseAdapter
 from ..core.cache_service import IndexDataCache
-from ..core.signal_extractor import set_cached_phase_result
+from ..core.signal_extractor import SignalExtractor, set_cached_phase_result
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ class ScreenerService:
             set_cached_phase_result(analyzer.pattern_detector, phase_res)
             events = phase_res.get('events_detected', {})
             
-            phase_str = (phase_res.get('phase') or 'Unknown') if isinstance(phase_res, dict) else str(phase_res)
+            phase_str = SignalExtractor.get_effective_phase(phase_res) if isinstance(phase_res, dict) else str(phase_res)
             
             # 提取信号 (使用新引擎)
             strength = RecommendationEngine.calculate_signal_strength(phase_res)
@@ -220,7 +220,7 @@ class ScreenerService:
         
         for symbol, analyzer in self._analyzers.items():
             phase_res = analyzer.identify_phase_with_rs()
-            phase_str = phase_res.get('phase', 'Unknown')
+            phase_str = SignalExtractor.get_effective_phase(phase_res)
             phase_enum = phase_res.get('phase_enum')
             
             if not PhaseAdapter.is_accumulation(phase_str):
@@ -270,7 +270,7 @@ class ScreenerService:
         
         for symbol, analyzer in self._analyzers.items():
             phase_res = analyzer.identify_phase_with_rs()
-            phase_str = phase_res.get('phase', 'Unknown')
+            phase_str = SignalExtractor.get_effective_phase(phase_res)
             phase_enum = phase_res.get('phase_enum')
             
             if not PhaseAdapter.is_distribution(phase_str):
@@ -322,7 +322,7 @@ class ScreenerService:
             if not lps.get('detected'):
                 continue
             
-            phase_str = phase_res.get('phase', 'Unknown')
+            phase_str = SignalExtractor.get_effective_phase(phase_res)
             
             results.append({
                 'symbol': symbol,
@@ -346,7 +346,7 @@ class ScreenerService:
             if not lpsy.get('detected'):
                 continue
             
-            phase_str = phase_res.get('phase', 'Unknown')
+            phase_str = SignalExtractor.get_effective_phase(phase_res)
             
             results.append({
                 'symbol': symbol,
