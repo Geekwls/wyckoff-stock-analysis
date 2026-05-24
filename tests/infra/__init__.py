@@ -1,0 +1,1 @@
+"""Infra tests package"""

@@ -161,7 +161,7 @@ class TestPhaseAPsHardGate(unittest.TestCase):
         self.assertTrue(PhaseAdapter.is_phase_a_structure_complete(events))
 
     def test_spring_phase_c_blocked_without_ps(self):
-        from tests.test_phase19_optimizations import _base_events, _make_ohlcv
+        from tests.iterations.test_phase19_optimizations import _base_events, _make_ohlcv
 
         ident = PhaseIdentifier(_make_ohlcv(), WyckoffConfig(), WyckoffThresholds())
         events = _base_events(

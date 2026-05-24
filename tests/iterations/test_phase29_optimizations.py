@@ -17,7 +17,7 @@ from wyckoff.core.wie3_calibration import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestWIE3Calibration(unittest.TestCase):

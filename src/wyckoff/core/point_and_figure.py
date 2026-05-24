@@ -90,6 +90,52 @@ class PointAndFigureCalculator:
 
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         return tr.rolling(period).mean()
+
+    def calculate_adaptive_box_size(self, data: pd.DataFrame, thresholds=None) -> Tuple[float, str]:
+        """
+        根据波动率自适应计算 PnF 格值大小（百分比数值，例如 1.0 代表 1.0%）
+        支持次新股递进 Fallback 方案：250天 -> 120天 -> 60天 -> 20天
+        并在 derivation 中记录实际使用的周期
+        """
+        from wyckoff.config.settings import WyckoffThresholds
+        th = thresholds or WyckoffThresholds()
+
+        # 读取配置项作为限制阈值
+        min_pct = getattr(th, 'PNF_BOX_SIZE_MIN', 0.5)
+        max_pct = getattr(th, 'PNF_BOX_SIZE_MAX', 3.0)
+
+        if data is None or len(data) < 5:
+            return 1.0, "static_default_insufficient_data"
+
+        n = len(data)
+        # 确定最佳周期
+        periods = [250, 120, 60, 20]
+        chosen_period = 20  # 兜底
+        for p in periods:
+            if n >= p:
+                chosen_period = p
+                break
+
+        # 计算该周期的 ATR
+        atr_series = self._calculate_atr_series(data, chosen_period)
+        if atr_series.empty or pd.isna(atr_series.iloc[-1]):
+            recent_close = data['Close'].iloc[-1]
+            recent_high = data['High'].tail(chosen_period).max()
+            recent_low = data['Low'].tail(chosen_period).min()
+            vol_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 1.0
+            raw_box_size = 0.5 * vol_pct
+        else:
+            recent_close = data['Close'].iloc[-1]
+            atr_val = atr_series.iloc[-1]
+            atr_pct = (atr_val / recent_close * 100) if recent_close > 0 else 1.0
+            raw_box_size = 0.5 * atr_pct
+
+        # 裁剪阈值：min_pct <= size <= max_pct，且不得低于0.2%的底限保护
+        adaptive_pct = max(min(raw_box_size, max_pct), min_pct)
+        adaptive_pct = max(adaptive_pct, 0.2)
+
+        derivation = f"adaptive_atr_{chosen_period}d"
+        return round(adaptive_pct, 4), derivation
     
     def calculate_pnf(self, data: pd.DataFrame) -> Dict:
         """
@@ -482,25 +528,26 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
                                     phase: str = '',
                                     known_tr_high: float = None,
                                     known_tr_low: float = None,
-                                    tr_col_start_idx: int = None) -> Dict:
+                                    tr_col_start_idx: int = None,
+                                    adaptive_box_size: bool = True,
+                                    thresholds = None) -> Dict:
     """
     基于点数图计算威科夫因果效应（便捷函数）
+    支持自适应格值大小与递进 Fallback 波动率拟合
 
     孟洪涛原则：使用动态阈值根据市场波动率调整
 
     重要理论约束：
     - 派发期的"因"触发向下的"果"
     - 吸筹期的"因"触发向上的"果"
-
-    Args:
-        data: OHLCV数据
-        box_size_pct: 箱体大小百分比
-        reversal_boxes: 反转箱体数
-        phase: 当前阶段（用于确定目标方向）
-
-    Returns:
-        因果效应分析结果
     """
+    # 建立临时计算器来计算自适应格值
+    temp_calc = PointAndFigureCalculator(box_size_pct, reversal_boxes)
+    if adaptive_box_size and data is not None and not data.empty:
+        box_size_pct, derivation = temp_calc.calculate_adaptive_box_size(data, thresholds)
+    else:
+        derivation = "static_manual"
+
     calculator = PointAndFigureCalculator(box_size_pct, reversal_boxes)
 
     # 孟洪涛原则：获取动态PNF阈值
@@ -520,6 +567,10 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
     )
     
     pnf_method = result.get('_pnf_method', 'auto_detect')
+    
+    # 格式化描述信息，支持浮点百分比展示
+    box_size_str = f"{box_size_pct:.2f}%" if isinstance(box_size_pct, float) else f"{box_size_pct}%"
+    
     if known_tr_high is not None and known_tr_low is not None:
         method_label = 'point_and_figure_from_tr'
         targets = result.get('targets', {})
@@ -530,14 +581,14 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
             desc_targets = f"若突破 {known_tr_high:.2f}，第一目标 {targets.get('target_1', 0):.2f}，第二目标 {targets.get('target_2', 0):.2f}"
         description = (
             f"基于当前TR（{known_tr_low:.2f}-{known_tr_high:.2f}）内的点数图水平计数："
-            f"{result.get('horizontal_count', 0)}列 × 箱体大小{box_size_pct:.0f}% = "
+            f"{result.get('horizontal_count', 0)}列 × 箱体大小{box_size_str} = "
             f"目标幅度{result.get('base_effect', 0):.2f}。{desc_targets}"
         )
     else:
         method_label = 'point_and_figure'
         description = (
             f"基于点数图水平计数：积累区{result.get('horizontal_count', 0)}列 × "
-            f"箱体大小{box_size_pct:.0f}% = "
+            f"箱体大小{box_size_str} = "
             f"目标幅度{result.get('base_effect', 0):.2f}"
         )
     
@@ -554,4 +605,5 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
         'targets': result.get('targets', {}),
         'description': description,
         '_pnf_method': pnf_method,
+        'derivation': derivation,
     }

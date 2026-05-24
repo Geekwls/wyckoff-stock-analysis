@@ -153,6 +153,10 @@ class WyckoffThresholds(BaseModel):
     SEARCHLIGHT_APS_ABSORPTION_THRESHOLD: Annotated[float, Field(description="遗留派发阶段 APS 吸收/需求主导冲突阈值")] = 8.0
     WIE3_TRANSITION_MATRIX_PATH: Annotated[Optional[str], Field(description="WIE3 校准转移矩阵 JSON 路径（空则尝试 fixtures/wie3/transition_matrix_default.json）")] = None
 
+    # ── PnF 自动格值限制阈值 ───────────────────────────────
+    PNF_BOX_SIZE_MIN: Annotated[float, Field(description="自适应 PnF 格值大小下限百分比（默认 0.5%）")] = 0.5
+    PNF_BOX_SIZE_MAX: Annotated[float, Field(description="自适应 PnF 格值大小上限百分比（默认 3.0%）")] = 3.0
+
     def get_volatility_threshold(self, threshold_type: str, volatility_class: str) -> float:
         """获取波动率阈值"""
         thresholds = self.VOLATILITY_THRESHOLDS.get(threshold_type, {})

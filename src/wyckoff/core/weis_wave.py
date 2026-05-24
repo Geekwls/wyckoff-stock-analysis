@@ -13,6 +13,7 @@ class WeisWave:
     thrust: float        #  缺陷2修复：百分比涨跌幅 abs(end-start)/start，跨价位可比
     volume: float        # 波段累加成交量
     duration: int        # 波段持续天数/K线数
+    volume_normalized: float = 0.0  # Wave 5: 归一化努力值，与绝对成交量并存
 
 
 class WeisWaveGenerator:
@@ -142,6 +143,9 @@ class WeisWaveGenerator:
         indices = self.data.index
         volumes = np.asarray(self.data['Volume'])
 
+        # 计算 60 日滚动均量
+        adv_60_series = self.data['Volume'].rolling(window=60, min_periods=1).mean()
+
         for i in range(1, len(pivots)):
             start_pivot = pivots[i-1]
             end_pivot = pivots[i]
@@ -158,6 +162,15 @@ class WeisWaveGenerator:
 
             # 成交量累加：从转折点后一根 K 线开始，直到（并包含）当前波段的极值点
             vol_sum = float(np.sum(volumes[start_idx + 1 : end_idx + 1]))
+            duration = int(end_idx - start_idx)
+
+            # 计算归一化 efforts，支持持续时间分母底限保护 max(duration, 3)
+            adv_val = float(adv_60_series.iloc[end_idx]) if end_idx < len(adv_60_series) else 0.0
+            duration_factor = max(duration, 3)
+            if adv_val > 0:
+                vol_normalized = vol_sum / (adv_val * duration_factor)
+            else:
+                vol_normalized = 0.0
 
             waves.append(WeisWave(
                 direction=direction,
@@ -168,7 +181,8 @@ class WeisWaveGenerator:
                 # 改用百分比推力，使不同价位的波段推力可横向比较
                 thrust=float(abs(end_price - start_price) / start_price) if start_price > 0 else 0.0,
                 volume=vol_sum,
-                duration=int(end_idx - start_idx)
+                duration=duration,
+                volume_normalized=float(vol_normalized)
             ))
 
         return waves
