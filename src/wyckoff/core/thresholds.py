@@ -46,6 +46,14 @@ def spring_max_recovery_days(atr_pct: float) -> int:
     return 5
 
 
+def lps_atr_tolerance_pct(atr_pct: float) -> float:
+    """
+    LPS 自适应动态容差百分比（单一事实源）。
+    - Tolerance_pct = min(8.0, max(2.0, atr_pct * 1.5))
+    """
+    return min(8.0, max(2.0, atr_pct * 1.5))
+
+
 @dataclass(frozen=True)
 class VolatilityThresholds:
     """波动率体制阈值配置"""

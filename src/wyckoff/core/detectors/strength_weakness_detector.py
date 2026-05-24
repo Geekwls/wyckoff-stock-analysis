@@ -678,13 +678,31 @@ class StrengthWeaknessDetector(BaseDetector):
         if self.data is None or len(self.data) < 60:
             return {'detected': False}
 
+        if trading_range and (
+            self._get_event_field(trading_range, 'transition_period')
+            or self._get_event_field(trading_range, 'invalidated_tr')
+            or self._get_event_field(trading_range, 'invalidation_severity') in {'warning', 'invalidated', 'distribution_risk', 'markup_breakout'}
+        ):
+            return {
+                'detected': False,
+                'reason': 'transition_period_no_lps',
+                'transition_period': True,
+                'transition_reason': (
+                    self._get_event_field(trading_range, 'transition_reason')
+                    or self._get_event_field(trading_range, 'invalidation_reason')
+                ),
+                'signals': [],
+                'observations': [],
+            }
+
         def _normalize_event_date(raw_date):
             if raw_date is None:
                 return None
             event_date = pd.to_datetime(raw_date)
-            if self.data.index.tz is not None and event_date.tz is None:
-                event_date = event_date.tz_localize('UTC').tz_convert(self.data.index.tz)
-            elif self.data.index.tz is None and event_date.tz is not None:
+            index_tz = getattr(self.data.index, 'tz', None)
+            if index_tz is not None and event_date.tz is None:
+                event_date = event_date.tz_localize('UTC').tz_convert(index_tz)
+            elif index_tz is None and event_date.tz is not None:
                 event_date = event_date.tz_localize(None)
             return event_date
 
@@ -719,10 +737,10 @@ class StrengthWeaknessDetector(BaseDetector):
             )
             spring_low = self._numeric_value(self._get_event_field(sl, 'breakdown_price'))
 
-        # 构建 LPS 回测锚点：优先 Creek/SOS 突破位，其次 TR 上沿，最后才是 TR 下沿。
-        tr_support = None
+        # Phase 31 prioritizes anchors in order: joc_creek -> sos_breakout -> spring_support -> tr_low -> ma20
         anchor_candidates = []
 
+        # 1. joc_creek
         if joc_result and self._get_event_field(joc_result, 'detected'):
             joc_detail = self._latest_event_detail(joc_result)
             creek_level = self._numeric_value(
@@ -730,8 +748,9 @@ class StrengthWeaknessDetector(BaseDetector):
                 self._get_event_field(joc_result, 'creek_level')
             )
             if creek_level and creek_level > 0:
-                anchor_candidates.append(('JOC Creek', creek_level))
+                anchor_candidates.append(('joc_creek', creek_level))
 
+        # 2. sos_breakout
         if sos_result and self._get_event_field(sos_result, 'detected'):
             sos_detail = self._latest_event_detail(sos_result)
             breakthrough_level = self._numeric_value(
@@ -739,15 +758,18 @@ class StrengthWeaknessDetector(BaseDetector):
                 self._get_event_field(sos_result, 'breakthrough_level')
             )
             if breakthrough_level and breakthrough_level > 0:
-                anchor_candidates.append(('SOS突破位', breakthrough_level))
+                anchor_candidates.append(('sos_breakout', breakthrough_level))
 
+        # 3. spring_support
+        if spring_low and spring_low > 0:
+            anchor_candidates.append(('spring_support', spring_low))
+
+        # 4. tr_low
+        tr_support = None
         if trading_range:
-            tr_high = self._numeric_value(self._get_event_field(trading_range, 'high'))
             tr_support = self._numeric_value(self._get_event_field(trading_range, 'low'))
-            if tr_high and tr_high > 0:
-                anchor_candidates.append(('TR上沿', tr_high))
             if tr_support and tr_support > 0:
-                anchor_candidates.append(('TR下沿', tr_support))
+                anchor_candidates.append(('tr_low', tr_support))
 
         # 判断阶段上下文
         is_accumulation = self._is_accumulation_phase()
@@ -813,28 +835,47 @@ class StrengthWeaknessDetector(BaseDetector):
             if spring_low is not None and current['Low'] <= spring_low:
                 continue
 
-            # 威科夫 LPS：优先观察 SOS/JOC 后对 Creek / 突破位 / TR 上沿的缩量回测。
+            # 威科夫 LPS：优先观察 JOC / SOS / Spring / TR Low 的缩量回测。
             near_lps_anchor = True
             matched_anchor_label = None
             matched_anchor_value = None
             matched_anchor_deviation = None
-            if anchor_candidates:
-                atr_val = current.get('ATR')
-                if pd.isna(atr_val) or atr_val <= 0:
-                    atr_pct = 0.015
-                else:
-                    atr_pct = atr_val / max(current['Close'], 1e-9)
-                tolerance_upper = min(0.08, max(0.04, atr_pct * 1.5))
+            
+            # Add MA20 dynamic anchor at this index, but prioritize it last (degraded only)
+            local_anchors = list(anchor_candidates)
+            local_anchors.append(('ma20', df['MA20'].iloc[i]))
 
+            if local_anchors:
+                atr_val = current.get('ATR')
+                price_val = max(current['Close'], 1e-9)
+                atr_pct_val = (atr_val / price_val * 100.0) if not pd.isna(atr_val) else 3.0
+                
+                from ..thresholds import lps_atr_tolerance_pct
+                tolerance_pct_val = lps_atr_tolerance_pct(atr_pct_val)
+                tolerance_upper = tolerance_pct_val / 100.0  # convert to decimal
+                
                 matches = []
-                for anchor_label, anchor_value in anchor_candidates:
+                for anchor_label, anchor_value in local_anchors:
                     low_pct_from_anchor = (current['Low'] - anchor_value) / max(anchor_value, 1e-9)
-                    if -0.03 <= low_pct_from_anchor <= tolerance_upper:
+                    # Pullback must be within dynamic tolerance range
+                    if -tolerance_upper <= low_pct_from_anchor <= tolerance_upper:
                         matches.append((abs(low_pct_from_anchor), anchor_label, anchor_value, low_pct_from_anchor))
 
                 near_lps_anchor = bool(matches)
                 if matches:
-                    _, matched_anchor_label, matched_anchor_value, matched_anchor_deviation = min(matches, key=lambda item: item[0])
+                    # Sort matches by the anchor candidates priority list:
+                    # 1. joc_creek, 2. sos_breakout, 3. spring_support, 4. tr_low, 5. ma20
+                    priority_order = ['joc_creek', 'sos_breakout', 'spring_support', 'tr_low', 'ma20']
+                    
+                    def get_match_priority(m):
+                        lbl = m[1]
+                        if lbl in priority_order:
+                            return priority_order.index(lbl)
+                        return len(priority_order)
+                    
+                    # Sort prioritizing the order, then distance
+                    best_match = min(matches, key=lambda m: (get_match_priority(m), m[0]))
+                    _, matched_anchor_label, matched_anchor_value, matched_anchor_deviation = best_match
 
             # B11: 有 Creek/SOS 锚点时，允许 Close 在 MA20 下方但贴近锚点
             is_pullback_shape = current['Low'] < df.iloc[i-5:i]['High'].max()
@@ -870,14 +911,36 @@ class StrengthWeaknessDetector(BaseDetector):
                 vcp_detected = is_body_shrinking and is_tight
 
             if is_pullback and low_volume and higher_low and near_lps_anchor:
+                atr_val = current.get('ATR')
+                price_val = max(current['Close'], 1e-9)
+                atr_pct_val = (atr_val / price_val * 100.0) if not pd.isna(atr_val) else 3.0
+                
+                from ..thresholds import lps_atr_tolerance_pct
+                tolerance_pct_val = lps_atr_tolerance_pct(atr_pct_val)
+                
+                anchor_pretty_names = {
+                    'joc_creek': 'JOC Creek',
+                    'sos_breakout': 'SOS Breakout',
+                    'spring_support': 'Spring Support',
+                    'tr_low': 'TR Low',
+                    'ma20': 'MA20'
+                }
+                anchor_display_name = anchor_pretty_names.get(matched_anchor_label, matched_anchor_label)
+                
                 signal = {
                     'date': df.index[i],
                     'price': current['Close'],
                     'volume_ratio': round(current['Volume'] / vol_ma.iloc[i], 2),
                     'support_level': matched_anchor_value if matched_anchor_value is not None else df['MA20'].iloc[i],
-                    'anchor_type': matched_anchor_label,
+                    'anchor_type': anchor_display_name,
                     'vcp_detected': bool(vcp_detected),
-                    'confidence_score': 'HIGH' if vcp_detected else 'MEDIUM'
+                    'confidence_score': 'HIGH' if vcp_detected else 'MEDIUM',
+                    # New Schema fields
+                    'atr': float(atr_val) if not pd.isna(atr_val) else 0.03 * price_val,
+                    'atr_pct': round(atr_pct_val, 2),
+                    'tolerance_pct': round(tolerance_pct_val, 2),
+                    'matched_anchor': matched_anchor_label,
+                    'distance_to_anchor_pct': round(abs(matched_anchor_deviation) * 100.0, 2) if matched_anchor_deviation is not None else 0.0
                 }
 
                 # 记录 LPS 锚点关系，保留 tr_support 兼容旧报告字段
@@ -934,6 +997,12 @@ class StrengthWeaknessDetector(BaseDetector):
                     note += ' | 仅缩量回踩，波动尚未完全收缩'
 
                 signal['note'] = note
+                
+                # Check formal qualification: context must be formal 'lps' and matched anchor must NOT be 'ma20'
+                if signal.get('signal_type') == 'lps' and matched_anchor_label not in ('ma20', None):
+                    signal['qualification'] = 'formal_lps'
+                else:
+                    signal['qualification'] = 'degraded_pullback'
 
                 lps_signals.append(signal)
 

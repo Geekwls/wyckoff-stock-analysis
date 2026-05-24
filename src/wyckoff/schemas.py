@@ -82,6 +82,12 @@ class TradingRangeModel(BaseModel):
     current_price: float = Field(description="当前价格")
     range_start_idx: Optional[int] = Field(default=None, description="当前TR窗口在数据中的起始索引")
     range_start_date: Optional[Any] = Field(default=None, description="当前TR窗口起始日期")
+    invalidation_level: Optional[float] = Field(default=None, description="突破/跌破触发失效的价格界限")
+    invalidation_reason: Optional[str] = Field(default=None, description="区间失效原因说明")
+    invalidation_severity: str = Field(default="none", description="失效严重性分级")
+    invalidated_at: Optional[Any] = Field(default=None, description="失效发生的日期或索引")
+    transition_period: bool = Field(default=False, description="是否处于旧TR失效、新TR未形成的过渡期")
+    transition_reason: Optional[str] = Field(default=None, description="过渡期产生的原因描述")
 
 
 class ClimaxModel(BaseModel):
@@ -113,6 +119,12 @@ class SpringSignalModel(BaseModel):
     lifecycle_status: str = Field(default="active", description="生命周期状态: active/confirmed/failed")
     st_confirmed: Optional[bool] = Field(default=None, description="二次测试是否确认")
     breakdown_volume: Optional[float] = Field(default=None, description="突破日成交量")
+    filter_scores: Optional[Dict[str, float]] = Field(default=None, description="5重过滤得分详情")
+    filter_passed: Optional[bool] = Field(default=None, description="是否通过5重过滤")
+    classification: Optional[str] = Field(default=None, description="confirmed/candidate/failed/rejected")
+    failure_reason: Optional[str] = Field(default=None, description="失败/拒绝原因描述")
+    penetration_pct: Optional[float] = Field(default=None, description="跌破支撑位百分比")
+    recovery_quality: Optional[float] = Field(default=None, description="收回质量评分(0-100)")
 
 
 class SpringModel(BaseModel):
@@ -192,6 +204,12 @@ class LpsSignalModel(BaseModel):
     support_level: float = Field(description="支撑位")
     signal_type: Optional[str] = Field(default=None, description="信号类型: lps/pullback/pullback_weak")
     note: Optional[str] = Field(default=None, description="阶段上下文说明")
+    atr: Optional[float] = Field(default=None, description="计算LPS时的真实ATR值")
+    atr_pct: Optional[float] = Field(default=None, description="ATR百分比")
+    tolerance_pct: Optional[float] = Field(default=None, description="自适应动态容差百分比")
+    matched_anchor: Optional[str] = Field(default=None, description="匹配到的锚点名称")
+    distance_to_anchor_pct: Optional[float] = Field(default=None, description="价格与锚点的距离比例(%)")
+    qualification: Optional[str] = Field(default=None, description="正式/降级标识")
 
 class LpsModel(BaseModel):
     """LPS事件"""

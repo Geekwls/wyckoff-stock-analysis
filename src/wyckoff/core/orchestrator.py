@@ -280,10 +280,14 @@ class WyckoffOrchestrator:
         if not tr_high or not tr_low:
             return {}
 
-        if tr.get('invalidated_tr'):
+        if (
+            tr.get('invalidated_tr')
+            or tr.get('transition_period')
+            or tr.get('invalidation_severity') in {'warning', 'invalidated', 'distribution_risk', 'markup_breakout'}
+        ):
             direction = tr.get('breakout_direction') or 'unknown'
             return {
-                'method': 'invalidated_tr',
+                'method': 'transition_period' if tr.get('transition_period') else 'invalidated_tr',
                 'direction': direction,
                 'target_1': 0.0,
                 'target_2': 0.0,

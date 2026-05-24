@@ -1514,6 +1514,21 @@ class RecommendationEngine:
                         direction=direction,
                     )
         
+        # ── 过渡期 / 交易区间失效 强制观望并抑制所有目标与仓位 ──
+        is_transition = _event_get(tr, 'transition_period', False) or _event_get(tr, 'invalidated_tr', False)
+        if is_transition:
+            prev = direction
+            direction = "观望"
+            zone = "过渡期观察，等待新区间"
+            stop = StopLossModel(conservative=0.0, aggressive=0.0, atr_dynamic_stop=0.0)
+            pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
+            targets = {'target_1': 0.0, 'target_2': 0.0}
+            _audit_watch(
+                'plan.transition_period_block',
+                "交易区间已失效，处于过渡期观察阶段，暂停所有交易操作并挂起 P&F 目标测算",
+                prev_direction=prev
+            )
+
         target_1 = targets.get('target_1', 0)
         target_2 = targets.get('target_2', 0)
         if target_1 or target_2:

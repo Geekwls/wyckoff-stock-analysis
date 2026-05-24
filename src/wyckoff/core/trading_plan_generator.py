@@ -286,6 +286,23 @@ class TradingPlanGenerator:
                 dynamic_warning = f"跨周期冲突：{conflict_details}，与主链交易计划一致暂不给出方向"
                 pos_sizing = {"conservative": "0%", "moderate": "0%", "aggressive": "0%", "status": "绝对观望"}
 
+        # ── 过渡期 / 交易区间失效 强制观望与挂起点数图目标 ──
+        if tr.get("transition_period", False) or tr.get("invalidated_tr", False):
+            direction = "观望"
+            entry_zone = "过渡期观察，等待新区间"
+            pos_sizing = {"conservative": "0%", "moderate": "0%", "aggressive": "0%", "status": "绝对观望"}
+            scale_in_triggers = {"observation": {"condition": "等待进入新区间确认信号", "price": 0.0}}
+            dynamic_warning = "由于交易区间已失效，系统当前处于旧 TR 失效但新 TR 未形成的【过渡期观察阶段】。根据威科夫理论，此时应挂起所有点数图 P&F 因果目标测量，强行空仓观望（0% 仓位），静待市场通过 SC/BC/AR 重新锚定新区间边界，规避高回撤风险。"
+            stop_loss = {
+                "conservative": {"value": 0.0, "derivation": "无", "note": "过渡期不提供方向性止损建议"},
+                "aggressive": {"value": 0.0, "derivation": "无", "note": "过渡期不提供方向性止损建议"},
+                "atr_dynamic_stop": {"value": 0.0, "derivation": "无", "note": "过渡期不提供方向性止损建议"},
+            }
+            targets = {
+                "target_1": {"value": 0.0, "derivation": "无", "note": "过渡期挂起点数图 P&F 因果测量"},
+                "target_2": {"value": 0.0, "derivation": "无", "note": "过渡期挂起点数图 P&F 因果测量"},
+            }
+
         # 退出规则
         exit_rules = self._calculate_exit_rules(atr)
 

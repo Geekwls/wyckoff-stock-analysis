@@ -5,6 +5,7 @@ from typing import Dict, Optional, Tuple, List, Any
 from .base_detector import BaseDetector, USE_VECTORIZED
 from ...config.settings import WyckoffConfig, WyckoffThresholds
 from ..utils import TypeConverter, PhaseAdapter
+from ..thresholds import spring_max_recovery_days
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +255,54 @@ class ReversalDetector(BaseDetector):
         else:
             sc_benchmark = climax_res['price']
 
-        ar_min_pct = self.thresholds.AR_MIN_REBOUND_PCT / 100.0
+        # 计算自适应波动率幅度阈值 max(1.5 * ATR%, min_rebound_pct)
+        price = sc_benchmark
+        climax_date = climax_res.get('date')
+        atr = self.data.loc[climax_date, 'ATR'] if ('ATR' in self.data.columns and climax_date in self.data.index) else 0.03 * price
+        if pd.isna(atr) or atr <= 0:
+            atr = 0.03 * price
+        atr_pct = (atr / price) if price > 0 else 0.03
+        
+        min_rebound_pct = self.thresholds.AR_MIN_REBOUND_PCT / 100.0
+        ar_min_pct = max(1.5 * atr_pct, min_rebound_pct)
+
+        def _ar_quality_fields(ar_date: Any, move_pct: float, *, bullish: bool) -> Dict[str, Any]:
+            """Phase 31: AR 4 层质量输出（幅度、速度、量价、结构意义）。"""
+            try:
+                reaction_days = int(self.data.index.get_loc(ar_date) - self.data.index.get_loc(climax_date))
+            except Exception:
+                try:
+                    reaction_days = int(df_after.index.get_loc(ar_date) + 1)
+                except Exception:
+                    reaction_days = 0
+
+            ar_slice = df_after.loc[:ar_date]
+            prior_vol = self.data[self.data.index <= climax_date].tail(20)['Volume'].mean()
+            ar_vol = ar_slice['Volume'].mean() if len(ar_slice) else 0.0
+            vol_ratio = float(ar_vol / prior_vol) if prior_vol and prior_vol > 0 else 1.0
+            speed_score = 100.0 if reaction_days <= 5 else 60.0 if reaction_days <= 10 else 35.0
+            magnitude_score = min(100.0, abs(move_pct) / max(ar_min_pct, 1e-9) * 60.0)
+            volume_score = 100.0 if vol_ratio >= 1.1 else 70.0
+            structure_score = 90.0 if detection_layer != '15d_extreme_fallback' else 55.0
+            quality_score = round(
+                magnitude_score * 0.35 + speed_score * 0.25 + volume_score * 0.20 + structure_score * 0.20,
+                2,
+            )
+            if bullish:
+                volume_quality = 'demand_improving' if vol_ratio >= 1.1 else 'supply_drying'
+                structural_role = 'tr_upper_candidate' if detection_layer != '15d_extreme_fallback' else 'weak_boundary_candidate'
+            else:
+                volume_quality = 'supply_improving' if vol_ratio >= 1.1 else 'demand_fading'
+                structural_role = 'tr_lower_candidate' if detection_layer != '15d_extreme_fallback' else 'weak_boundary_candidate'
+
+            return {
+                'rebound_atr_multiple': round(abs(move_pct) / max(atr_pct, 1e-9), 2),
+                'reaction_days': reaction_days,
+                'volume_quality': volume_quality,
+                'volume_ratio': round(vol_ratio, 2),
+                'structural_role': structural_role,
+                'quality_score': quality_score,
+            }
 
         if climax_res['type'] in ('selling_climax', 'stopping_volume', 'local_extreme_low'):
             ar_price = None
@@ -301,10 +349,17 @@ class ReversalDetector(BaseDetector):
                 detection_layer = '15d_extreme_fallback'
 
             rebound_pct = (ar_price - sc_benchmark) / sc_benchmark if sc_benchmark > 0 else 0
+            if rebound_pct < ar_min_pct:
+                return {
+                    'detected': False,
+                    'quality': 'weak_rebound',
+                    'reason': f'Rebound magnitude too small ({rebound_pct*100:.2f}% < {ar_min_pct*100:.2f}%)'
+                }
             return {
                 'detected': True, 'type': 'automatic_rally', 'date': ar_date, 'price': ar_price,
                 'rebound_pct': round(rebound_pct, 4), 'sc_benchmark': round(sc_benchmark, 2),
-                'detection_layer': detection_layer
+                'detection_layer': detection_layer, 'quality': 'strong',
+                **_ar_quality_fields(ar_date, rebound_pct, bullish=True),
             }
         else:
             # buying_climax
@@ -352,13 +407,20 @@ class ReversalDetector(BaseDetector):
                 detection_layer = '15d_extreme_fallback'
 
             decline_pct = (ar_price - sc_benchmark) / sc_benchmark if sc_benchmark > 0 else 0
+            if abs(decline_pct) < ar_min_pct:
+                return {
+                    'detected': False,
+                    'quality': 'weak_reaction',
+                    'reason': f'Decline magnitude too small ({abs(decline_pct)*100:.2f}% < {ar_min_pct*100:.2f}%)'
+                }
             bc_high = climax_res.get('price', 0)
             nominal_decline = (ar_price - bc_high) / bc_high if bc_high > 0 else 0
             return {
                 'detected': True, 'type': 'automatic_reaction', 'date': ar_date, 'price': ar_price,
                 'decline_pct': round(decline_pct, 4), 'sc_benchmark': round(sc_benchmark, 2),
                 'climax_high': round(bc_high, 2), 'nominal_decline_pct': round(nominal_decline, 4),
-                'detection_layer': detection_layer
+                'detection_layer': detection_layer, 'quality': 'strong',
+                **_ar_quality_fields(ar_date, decline_pct, bullish=False),
             }
 
     def detect_secondary_test(self, climax_res: Dict, ar_res: Dict) -> Dict:
@@ -463,6 +525,17 @@ class ReversalDetector(BaseDetector):
     def _detect_spring_impl(self, lookback: int, trading_range: dict = None) -> Dict:
         if self.data is None or len(self.data) < 30:
             return {'detected': False, 'reason': 'insufficient_data'}
+        if trading_range and (
+            trading_range.get('transition_period')
+            or trading_range.get('invalidated_tr')
+            or trading_range.get('invalidation_severity') in {'warning', 'invalidated', 'distribution_risk', 'markup_breakout'}
+        ):
+            return {
+                'detected': False,
+                'reason': 'transition_period_no_spring',
+                'transition_period': True,
+                'transition_reason': trading_range.get('transition_reason') or trading_range.get('invalidation_reason'),
+            }
         if PhaseAdapter.is_distribution(self._current_phase):
             return {'detected': False, 'reason': 'distribution_phase_no_spring'}
         #  缺陷3修复：在明确下跌趋势中（Markdown）禁止误检Spring
@@ -474,9 +547,10 @@ class ReversalDetector(BaseDetector):
         support = self._calculate_support_level_spring(df, trading_range_low=trading_range.get('low') if trading_range else None)
         if support is None:
             return {'detected': False, 'reason': 'no_trading_range'}
-        range_pct = (df['High'].max() - df['Low'].min()) / max(df['Low'].min(), 1e-9)
-        if range_pct >= self.config.spring_range_threshold:
-            return {'detected': False, 'reason': 'range_too_wide'}
+        if trading_range is None:
+            range_pct = (df['High'].max() - df['Low'].min()) / max(df['Low'].min(), 1e-9)
+            if range_pct >= self.config.spring_range_threshold:
+                return {'detected': False, 'reason': 'range_too_wide'}
 
         search_window = min(30, len(df))
         recent = df.tail(search_window).reset_index(drop=True)
@@ -487,24 +561,28 @@ class ReversalDetector(BaseDetector):
         springs = []
         if USE_VECTORIZED:
             try:
-                springs = self._detect_spring_vectorized(recent, support, original_index)
+                springs = self._detect_spring_vectorized(recent, support, original_index, trading_range)
             except Exception as e:
                 logger.warning(f"Vectorized Spring detection failed: {e}. Falling back to iterative.")
-                springs = self._detect_spring_iterative(recent, support, original_index)
+                springs = self._detect_spring_iterative(recent, support, original_index, trading_range)
         else:
-            springs = self._detect_spring_iterative(recent, support, original_index)
+            springs = self._detect_spring_iterative(recent, support, original_index, trading_range)
 
         if springs:
             for s in springs:
                 s['st_confirmed'] = self._verify_spring_st(s)
-            fresh_springs = [s for s in springs if not self._is_signal_stale(s['date'], 'spring')]
+                # If st is confirmed and classification was candidate, upgrade to confirmed
+                if s.get('st_confirmed') and s.get('classification') == 'candidate':
+                    s['classification'] = 'confirmed'
+                    s['lifecycle_status'] = 'confirmed'
+            fresh_springs = [s for s in springs if not self._is_signal_stale(s['date'], 'spring') and s.get('filter_passed')]
             if fresh_springs:
                 return {
                     'detected': True, 'signals': springs, 'fresh_signals': fresh_springs,
                     'latest_spring': fresh_springs[-1], 'method': 'enhanced_spring_detection_with_decay',
                     'signal_age_days': self._get_signal_age_days(fresh_springs[-1]['date'])
                 }
-            return {'detected': False, 'reason': 'all_spring_signals_stale'}
+            return {'detected': False, 'signals': springs, 'reason': 'all_spring_signals_stale'}
         return {'detected': False, 'reason': 'no_spring_found'}
 
     def _calculate_support_level_spring(self, df: pd.DataFrame, trading_range_low: float = None) -> Optional[float]:
@@ -548,165 +626,248 @@ class ReversalDetector(BaseDetector):
                 return recovery_days
         return recovery_days
 
-    def _detect_spring_vectorized(self, recent: pd.DataFrame, support: float, original_index: Optional[pd.Index] = None) -> List[Dict]:
+    def _evaluate_spring_filters(
+        self,
+        recent: pd.DataFrame,
+        cur_idx: int,
+        rec_idx: int,
+        support: float,
+        trading_range: Optional[dict] = None,
+        never_recovered: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Spring 5重级联过滤评估
+        """
+        row_breakdown = recent.iloc[cur_idx]
+        row_recovery = recent.iloc[rec_idx]
+        
+        # 价格与ATR
+        price = row_breakdown['Close']
+        atr = row_breakdown.get('ATR', 0.03 * price)
+        if pd.isna(atr) or atr <= 0:
+            atr = 0.03 * price
+        atr_pct = (atr / price * 100) if price > 0 else 3.0
+        
+        # 1. 位置过滤
+        pos_passed = True
+        pos_reason = None
+        has_tr_context = (trading_range is not None)
+        if not has_tr_context:
+            pos_passed = False
+            pos_reason = "No trading range context"
+
+        # 2. 跌破深度过滤
+        low_val = row_breakdown['Low']
+        penetration_pct = ((support - low_val) / support * 100) if support > 0 else 0.0
+        
+        depth_threshold = max(2.5 * atr_pct, 5.0)
+        depth_passed = penetration_pct <= depth_threshold
+        depth_reason = None
+        if not depth_passed:
+            depth_reason = f"Breakdown too deep ({penetration_pct:.2f}% > {depth_threshold:.2f}%)"
+
+        # 3. 成交量过滤
+        vol_passed = True
+        vol_reason = None
+        mean_vol = recent['Volume'].mean()
+        breakdown_vol_ratio = float(row_breakdown['Volume'] / mean_vol) if mean_vol > 0 else 1.0
+        
+        br_range = row_breakdown['High'] - row_breakdown['Low']
+        shadow_ratio = 0.0
+        if br_range > 0:
+            shadow_ratio = (min(row_breakdown['Open'], row_breakdown['Close']) - row_breakdown['Low']) / br_range
+
+        # Check A-share limit down
+        is_limit_down = False
+        try:
+            from ..china_market_helper import ChinaMarketHelper
+            prev_close = recent['Close'].iloc[cur_idx - 1] if cur_idx > 0 else row_breakdown['Close']
+            limit_status = ChinaMarketHelper.detect_limit_status(row_breakdown, prev_close)
+            if limit_status.get('type') == 'limit_down':
+                is_limit_down = True
+        except Exception:
+            prev_close = recent['Close'].iloc[cur_idx - 1] if cur_idx > 0 else row_breakdown['Close']
+            chg = (row_breakdown['Close'] - prev_close) / prev_close if prev_close > 0 else 0.0
+            if chg <= -0.095 and abs(row_breakdown['Close'] - row_breakdown['Low']) / prev_close < 0.005:
+                is_limit_down = True
+
+        if is_limit_down:
+            vol_passed = True
+            vol_reason = "A-share limit down volume bypass"
+        else:
+            is_low_vol = breakdown_vol_ratio < 0.8
+            rec_range = row_recovery['High'] - row_recovery['Low']
+            rec_low = min(row_recovery['Low'], row_recovery['Close'])
+            rec_high = max(row_recovery['High'], row_recovery['Close'])
+            rec_range = rec_high - rec_low
+            rec_close_pos = (row_recovery['Close'] - rec_low) / rec_range if rec_range > 0 else 0.5
+            is_high_vol_with_shadow = (breakdown_vol_ratio > 1.5) and (shadow_ratio > 0.5 or rec_close_pos > 0.7)
+            
+            if not (is_low_vol or is_high_vol_with_shadow):
+                vol_passed = False
+                vol_reason = f"Volume ratio {breakdown_vol_ratio:.2f} not complying with Wyckoff rules"
+
+        # 4. 收回质量过滤
+        if never_recovered:
+            recovery_passed = False
+            recovery_days = 999
+            recovery_quality = 0.0
+            recovery_reason = "No recovery within 10 days"
+            rec_close_pos = 0.0
+            rec_ratio = 1.0
+        else:
+            max_rec_days = spring_max_recovery_days(atr_pct)
+            recovery_days = rec_idx - cur_idx
+            recovery_passed = recovery_days <= max_rec_days
+            
+            rec_low = min(row_recovery['Low'], row_recovery['Close'])
+            rec_high = max(row_recovery['High'], row_recovery['Close'])
+            rec_range = rec_high - rec_low
+            rec_close_pos = (row_recovery['Close'] - rec_low) / rec_range if rec_range > 0 else 0.5
+            
+            body_size = abs(row_recovery['Close'] - row_recovery['Open'])
+            body_ratio = body_size / rec_range if rec_range > 0 else 0.5
+            
+            recovery_quality = (rec_close_pos * 0.7 + body_ratio * 0.3) * 100.0
+            
+            recovery_reason = None
+            if not recovery_passed:
+                recovery_reason = f"Recovery took too long ({recovery_days} days > {max_rec_days} days)"
+            rec_ratio = round(row_recovery['Volume'] / row_breakdown['Volume'] if row_breakdown['Volume'] > 0 else 1.0, 2)
+
+        # 5. 后续确认过滤 (ST or JOC)
+        vol_to_ma = breakdown_vol_ratio
+        if vol_to_ma > 1.5:
+            spring_type = 'type_1_dangerous'
+            needs_st = True
+        elif vol_to_ma < 0.8:
+            spring_type = 'type_3_safe'
+            needs_st = False
+        else:
+            spring_type = 'type_2_neutral'
+            needs_st = True
+
+        filter_passed = pos_passed and depth_passed and vol_passed and recovery_passed
+        
+        if not depth_passed:
+            classification = "rejected"
+            failure_reason = depth_reason
+        elif not recovery_passed:
+            classification = "failed"
+            failure_reason = recovery_reason
+        elif not filter_passed:
+            classification = "failed"
+            failure_reason = f"Filters failed: Pos={pos_passed}, Vol={vol_passed}"
+        else:
+            if has_tr_context:
+                if needs_st:
+                    classification = "candidate"
+                else:
+                    classification = "confirmed"
+            else:
+                classification = "candidate"
+            failure_reason = None
+
+        filter_scores = {
+            "position": 100.0 if pos_passed else 0.0,
+            "penetration": 100.0 if depth_passed else 0.0,
+            "volume": 100.0 if vol_passed else 0.0,
+            "recovery": 100.0 if recovery_passed else 0.0
+        }
+
+        return {
+            "filter_scores": filter_scores,
+            "filter_passed": filter_passed,
+            "classification": classification,
+            "failure_reason": failure_reason,
+            "penetration_pct": round(penetration_pct, 2),
+            "recovery_quality": round(recovery_quality, 2),
+            "spring_type": spring_type,
+            "needs_secondary_test": needs_st,
+            "recovery_days": recovery_days,
+            "breakdown_volume_ratio": round(breakdown_vol_ratio, 2),
+            "vol_ratio": rec_ratio,
+            "close_position": round(rec_close_pos * 100, 1)
+        }
+
+    def _detect_spring_vectorized(self, recent: pd.DataFrame, support: float, original_index: Optional[pd.Index] = None, trading_range: Optional[dict] = None) -> List[Dict]:
         n = len(recent)
-        lows, closes, highs, opens, volumes = recent['Low'].values, recent['Close'].values, recent['High'].values, recent['Open'].values, recent['Volume'].values
+        lows = recent['Low'].values
+        closes = recent['Close'].values
+        volumes = recent['Volume'].values
+        
         breakdown_mask = lows[:-2] < support
-        safe_support = np.where(support > 1e-9, support, 1.0)
-        breakdown_pcts = (safe_support - lows[:-2]) / safe_support * 100
-        valid_breakdown = breakdown_mask & (breakdown_pcts >= 1) & (breakdown_pcts <= 5)
-        recovery_mask = closes[1:-1] > support
-        bullish_recovery = closes[1:-1] > closes[:-2]
-        safe_volumes = np.where(volumes[:-2] > 0, volumes[:-2], 1.0)
-        vol_ratios = volumes[1:-1] / safe_volumes
-        valid_volume = vol_ratios > 1.0
-        daily_ranges = highs[1:-1] - lows[1:-1]
-        safe_ranges = np.where(daily_ranges == 0, 1.0, daily_ranges)
-        close_positions = (closes[1:-1] - lows[1:-1]) / safe_ranges
-        #  孟洪涛阈值：使用 MENG_SPRING_RECOVERY_CLOSE_POS 替代硬编码 0.7
-        recovery_close_threshold = self.thresholds.MENG_SPRING_RECOVERY_CLOSE_POS
-        high_close = close_positions >= recovery_close_threshold
-        spring_candidates = valid_breakdown & recovery_mask & bullish_recovery & valid_volume & high_close
-        candidate_indices = np.where(spring_candidates)[0]
+        candidate_indices = np.where(breakdown_mask)[0]
         springs = []
+        
         for i in candidate_indices:
-            cur_idx, nxt_idx, d2_idx = i, i + 1, i + 2
+            cur_idx = i
+            d2_idx = i + 2
             if d2_idx >= n:
                 continue
-            follow_score = self._calculate_spring_follow_score(recent.iloc[nxt_idx], recent.iloc[d2_idx])
-            breakdown_pct = breakdown_pcts[i]
-            recovery_vol_r, nxt_close_pos = float(vol_ratios[i]), float(close_positions[i])
+            
+            # Find the actual recovery day (first day where close > support)
+            rec_idx = None
+            for j in range(cur_idx + 1, min(cur_idx + 10, n)):
+                if closes[j] > support:
+                    rec_idx = j
+                    break
+            
+            never_recovered = False
+            if rec_idx is None:
+                never_recovered = True
+                rec_idx = min(cur_idx + 1, n - 1)
+                
+            nxt_idx = rec_idx
+            eval_res = self._evaluate_spring_filters(recent, cur_idx, rec_idx, support, trading_range, never_recovered)
+            
+            follow_score = self._calculate_spring_follow_score(recent.iloc[nxt_idx], recent.iloc[min(nxt_idx + 1, n - 1)])
             recovery_pct = (closes[nxt_idx] - support) / support * 100 if support > 0 else 0
-            actual_recovery_days = self._count_recovery_days(recent, i, support)
-            total_score = min(recovery_vol_r * 15, 30) + min(nxt_close_pos * 25, 20) + min(follow_score * 3, 30) + min(recovery_pct, 10) + 10
+            
+            total_score = min(eval_res['vol_ratio'] * 15, 30) + min(eval_res['close_position'] / 100.0 * 25, 20) + min(follow_score * 3, 30) + min(recovery_pct, 10) + 10
             total_score = min(total_score, 100)
             
-            # Spring 量能分类与 ST 强制绑定 (符合 David Weis 原著)
-            mean_vol = recent['Volume'].mean()
-            breakdown_vol_ratio = float(volumes[cur_idx] / mean_vol) if mean_vol > 0 else 1.0
+            sig = {
+                'date': original_index[nxt_idx] if original_index is not None else recent.index[nxt_idx],
+                'breakdown_date': original_index[cur_idx] if original_index is not None else recent.index[cur_idx],
+                'breakdown_price': {
+                    "value": round(float(lows[cur_idx]), 2),
+                    "derivation": "lowest_in_breakdown_bar",
+                    "note": "跌破支撑位的价格点"
+                },
+                'support_level': {
+                    "value": round(support, 2),
+                    "derivation": "p5_p20_cluster_low",
+                    "note": "基于近期低点簇计算的支撑位"
+                },
+                'recovery_price': round(float(closes[nxt_idx]), 2),
+                'recovery_days': int(eval_res['recovery_days']),
+                'volume_ratio': round(eval_res['vol_ratio'], 2),
+                'close_position': round(eval_res['close_position'], 1),
+                'follow_up_score': follow_score,
+                'total_score': min(total_score, 100),
+                'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
+                'breakdown_volume_ratio': round(eval_res['breakdown_volume_ratio'], 2),
+                'breakdown_volume': float(volumes[cur_idx]),
+                'spring_type': eval_res['spring_type'],
+                'needs_secondary_test': eval_res['needs_secondary_test'],
+                'penetration_depth': round(float(eval_res['penetration_pct']), 2),
+                'confidence': 0.8 if eval_res['spring_type'] == 'type_3_safe' else 0.5,
+                # New fields
+                'filter_scores': eval_res['filter_scores'],
+                'filter_passed': eval_res['filter_passed'],
+                'classification': eval_res['classification'],
+                'failure_reason': eval_res['failure_reason'],
+                'penetration_pct': round(float(eval_res['penetration_pct']), 2),
+                'recovery_quality': round(float(eval_res['recovery_quality']), 2),
+                'lifecycle_status': 'failed' if eval_res['classification'] in ('failed', 'rejected') else 'active'
+            }
+            springs.append(sig)
             
-            # 解决极端缩量的“量比失真”
-            if 'turn' in recent.columns:
-                if recent['turn'].mean() < 0.5:
-                    breakdown_vol_ratio = min(breakdown_vol_ratio, 1.5)  # 惩罚性阻尼限制
-                    
-            penetration_depth = breakdown_pcts[i]
-            needs_secondary_test = False
-            is_valid = True
-            
-            if breakdown_vol_ratio > 1.5 and penetration_depth > 3.0:
-                spring_type = 'type_1_dangerous'      # 放量深跌，危险，不能买
-                is_valid = True
-                needs_secondary_test = True
-            elif breakdown_vol_ratio < 0.8 and penetration_depth < 1.5:
-                spring_type = 'type_3_safe'           # 缩量浅跌，安全，可立即买
-                needs_secondary_test = False
-            else:
-                spring_type = 'type_2_neutral'        # 中性，需等待 ST 确认
-                needs_secondary_test = True
-
-            if is_valid:
-                springs.append({
-                    'date': original_index[nxt_idx] if original_index is not None else recent.index[nxt_idx],
-                    'breakdown_date': original_index[cur_idx] if original_index is not None else recent.index[cur_idx],
-                    'breakdown_price': {
-                        "value": round(float(lows[cur_idx]), 2),
-                        "derivation": "lowest_in_breakdown_bar",
-                        "note": "跌破支撑位的价格点"
-                    },
-                    'support_level': {
-                        "value": round(support, 2),
-                        "derivation": "p5_p20_cluster_low",
-                        "note": "基于近期低点簇计算的支撑位"
-                    },
-                    'recovery_price': round(float(closes[nxt_idx]), 2), 'recovery_days': actual_recovery_days,
-                    'volume_ratio': round(recovery_vol_r, 2), 'close_position': round(nxt_close_pos * 100, 1),
-                    'follow_up_score': follow_score, 'total_score': min(total_score, 100),
-                    'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
-                    'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
-                    'breakdown_volume': float(volumes[cur_idx]),
-                    'spring_type': spring_type,
-                    'needs_secondary_test': needs_secondary_test,
-                    'penetration_depth': round(float(penetration_depth), 2),
-                    'confidence': 0.8 if spring_type == 'type_3_safe' else 0.5
-                })
         return springs
 
-    def _detect_spring_iterative(self, recent: pd.DataFrame, support: float, original_index: Optional[pd.Index] = None) -> List[Dict]:
-        springs = []
-        breakdown_mask = recent['Low'] < support
-        candidate_indices = recent.index[breakdown_mask]
-        for idx in candidate_indices:
-            i = recent.index.get_loc(idx)
-            if i + 2 >= len(recent):
-                continue
-            cur, nxt, d2 = recent.iloc[i], recent.iloc[i + 1], recent.iloc[i + 2]
-            breakdown_pct = (support - cur['Low']) / support * 100
-            if breakdown_pct > 5 or nxt['Close'] <= support or nxt['Close'] <= cur['Close']:
-                continue
-            recovery_vol_r = nxt['Volume'] / cur['Volume'] if cur['Volume'] > 0 else 1
-            if recovery_vol_r <= 1.0:
-                continue
-            nxt_range = nxt['High'] - nxt['Low']
-            nxt_close_pos = (nxt['Close'] - nxt['Low']) / nxt_range if nxt_range > 0 else 0.5
-            #  孟洪涛阈值：使用 MENG_SPRING_RECOVERY_CLOSE_POS 替代硬编码 0.7
-            if nxt_close_pos < self.thresholds.MENG_SPRING_RECOVERY_CLOSE_POS:
-                continue
-            follow_score = self._calculate_spring_follow_score(nxt, d2)
-            recovery_pct = (nxt['Close'] - support) / support * 100 if support > 0 else 0
-            actual_recovery_days = self._count_recovery_days(recent, i, support)
-            total_score = min(recovery_vol_r * 15, 30) + min(nxt_close_pos * 25, 20) + min(follow_score * 3, 30) + min(recovery_pct, 10) + 10
-            
-            # Spring 量能分类与 ST 强制绑定 (符合 David Weis 原著)
-            mean_vol = recent['Volume'].mean()
-            breakdown_vol_ratio = float(cur['Volume'] / mean_vol) if mean_vol > 0 else 1.0
-            
-            # 解决极端缩量的“量比失真”
-            if 'turn' in recent.columns:
-                if recent['turn'].mean() < 0.5:
-                    breakdown_vol_ratio = min(breakdown_vol_ratio, 1.5)  # 惩罚性阻尼限制
-                    
-            penetration_depth = breakdown_pct
-            needs_secondary_test = False
-            is_valid = True
-            
-            if breakdown_vol_ratio > 1.5 and penetration_depth > 3.0:
-                spring_type = 'type_1_dangerous'      # 放量深跌，危险，不能买
-                is_valid = True
-                needs_secondary_test = True
-            elif breakdown_vol_ratio < 0.8 and penetration_depth < 1.5:
-                spring_type = 'type_3_safe'           # 缩量浅跌，安全，可立即买
-                needs_secondary_test = False
-            else:
-                spring_type = 'type_2_neutral'        # 中性，需等待 ST 确认
-                needs_secondary_test = True
-
-            if is_valid:
-                springs.append({
-                    'date': original_index[nxt_idx] if original_index is not None else nxt.name,
-                    'breakdown_date': original_index[cur_idx] if original_index is not None else cur.name,
-                    'breakdown_price': {
-                        "value": round(float(cur['Low']), 2),
-                        "derivation": "lowest_in_breakdown_bar",
-                        "note": "跌破支撑位的价格点"
-                    },
-                    'support_level': {
-                        "value": round(support, 2),
-                        "derivation": "p5_p20_cluster_low",
-                        "note": "基于近期低点簇计算的支撑位"
-                    }, 
-                    'recovery_price': round(float(nxt['Close']), 2),
-                    'recovery_days': actual_recovery_days, 'volume_ratio': round(recovery_vol_r, 2),
-                    'close_position': round(nxt_close_pos * 100, 1), 'follow_up_score': follow_score,
-                    'total_score': min(total_score, 100), 'strength': 'strong' if total_score > 70 else 'normal' if total_score > 50 else 'weak',
-                    'breakdown_volume_ratio': round(breakdown_vol_ratio, 2),
-                    'breakdown_volume': float(cur['Volume']),
-                    'spring_type': spring_type,
-                    'needs_secondary_test': needs_secondary_test,
-                    'penetration_depth': round(float(penetration_depth), 2),
-                    'confidence': 0.8 if spring_type == 'type_3_safe' else 0.5
-                })
-        return springs
+    def _detect_spring_iterative(self, recent: pd.DataFrame, support: float, original_index: Optional[pd.Index] = None, trading_range: Optional[dict] = None) -> List[Dict]:
+        return self._detect_spring_vectorized(recent, support, original_index, trading_range)
 
     def _verify_spring_st(self, spring_dict: Dict) -> bool:
         """

@@ -204,6 +204,40 @@ class TradingRangeDetector(BaseDetector):
                 absorption_detected = True
                 absorption_score += 1.0  # 放量吸收信号强烈
 
+        invalidation_level = None
+        invalidation_reason = None
+        invalidation_severity = "none"
+        invalidated_at = None
+        transition_period = False
+        transition_reason = None
+
+        if is_broken:
+            transition_period = True
+            invalidated_at = self.data.index[-1]
+            if breakout_direction == "up":
+                invalidation_level = float(high)
+                invalidation_severity = "markup_breakout"
+                invalidation_reason = "Price breakout above trading range resistance (markup phase starting)"
+                transition_reason = f"Trading range broken to the upside at {high}"
+            elif breakout_direction == "down":
+                invalidation_level = float(low)
+                vol_ma_val = recent['Volume'].mean() if not recent.empty else 1.0
+                last_vol_val = recent['Volume'].iloc[-1] if not recent.empty else 0.0
+                if last_vol_val > vol_ma_val * 1.5:
+                    invalidation_severity = "distribution_risk"
+                    invalidation_reason = "Severe high-volume breakdown below support (distribution risk)"
+                    transition_reason = f"Trading range breakdown below support at {low} on high volume"
+                else:
+                    invalidation_severity = "invalidated"
+                    invalidation_reason = "Price broke down below trading range support"
+                    transition_reason = f"Trading range breakdown below support at {low}"
+        elif invalidated_tr:
+            transition_period = True
+            invalidation_severity = "warning"
+            invalidation_reason = "Failed breakout or breakdown detected, trading range unstable"
+            transition_reason = "TR boundaries violated and price retraced"
+            invalidated_at = self.data.index[-1]
+
         duration = min(window, len(self.data))
         # 记录 TR 窗口起点，供 BreakoutAnalyzer / P&F 只在当前区间之后搜索突破与计数
         range_start_idx = max(0, len(self.data) - duration)
@@ -233,4 +267,10 @@ class TradingRangeDetector(BaseDetector):
             '_atr_pct': round(atr_pct, 4) if atr_pct else None,
             'absorption_detected': absorption_detected,
             'absorption_score': absorption_score,
+            'invalidation_level': invalidation_level,
+            'invalidation_reason': invalidation_reason,
+            'invalidation_severity': invalidation_severity,
+            'invalidated_at': invalidated_at,
+            'transition_period': transition_period,
+            'transition_reason': transition_reason,
         }
