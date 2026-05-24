@@ -16,6 +16,155 @@
 
 核心原则：智能体只编排工具和解释结果，不重新发明威科夫检测算法。所有信号事实必须来自现有分析引擎输出。
 
+## 架构总纲：双脑协同系统
+
+智能体采用“量化硬骨骼 + LLM 软大脑”的双脑协同架构。
+
+```mermaid
+flowchart TD
+    A["原始行情数据 OHLCV"] --> B["量化感知器官 Tools"]
+    B --> C["WyckoffOrchestrator"]
+    C --> D["EventsModel / ReportModel"]
+    D --> E["LLM ReAct Brain"]
+    E --> F["推理解释 / 决策审计解读 / 多周期调和"]
+    F --> G["结构化报告 / 风控建议 / 观察清单"]
+    G --> H["CLI / MCP / Web / 定时巡航"]
+```
+
+### 量化硬骨骼
+
+负责确定性分析：
+
+- K 线与成交量数据清洗。
+- 威科夫阶段识别。
+- Spring / JOC / SOS / LPS / LPSY / SOW 检测。
+- P&F 因果测算。
+- WIE 微观结构识别。
+- `strategy_decision_audit` 风控审计。
+- `TradingPlanModel` 与 `RiskAdviceModel` 生成。
+
+量化层输出强类型契约数据：
+
+```text
+EventsModel
+ReportModel
+TradingPlanModel
+RiskAdviceModel
+StrategyDecisionAuditModel
+```
+
+### LLM 软大脑
+
+负责非确定性编排与解释：
+
+- 识别用户意图。
+- 自动选择工具。
+- 解释决策审计日志。
+- 调和日线、周线、月线冲突。
+- 总结 RS、市场环境和微观结构背景。
+- 生成用户容易理解的投研式报告。
+- 对风险建议进行自然语言展开。
+
+LLM 不允许直接创造技术信号。凡是涉及交易结构的判断，必须回到量化工具输出。
+
+## 核心应用场景
+
+### 场景一：全自动市场巡航与机会发掘 Agent
+
+可行性：高。适合作为第一批落地功能。
+
+工作流：
+
+1. Agent 定时或通过命令触发股票池扫描。
+2. 调用批量扫描器获取候选股票。
+3. 对每个标的调用 `WyckoffOrchestrator` 生成 `ReportModel`。
+4. 读取 `strategy_decision_audit`。
+5. 筛选高质量机会：
+   - `signal_quality.score >= 80`
+   - 无 `watch_only`
+   - 无 `blocked`
+   - 非 `transition_period`
+   - 有 JOC + LPS 或明确高质量突破结构
+6. 生成投研日报。
+
+输出示例：
+
+```text
+今日扫描到 3 个高质量威科夫结构：
+1. XXXX：JOC 后缩量 LPS，RS 强于大盘，审计日志无风控拦截。
+2. YYYY：Spring 已确认，等待 JOC。
+3. ZZZZ：突破质量高，但尚未回测，列入观察。
+```
+
+### 场景二：交互式威科夫私人投顾
+
+可行性：高。适合作为 MVP 核心体验。
+
+工作流：
+
+1. 用户自然语言提问。
+2. Agent 自动识别标的、持仓、风险偏好。
+3. 调用 `orchestrator.run_analysis(symbol)`。
+4. 读取 `EventsModel`、`trading_plan`、`risk_advice`。
+5. 用通俗但专业的语言回答。
+
+示例：
+
+```text
+用户：这只股票跌了这么多，我现在能抄底吗？
+
+Agent：不建议接飞刀。系统显示当前不是 Spring，而是旧结构失效后的过渡期；
+LPS 未确认，交易计划为观望，仓位建议 0%。如果后续重新形成 TR 并出现 JOC+LPS，
+才进入低风险观察区。
+```
+
+## 技术选型
+
+### Agent 框架
+
+MVP 阶段：
+
+- 先使用项目内轻量 Agent 编排。
+- IntentRouter 用规则实现。
+- ResponseComposer 使用模板 + 字段映射。
+
+增强阶段：
+
+- 可接入 LangChain 或 LlamaIndex。
+- 如果需要多智能体协同，可考虑 Microsoft AutoGen。
+
+### 协议对齐
+
+优先支持 MCP：
+
+- 将 `WyckoffOrchestrator`、P&F 测算、股票池扫描、持仓诊断包装成 MCP 工具。
+- MCP 层只做参数转发，不做业务判断。
+
+### 记忆引擎
+
+短期记忆：
+
+- 当前会话上下文。
+- 最近一次分析结果。
+- 用户观察清单。
+- 当前持仓输入。
+
+长期记忆：
+
+- 历史 `strategy_decision_audit`。
+- 历史分析结果。
+- 阈值调优记录。
+
+初版使用 JSON / SQLite，后续再考虑 Vector DB。
+
+## 三阶段路线图
+
+| 阶段 | 任务目标 | 核心输出 |
+| --- | --- | --- |
+| PHASE 1 | 工具原子化包装 | 将 `run_analysis`、P&F 测算、扫描器包装成标准 Python functions，并提供详细 docstrings |
+| PHASE 2 | ReAct 决策环开发 | 支持自然语言输入，自动选择工具，解释 `strategy_decision_audit` |
+| PHASE 3 | 报告图表智能生成 | 生成投研式报告，并为后续 Streamlit / React 看板提供结构化数据 |
+
 ## 定位
 
 ### 应做

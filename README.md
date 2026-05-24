@@ -11,7 +11,8 @@
 
 **🌌 探照灯（Searchlight）原则量化践行者 —— 专业级 AI Agent 威科夫理论深度量化分析引擎**
 
-*专为 Claude Code, Cursor, MCP 客户端及专业交易员打造的「量化算法 + 贝叶斯大脑」双核决策包。*
+_专为 Claude Code, Cursor, MCP 客户端及专业交易员打造的「量化算法 + 贝叶斯大脑」双核决策包。_
+
 </div>
 
 ---
@@ -38,9 +39,9 @@
 1. **🧠 零幻觉底座**：形态识别、趋势边界由本地高阶向量化算法计算，AI 不再“瞎画线”，彻底杜绝图表幻觉。
 2. **📏 贝叶斯微观动力学 (WIE 3.1)**：独家引入 6x6 非对称隐马尔可夫模型 (HMM)，基于因果定律为 S0-S5 市场微观状态提供概率后验推演。
 3. **🛡️ 孟洪涛二期精细化重构**：
-   * **Spring 5重硬性过滤**：收盘位置必须在底部 range 70% 以上才予承认，硬性拦截虚弱的伪反弹。
-   * **AR 立即反弹检测**：实现“立即反弹 -> 5日扩展 -> Swing 极值 -> 15日兜底”的 4 层自适应检测架构。
-   * **LPS 动态 ATR 容差**：引入 0.5~1.5x ATR 动态波动率防溢价，完美过滤高波动市场的虚假跌破。
+   - **Spring 5重硬性过滤**：收盘位置必须在底部 range 70% 以上才予承认，硬性拦截虚弱的伪反弹。
+   - **AR 立即反弹检测**：实现“立即反弹 -> 5日扩展 -> Swing 极值 -> 15日兜底”的 4 层自适应检测架构。
+   - **LPS 动态 ATR 容差**：引入 0.5~1.5x ATR 动态波动率防溢价，完美过滤高波动市场的虚假跌破。
 4. **⚠️ 区间失效风控 (Invalidated TR)**：当价格实质性跌破交易区间底部且未能规定时间内拉回时，主动废除垂直测算目标，并强力警示 AI：“结构已坏，必须等待重建”，保障资金安全。
 5. **🔄 动态术语自适应**：根据当前处于「吸筹」还是「派发」阶段，动态切换概念释义，从语义底层完全杜绝 LPS 与 LPSY（Last Point of Supply，空头入场点）的混淆。
 
@@ -54,23 +55,23 @@
 graph TD
     User([用户交易指令 / 提问]) -->|触发| Skill[SKILL.md - 决策大脑]
     Skill -->|指令路由/参数解析| Facade{src/wyckoff/facade.py - 统一入口}
-    
+
     %% 量化计算轨
     Facade -->|1. 获取行情数据| Data[core/data_fetcher.py]
     Data -.->|A股/美股/港股| API[Baostock / YFinance]
-    
+
     Facade -->|2. 特征物理量提取| Pattern[core/pattern_detector.py]
     Pattern -->|孟洪涛 5 重过滤| Spring[Spring/UT 校验器]
     Pattern -->|四层自然反弹检测| AR[AR 自动反弹引擎]
     Pattern -->|15日回测窗口打分| JOC[JOC 强度与测试质量对齐]
-    
+
     Facade -->|3. 微观概率推演| HMM[core/state_engine.py]
     HMM -->|S0-S5 后验转移概率| Bayesian[贝叶斯自适应背景]
 
     Facade -->|4. 因果测算与风控| PF[core/point_and_figure.py]
     PF -->|DRY 算法去重| PFCalc[点数图垂直测算]
     PF -->|区间破位强制拦截| InvalidTR[invalidated_tr 区间失效监测]
-    
+
     %% 合并输出与决策
     Spring & AR & JOC & Bayesian & PFCalc & InvalidTR -->|强类型 Pydantic Schema| Schemas[schemas.py]
     Schemas -->|结构化量化底表 JSON| Facade
@@ -168,8 +169,6 @@ wyckoff-stock-analysis/
 - [x] **v1.0 - v2.0**: 实现传统形态识别与因果点数图测算。
 - [x] **v3.0**: 引入贝叶斯 HMM 自适应微观概率推演，解耦形态与背景（探照灯视角）。
 - [x] **v3.1 (Meng Refined 二期)**: 精细化重构 Spring 5 重过滤、AR 4 层反弹、LPS ATR 动态容差、区间失效风控、以及双计算轨算法 100% 对齐。
-- [ ] **v3.2 (计划中)**: 接入实时 Level-2 订单簿数据流，以微秒级大单吃货特征（Order Book Imbalance）自适应修正 HMM 转移矩阵。
-- [ ] **v4.0 (长期规划)**: 实现基于强化学习 (RL) 的自动执行逻辑代理，将威科夫形态信号直接映射为动态仓位风控策略。
 
 ---
 
