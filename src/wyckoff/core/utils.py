@@ -152,6 +152,18 @@ class PhaseAdapter:
         return False
 
     @staticmethod
+    def is_reaccumulation(phase: Any) -> bool:
+        """判断是否为再吸筹/再积累阶段"""
+        p_str = phase.value if hasattr(phase, 'value') else str(phase)
+        return bool(re.search(r'\bRe-?accumulation\b', p_str, re.I)) or '再积累' in p_str or '再吸筹' in p_str
+
+    @staticmethod
+    def is_redistribution(phase: Any) -> bool:
+        """判断是否为再派发阶段"""
+        p_str = phase.value if hasattr(phase, 'value') else str(phase)
+        return bool(re.search(r'\bRe-?distribution\b', p_str, re.I)) or '再派发' in p_str
+
+    @staticmethod
     def get_market_side(phase: Union[str, WyckoffPhase]) -> str:
         """返回买方(bullish)或卖方(bearish)市场侧"""
         # 优先级：Accumulation/Markup 为 Bullish

@@ -16,8 +16,23 @@ class MengTrendDetector(BaseDetector):
         self.data = data
         self.config = config
         self.thresholds = thresholds
+        self._creek_cache = {}
 
     def _calculate_adaptive_creek(self, df: pd.DataFrame, window: int = 60, idx: Optional[int] = None) -> float:
+        if df is None or len(df) == 0:
+            return 0.0
+            
+        current_idx = idx if idx is not None else len(df) - 1
+        slice_len = current_idx + 1
+        cache_key = (slice_len, window)
+        if cache_key in self._creek_cache:
+            return self._creek_cache[cache_key]
+            
+        val = self._calculate_adaptive_creek_impl(df, window, idx)
+        self._creek_cache[cache_key] = val
+        return val
+
+    def _calculate_adaptive_creek_impl(self, df: pd.DataFrame, window: int = 60, idx: Optional[int] = None) -> float:
         """
         自适应计算 Creek（小溪阻力线）- 孟洪涛原则升级版
         
@@ -155,7 +170,7 @@ class MengTrendDetector(BaseDetector):
         phase = self._current_phase or ''
         if PhaseAdapter.is_distribution(phase):
             return False
-        if any(k in phase for k in ('Re-accumulation', '再积累', 'Reaccumulation')):
+        if PhaseAdapter.is_reaccumulation(phase):
             return True
         if PhaseAdapter.is_markup(phase):
             return True
