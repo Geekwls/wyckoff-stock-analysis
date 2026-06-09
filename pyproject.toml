@@ -30,6 +30,10 @@ wyckoff-mcp = "apps.mcp.server:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+filterwarnings = [
+    "ignore::FutureWarning",
+    "ignore::DeprecationWarning",
+]
 markers = [
     "integration: tests that require live network or external data sources",
 ]

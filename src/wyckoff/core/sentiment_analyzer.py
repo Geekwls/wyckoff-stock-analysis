@@ -181,7 +181,7 @@ class SentimentAnalyzer:
     
     def _calculate_realized_volatility(self, data: pd.DataFrame, index_symbol: str) -> tuple[Optional[float], str]:
         try:
-            returns = data['Close'].pct_change().dropna()
+            returns = data['Close'].pct_change(fill_method=None).dropna()
             if len(returns) < 20:
                 return None, ""
             volatility = returns.rolling(20).std().iloc[-1] * np.sqrt(252) * 100

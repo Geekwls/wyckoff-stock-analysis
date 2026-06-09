@@ -229,7 +229,7 @@ class DataValidator:
             return errors
 
         # 计算涨跌幅
-        daily_change = df['Close'].pct_change() * 100
+        daily_change = df['Close'].pct_change(fill_method=None) * 100
 
         # 检查极端涨跌幅
         extreme_changes = df[abs(daily_change) > DataValidator.MAX_DAILY_CHANGE_PCT]
@@ -297,7 +297,7 @@ class DataValidator:
 
         # 极端涨跌幅
         if len(df) >= 2:
-            extreme = (df['Close'].pct_change().abs() > cls.MAX_DAILY_CHANGE_PCT / 100).sum()
+            extreme = (df['Close'].pct_change(fill_method=None).abs() > cls.MAX_DAILY_CHANGE_PCT / 100).sum()
             if extreme:
                 issues.append(QualityIssue("warning", "extreme_return", f"极端涨跌幅 {int(extreme)} 行 > ±{cls.MAX_DAILY_CHANGE_PCT}%", int(extreme)))
 

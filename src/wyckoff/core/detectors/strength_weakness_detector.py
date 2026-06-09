@@ -338,7 +338,7 @@ class StrengthWeaknessDetector(BaseDetector):
         df = self.data.tail(window).copy()
         vol_ma_all = self.data['Volume'].rolling(20, min_periods=1).mean().shift(1).bfill()
         vol_ma = vol_ma_all.reindex(df.index)
-        price_pct_change = df['Close'].pct_change()
+        price_pct_change = df['Close'].pct_change(fill_method=None)
 
         # 使用配置中的阈值
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['moderate']
@@ -580,7 +580,7 @@ class StrengthWeaknessDetector(BaseDetector):
         df = self.data.tail(window).copy()
         vol_ma_all = self.data['Volume'].rolling(20, min_periods=1).mean().shift(1).bfill()
         vol_ma = vol_ma_all.reindex(df.index)
-        price_pct_change = df['Close'].pct_change()
+        price_pct_change = df['Close'].pct_change(fill_method=None)
 
         vol_ratio_threshold = self.thresholds.VOLUME_CONFIRMATION['moderate']
         price_change_threshold = self.thresholds.SOW_PRICE_CHANGE_DEFAULT
@@ -1298,7 +1298,7 @@ class StrengthWeaknessDetector(BaseDetector):
 
         df = self.data.copy()
         df['Volume_MA20'] = df['Volume'].rolling(20).mean()
-        df['Price_Change'] = df['Close'].pct_change()
+        df['Price_Change'] = df['Close'].pct_change(fill_method=None)
 
         variants = []
         vol_ratio = self.thresholds.VOLUME_CONFIRMATION['strong']

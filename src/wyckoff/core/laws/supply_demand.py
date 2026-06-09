@@ -161,7 +161,7 @@ class SupplyDemandMixin:
         if self.data is None or len(self.data) < 20:
             return {"detected": False}
         df = self.data.tail(60)
-        price_dropped = df['Close'].pct_change(5).min() < -0.08
+        price_dropped = df['Close'].pct_change(periods=5, fill_method=None).min() < -0.08
         high_vol_on_low = (
             (df['Volume'] > df['Volume_MA20'] * 1.5) &
             (df['Close'] < df['Close'].rolling(20).mean())
@@ -176,7 +176,7 @@ class SupplyDemandMixin:
         if self.data is None or len(self.data) < 20:
             return {"detected": False}
         df = self.data.tail(60)
-        price_rallied = df['Close'].pct_change(5).max() > 0.08
+        price_rallied = df['Close'].pct_change(periods=5, fill_method=None).max() > 0.08
         high_vol_on_high = (
             (df['Volume'] > df['Volume_MA20'] * 1.5) &
             (df['Close'] > df['Close'].rolling(20).mean())

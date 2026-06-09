@@ -270,7 +270,7 @@ def continuous_price_confirmation(
         return False
     try:
         tail = df.tail(days + 1)
-        changes = tail['Close'].pct_change().dropna()
+        changes = tail['Close'].pct_change(fill_method=None).dropna()
         if len(changes) == 0:
             return False
         positive_ratio = (changes > 0).sum() / len(changes)
