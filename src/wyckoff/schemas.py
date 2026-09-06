@@ -437,6 +437,9 @@ class TradingPlanModel(BaseModel):
     targets: TargetsModel = Field(description="目标位")
     position_sizing: PositionSizingModel = Field(description="仓位管理")
     holding_period: str = Field(description="持有周期")
+    scale_in_plan: Optional[Dict[str, Any]] = Field(default=None, description="金字塔三段式建仓计划(试探/确认/顺势)")
+    trailing_stop_plan: Optional[Dict[str, Any]] = Field(default=None, description="阶梯移动跟踪止损计划")
+    sector_synergy: Optional[Dict[str, Any]] = Field(default=None, description="板块协同与共振状态")
 
 
 # ============================================================

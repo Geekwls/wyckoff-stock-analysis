@@ -706,3 +706,66 @@ class SignalExtractor:
                         'field': field,
                     }
         return {}
+
+    @classmethod
+    def calculate_signal_aging(cls, event: Any, reference_date: Optional[Any] = None,
+                               max_active_days: int = 30, half_life_days: float = 15.0) -> Dict[str, Any]:
+        """
+        计算信号生命周期与时效性衰减
+        
+        Args:
+            event: 事件字典或对象
+            reference_date: 参考日期（通常为最新 K 线日期），未提供则使用当前系统时间
+            max_active_days: 活跃阈值天数，超过则视为陈旧滞留信号
+            half_life_days: 衰减半衰期
+            
+        Returns:
+            Dict 包含 age_days, decay_factor, is_stale, note
+        """
+        if not event:
+            return {'age_days': None, 'decay_factor': 1.0, 'is_stale': False, 'note': '无事件数据'}
+            
+        latest = cls._latest(event) or event
+        sig_date = cls._get(event, 'date', cls._get(latest, 'date'))
+        if not sig_date:
+            return {'age_days': None, 'decay_factor': 1.0, 'is_stale': False, 'note': '未标记发生日期'}
+            
+        if isinstance(sig_date, str):
+            try:
+                sig_date = datetime.strptime(sig_date, '%Y-%m-%d')
+            except Exception:
+                return {'age_days': None, 'decay_factor': 1.0, 'is_stale': False, 'note': f'日期格式无法解析: {sig_date}'}
+                
+        ref = reference_date
+        if ref is not None:
+            if isinstance(ref, str):
+                try:
+                    ref = datetime.strptime(ref, '%Y-%m-%d')
+                except Exception:
+                    ref = datetime.now()
+            elif hasattr(ref, 'to_pydatetime'):
+                ref = ref.to_pydatetime()
+        else:
+            ref = datetime.now()
+            
+        if hasattr(ref, 'tzinfo') and hasattr(sig_date, 'tzinfo'):
+            if ref.tzinfo and not sig_date.tzinfo:
+                sig_date = sig_date.replace(tzinfo=ref.tzinfo)
+            elif not ref.tzinfo and sig_date.tzinfo:
+                sig_date = sig_date.replace(tzinfo=None)
+                
+        age_days = max(0, (ref - sig_date).days)
+        decay_factor = float(np.exp(-0.693 * age_days / max(1.0, half_life_days)))
+        is_stale = age_days > max_active_days
+        
+        if is_stale:
+            note = f"信号距今已 {age_days} 天（超过 {max_active_days} 天活跃窗口），已进入衰减滞留期 (衰减系数: {decay_factor:.2f})"
+        else:
+            note = f"信号距今 {age_days} 天，处于有效生命周期内 (时效权重: {decay_factor:.2f})"
+            
+        return {
+            'age_days': age_days,
+            'decay_factor': round(decay_factor, 4),
+            'is_stale': is_stale,
+            'note': note
+        }

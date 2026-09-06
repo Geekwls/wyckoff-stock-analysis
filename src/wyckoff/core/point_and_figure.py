@@ -350,10 +350,23 @@ class PointAndFigureCalculator:
         if horizontal_count < min_threshold:
             return {
                 'count': horizontal_count,
+                'full_count': horizontal_count,
+                'semi_count': 0,
                 'targets': {},
+                'semi_targets': {},
                 '_threshold_used': min_threshold,
                 '_threshold_note': f'水平计数{horizontal_count}列 < 阈值{min_threshold}列（孟洪涛原则）'
             }
+        
+        # 计算分阶段局部保守计数 (Semi-Count，对应 Phase C 至 Phase D)
+        # 若指定了 phase_c_col_idx，则从该列开始计；否则按经典威科夫 0.618 黄金分割比例取右侧列
+        phase_c_col_idx = kwargs.get('phase_c_col_idx')
+        if phase_c_col_idx is not None:
+            semi_cols = [c for c in dense_columns if c.get('start_idx', 0) >= phase_c_col_idx]
+            semi_count = max(3, len(semi_cols)) if semi_cols else max(3, int(round(horizontal_count * 0.618)))
+        else:
+            semi_count = max(3, int(round(horizontal_count * 0.618)))
+        semi_count = min(semi_count, horizontal_count)
         
         # 计算积累区的价格范围
         all_highs = [col['high'] for col in accumulation_columns]
@@ -370,6 +383,7 @@ class PointAndFigureCalculator:
         # 威科夫因果法则核心公式：水平计数 × 箱体大小 = 目标幅度
         # 每1列盘整 = 1格箱体的价格推动力
         base_effect = horizontal_count * box_size
+        semi_effect = semi_count * box_size
         
         # 确定突破方向（基于最后一列的方向）
         last_column = columns[-1] if columns else None
@@ -392,6 +406,10 @@ class PointAndFigureCalculator:
                 'target_3': self._round_by_step(dist_base - base_effect * 2.618, box_size),
                 'full_target': self._round_by_step(dist_base - base_effect * 3.0, box_size)
             }
+            semi_targets = {
+                'target_1': self._round_by_step(dist_base - semi_effect * 1.0, box_size),
+                'target_2': self._round_by_step(dist_base - semi_effect * 1.618, box_size),
+            }
             base_price = dist_base
             breakout_direction = 'down'
             direction_note = '派发期因果法则：水平准备触发下跌目标'
@@ -402,6 +420,10 @@ class PointAndFigureCalculator:
                 'target_2': self._round_by_step(acc_base + base_effect * 1.618, box_size),
                 'target_3': self._round_by_step(acc_base + base_effect * 2.618, box_size),
                 'full_target': self._round_by_step(acc_base + base_effect * 3.0, box_size)
+            }
+            semi_targets = {
+                'target_1': self._round_by_step(acc_base + semi_effect * 1.0, box_size),
+                'target_2': self._round_by_step(acc_base + semi_effect * 1.618, box_size),
             }
             base_price = acc_base
             breakout_direction = 'up'
@@ -414,6 +436,10 @@ class PointAndFigureCalculator:
                 'target_3': self._round_by_step(acc_base + base_effect * 2.618, box_size),
                 'full_target': self._round_by_step(acc_base + base_effect * 3.0, box_size)
             }
+            semi_targets = {
+                'target_1': self._round_by_step(acc_base + semi_effect * 1.0, box_size),
+                'target_2': self._round_by_step(acc_base + semi_effect * 1.618, box_size),
+            }
             base_price = acc_base
             direction_note = '突破方向向上：水平准备触发上涨目标'
         else:
@@ -424,11 +450,17 @@ class PointAndFigureCalculator:
                 'target_3': self._round_by_step(dist_base - base_effect * 2.618, box_size),
                 'full_target': self._round_by_step(dist_base - base_effect * 3.0, box_size)
             }
+            semi_targets = {
+                'target_1': self._round_by_step(dist_base - semi_effect * 1.0, box_size),
+                'target_2': self._round_by_step(dist_base - semi_effect * 1.618, box_size),
+            }
             base_price = dist_base
             direction_note = '突破方向向下：水平准备触发下跌目标'
         
         return {
             'horizontal_count': horizontal_count,
+            'full_count': horizontal_count,
+            'semi_count': semi_count,
             'vertical_count': vertical_count,
             'accumulation_range': {
                 'high': accumulation_high,
@@ -436,9 +468,14 @@ class PointAndFigureCalculator:
                 'columns': horizontal_count
             },
             'base_effect': self._round_by_step(base_effect, box_size),
+            'semi_effect': self._round_by_step(semi_effect, box_size),
             'breakout_direction': breakout_direction,
             'base_price': base_price,
             'targets': targets,
+            'semi_targets': semi_targets,
+            'conservative_target': semi_targets.get('target_1'),
+            'primary_target': targets.get('target_1'),
+            'macro_target': targets.get('target_2'),
             'phase': phase,
             'direction_note': direction_note,
             'is_distribution': is_distribution,
@@ -598,11 +635,18 @@ def calculate_cause_effect_from_pnf(data: pd.DataFrame,
         'reversal_boxes': reversal_boxes,
         'total_columns': pnf_data.get('total_columns', 0),
         'horizontal_count': result.get('horizontal_count', 0),
+        'full_count': result.get('full_count', result.get('horizontal_count', 0)),
+        'semi_count': result.get('semi_count', 0),
         'vertical_count': result.get('vertical_count', 0),
         'accumulation_range': result.get('accumulation_range', {}),
         'base_effect': result.get('base_effect', 0),
+        'semi_effect': result.get('semi_effect', 0),
         'breakout_direction': result.get('breakout_direction', 'up'),
         'targets': result.get('targets', {}),
+        'semi_targets': result.get('semi_targets', {}),
+        'conservative_target': result.get('conservative_target'),
+        'primary_target': result.get('primary_target'),
+        'macro_target': result.get('macro_target'),
         'description': description,
         '_pnf_method': pnf_method,
         'derivation': derivation,

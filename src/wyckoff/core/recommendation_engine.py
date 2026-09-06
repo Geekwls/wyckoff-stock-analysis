@@ -922,6 +922,34 @@ class RecommendationEngine:
                         reasons.append("WIE3 高熵降级，微观结构置信度不足，评分上限 65")
                     final_score = capped
 
+        # 板块共振与协同加权 (Sector Synergy)
+        sector_state = (
+            pattern_results.get('sector_state') or pattern_results.get('sector_synergy')
+            if isinstance(pattern_results, dict) else None
+        )
+        if sector_state:
+            sec_st = sector_state.get('state')
+            sec_name = sector_state.get('name') or '所属板块'
+            if sec_st == 'HEALTHY_MAINLINE':
+                final_score = min(100, final_score + 12)
+                reasons.append(f"🚀 板块共振加成：{sec_name}处于【主线健康推进】状态 (+12分)")
+            elif sec_st == 'DISAGREEMENT_PULLBACK':
+                final_score = min(100, final_score + 8)
+                reasons.append(f"💡 板块良性回踩：{sec_name}处于【主流分歧回撤】阶段，提供低吸加成 (+8分)")
+            elif sec_st == 'DISTRIBUTION_RISK':
+                capped = self._score_cap(
+                    final_score,
+                    45,
+                    'scoring.cap.sector_distribution_risk',
+                    f"板块逆风：{sec_name}处于【退潮派发风险】阶段，评分上限 45",
+                    audit=audit,
+                )
+                if capped != final_score:
+                    reasons.append(f"⚠️ 板块逆风风控：{sec_name}处于【退潮派发风险】阶段，评分上限 45")
+                final_score = capped
+            elif sec_st == 'CONSENSUS_CLIMAX':
+                reasons.append(f"🔥 板块预警：{sec_name}处于【连续一致高潮】阶段，警惕冲高回落，不宜盲目追涨")
+
         background_adjustment = final_score - structure_score
         primary_reason = None
         searchlight = (
@@ -1538,6 +1566,144 @@ class RecommendationEngine:
                 context={'target_1': target_1, 'target_2': target_2}
             )
 
+        # ── 板块协同与风险否决 ──
+        sector_synergy = (
+            pattern_results.get('sector_state') or pattern_results.get('sector_synergy')
+            if isinstance(pattern_results, dict) else None
+        )
+        if sector_synergy and direction != "观望":
+            sec_st = sector_synergy.get('state')
+            if sec_st == "DISTRIBUTION_RISK" and ("做多" in direction or is_bullish):
+                prev = direction
+                direction = "观望"
+                zone = "所属行业处于退潮派发风险，板块逆风防假突破"
+                pos_sizing = PositionSizingModel(conservative="0%", moderate="0%", aggressive="0%")
+                _audit_watch(
+                    'plan.sector_distribution_risk_veto',
+                    f"行业板块【{sector_synergy.get('name') or '相关行业'}】处于退潮派发期，系统触发板块级风控，禁止做多",
+                    prev_direction=prev
+                )
+
+        # ── 金字塔三段式建仓计划与阶梯移动止损 ──
+        scale_in_plan = None
+        trailing_stop_plan = None
+        if direction == "做多":
+            conservative_val = stop.conservative if isinstance(stop.conservative, (int, float)) and stop.conservative > 0 else round(current_price - 2.0 * atr_val, 2)
+            creek_lvl = joc.get('creek_level') if isinstance(joc, dict) else getattr(joc, 'creek_level', None)
+            if not creek_lvl:
+                tr_high = tr.get('high') if isinstance(tr, dict) else getattr(tr, 'high', None)
+                creek_lvl = tr_high or round(current_price * 1.05, 2)
+            lps_p = lps.get('price') if isinstance(lps, dict) else getattr(lps, 'price', None)
+            if not lps_p:
+                lps_p = current_price
+
+            scale_in_plan = {
+                "stage_1_pilot": {
+                    "name": "首笔试探仓",
+                    "weight": "20%-30%",
+                    "trigger": "Phase C Spring/ST 缩量确认低吸",
+                    "entry_price": zone,
+                    "stop_loss": conservative_val,
+                    "note": "底部轻仓试水，验证底部承接意图，极小止损试错"
+                },
+                "stage_2_confirmation": {
+                    "name": "突破确认仓",
+                    "weight": "30%-40%",
+                    "trigger": "Phase D JOC 放量跃过小溪且缩量回踩 Creek (LPS) 站稳",
+                    "entry_price": f"{round(creek_lvl, 2)} - {round(creek_lvl + 0.5 * atr_val, 2)}",
+                    "stop_loss": round(creek_lvl * 0.98, 2),
+                    "note": "小溪突破确立，供求彻底逆转，主升浪前夕关键加仓点"
+                },
+                "stage_3_trend_addition": {
+                    "name": "顺势主升仓",
+                    "weight": "30%",
+                    "trigger": "冲破 TR 上沿阻力，均线多头排列进入 Phase E",
+                    "entry_price": f"{round(creek_lvl * 1.02, 2)} - {round(creek_lvl * 1.04, 2)}",
+                    "stop_loss": round(creek_lvl * 0.98, 2),
+                    "note": "单边上涨确立，头寸打满，开启动态移动跟踪止损"
+                }
+            }
+
+            trailing_stop_plan = {
+                "stage_1_initial": {
+                    "name": "阶段一：初始硬防守",
+                    "stop_price": conservative_val,
+                    "trigger_condition": "试探仓建仓时确立",
+                    "logic": "位于 Spring / TR 下沿下方，跌破则证明底部形态证伪，坚决止损"
+                },
+                "stage_2_breakeven": {
+                    "name": "阶段二：保本止损上移",
+                    "stop_price": round(creek_lvl, 2),
+                    "trigger_condition": "JOC 放量突破小溪成功并创出区间新高",
+                    "logic": "原 Creek 阻力转换为第一道强支撑，价格不应再跌回 Creek 下方"
+                },
+                "stage_3_lps_protection": {
+                    "name": "阶段三：锁定利润防守",
+                    "stop_price": round(lps_p * 0.985, 2),
+                    "trigger_condition": "LPS 回踩确认并再度放量上攻",
+                    "logic": "抬高防守线至 LPS 结构低点下方，保护大部分持仓浮盈"
+                },
+                "stage_4_trend_trailing": {
+                    "name": "阶段四：动态移动跟踪",
+                    "stop_price": "MA20 / Swing Low",
+                    "trigger_condition": "进入 Phase E 顺势推进主升段",
+                    "logic": "依托日线 MA20 或最近 5 日局部摆动低点滚动跟踪，跌破则离场收尾"
+                }
+            }
+        elif direction in ("做空", "减仓/对冲"):
+            scale_in_plan = {
+                "stage_1_pilot": {
+                    "name": "首笔试探仓",
+                    "weight": "20%-30%",
+                    "trigger": "Phase C UT/UTAD 诱多破位确认",
+                    "entry_price": zone,
+                    "stop_loss": stop.conservative if isinstance(stop.conservative, (int, float)) and stop.conservative > 0 else round(current_price * 1.03, 2),
+                    "note": "高位轻仓试空/减仓，验证供应出货意图"
+                },
+                "stage_2_confirmation": {
+                    "name": "突破确认仓",
+                    "weight": "30%-40%",
+                    "trigger": "Phase D FTI 放量跌破冰层 (Ice) 且反抽受阻 (LPSY)",
+                    "entry_price": f"<{round(current_price * 0.98, 2)}",
+                    "stop_loss": round(current_price * 1.02, 2),
+                    "note": "跌破冰层确立，顺势加码做空/大幅减仓"
+                },
+                "stage_3_trend_addition": {
+                    "name": "顺势主跌仓",
+                    "weight": "30%",
+                    "trigger": "跌破 TR 下沿且均线空头排列进入 Phase E",
+                    "entry_price": f"<{round(current_price * 0.95, 2)}",
+                    "stop_loss": round(current_price * 0.98, 2),
+                    "note": "主跌趋势确立，执行全面对冲/清仓，移动止损追踪"
+                }
+            }
+            trailing_stop_plan = {
+                "stage_1_initial": {
+                    "name": "阶段一：初始硬防守",
+                    "stop_price": stop.conservative if isinstance(stop.conservative, (int, float)) and stop.conservative > 0 else round(current_price * 1.03, 2),
+                    "trigger_condition": "建立空头/减仓头寸时确立",
+                    "logic": "位于 UTAD / TR 上沿上方，突破则证明假突破证伪"
+                },
+                "stage_2_breakeven": {
+                    "name": "阶段二：保本止损下移",
+                    "stop_price": round(current_price, 2),
+                    "trigger_condition": "FTI 放量跌破冰层",
+                    "logic": "原 Ice 支撑转化为阻力，价格不应再反抽站回 Ice 上方"
+                },
+                "stage_3_lpsy_protection": {
+                    "name": "阶段三：锁定利润防守",
+                    "stop_price": round(current_price * 1.015, 2),
+                    "trigger_condition": "LPSY 反抽受阻后再次下跌",
+                    "logic": "下移防守线至 LPSY 反抽高点上方，锁定做空利润"
+                },
+                "stage_4_trend_trailing": {
+                    "name": "阶段四：动态移动跟踪",
+                    "stop_price": "MA20 / Swing High",
+                    "trigger_condition": "进入 Phase E 顺势下跌主跌段",
+                    "logic": "依托日线 MA20 或最近波段高点滚动压制跟踪，突破则平仓了结"
+                }
+            }
+
         return TradingPlanModel(
             direction=direction,
             entry_zone=zone,
@@ -1545,6 +1711,9 @@ class RecommendationEngine:
             targets=TargetsModel(target_1=targets.get('target_1', 0), target_2=targets.get('target_2', 0)),
             position_sizing=pos_sizing,
             holding_period=holding_period,
+            scale_in_plan=scale_in_plan,
+            trailing_stop_plan=trailing_stop_plan,
+            sector_synergy=sector_synergy,
         )
 
     def generate_risk_advice(self, quality: SignalQualityModel, plan: TradingPlanModel,
